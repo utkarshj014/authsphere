@@ -4,6 +4,7 @@ import cookieParser from "cookie-parser";
 import helmet from "helmet";
 
 import healthRouter from "./routes/health.route.js";
+import { env } from "./config/env.js";
 
 const app = express();
 
@@ -11,7 +12,7 @@ app.use(helmet());
 
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: env.FRONTEND_URL,
     credentials: true,
   }),
 );
