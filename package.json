@@ -1,0 +1,27 @@
+{
+  "name": "authsphere",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "engines": {
+    "node": ">22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/utkarshj014/authsphere.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/utkarshj014/authsphere/issues"
+  },
+  "homepage": "https://github.com/utkarshj014/authsphere#readme"
+}
