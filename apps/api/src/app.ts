@@ -8,6 +8,9 @@ import { env } from "./config/env.js";
 import healthRouter from "./routes/health.route.js";
 import testRouter from "./routes/test.route.js";
 import { errorHandler } from "./common/errors/error-handler.js";
+import { notFoundHandler } from "./middlewares/not-found.js";
+import { requestId } from "./middlewares/request-id.js";
+import { requestLogger } from "./middlewares/request-logger.js";
 
 const app = express();
 
@@ -23,11 +26,20 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
+// Request ID Middleware
+app.use(requestId);
+
+// Request Logger Middleware
+app.use(requestLogger);
+
 // Routes
 app.use("/health", healthRouter);
 app.use("/test", testRouter);
 
-// Error Handling
+// 404 Handler
+app.use(notFoundHandler);
+
+// Global Error Handler
 app.use(errorHandler);
 
 export default app;
