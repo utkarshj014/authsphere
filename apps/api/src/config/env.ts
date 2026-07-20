@@ -6,6 +6,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive(),
   FRONTEND_URL: z.url(),
   DATABASE_URL: z.url(),
+  REDIS_URL: z.url(),
 });
 
 const parsed = envSchema.safeParse(process.env);
