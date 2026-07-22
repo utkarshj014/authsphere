@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
-import { healthService } from "../services/health.service.js";
-import { ApiResponse } from "../common/responses/api-response.js";
-import { asyncHandler } from "../common/errors/async-handler.js";
+import { healthService } from "./health.service.js";
+import { ApiResponse } from "../../common/responses/api-response.js";
+import { asyncHandler } from "../../common/errors/async-handler.js";
 
 export const getHealth = asyncHandler(
   async (_req: Request, res: Response, _next: NextFunction) => {
