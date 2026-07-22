@@ -11,13 +11,17 @@ const server = http.createServer(app);
 let isShuttingDown = false;
 
 const handleShutdown = async (signal: string) => {
-  if (isShuttingDown) return;
+  if (isShuttingDown) {
+    logger.warn("Shutdown already in progress!");
+    return;
+  }
   isShuttingDown = true;
 
   logger.info(`Received ${signal} signal, starting shutdown...`);
 
   const timer = setTimeout(() => {
     logger.error("Graceful shutdown timed out, exiting now");
+    server.closeAllConnections();
     process.exit(1);
   }, 10000);
 
@@ -63,35 +67,43 @@ const handleShutdown = async (signal: string) => {
 
     logger.info("Graceful shutdown completed...");
     logger.flush?.();
-    process.exit(0);
+    return 0;
   } catch (fatalError) {
     logger.error({ err: fatalError }, "Fatal error during shutdown");
     logger.flush?.();
-    process.exit(1);
+    return 1;
   }
+};
+
+const handleShutdownWrapper = async (signal: string) => {
+  const exitCode = await handleShutdown(signal);
+  if (exitCode !== undefined) process.exit(exitCode);
 };
 
 // Signal listeners
 const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
 signals.forEach((signal) => {
-  process.on(signal, () => handleShutdown(signal));
+  process.on(signal, () => handleShutdownWrapper(signal));
 });
 
 // Intercept Uncaught Runtime Errors to Trigger Graceful Shutdown
 process.on("uncaughtException", (error) => {
   logger.error({ err: error }, "Uncaught Exception detected!");
-  handleShutdown("uncaughtException");
+  handleShutdownWrapper("uncaughtException");
 });
 
 process.on("unhandledRejection", (reason) => {
   logger.error({ err: reason }, "Unhandled Rejection detected!");
-  handleShutdown("unhandledRejection");
+  handleShutdownWrapper("unhandledRejection");
 });
 
 // Application Startup Sequence
 try {
-  await Promise.all([prisma.$connect() /* , redis.connect() */]);
-  logger.info("Database and Redis connected successfully.");
+  await Promise.all([prisma.$connect(), redis.connect()]);
+  logger.info(
+    { database: "connected", redis: "connected" },
+    "Infrastructure initialized...",
+  );
 
   // Start listening on the port after DB and Redis connections are ready
   server.listen(env.PORT, () => {
