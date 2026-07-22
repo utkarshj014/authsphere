@@ -5,7 +5,7 @@ import { asyncHandler } from "../common/errors/async-handler.js";
 
 export const getHealth = asyncHandler(
   async (_req: Request, res: Response, _next: NextFunction) => {
-    const data = healthService();
+    const data = await healthService();
     return ApiResponse.success(res, data, "Authsphere API is healthy! :)");
   },
 );
