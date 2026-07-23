@@ -5,7 +5,7 @@ import helmet from "helmet";
 
 import { env } from "./config/env.js";
 
-import healthRouter from "./modules/health/health.route.js";
+import { healthRouter } from "./modules/health/index.js";
 import testRouter from "./routes/test.route.js";
 import { errorHandler } from "./common/errors/error-handler.js";
 import { notFoundHandler } from "./middlewares/not-found.js";
