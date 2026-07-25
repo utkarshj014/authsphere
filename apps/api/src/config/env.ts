@@ -1,5 +1,8 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import z from "zod";
+
+// Always loads apps/api/.env regardless of current working directory
+dotenv.config({ path: new URL("../../.env", import.meta.url) });
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production"]),
