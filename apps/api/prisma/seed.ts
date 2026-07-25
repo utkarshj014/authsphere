@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import { PrismaClient } from "../src/generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { ROLES } from "@authsphere/shared";
 
 // Always loads apps/api/.env regardless of current working directory
 dotenv.config({ path: new URL("../.env", import.meta.url) });
@@ -15,19 +16,19 @@ const prisma = new PrismaClient({ adapter });
 
 async function main() {
   await prisma.role.upsert({
-    where: { name: "USER" },
+    where: { name: ROLES.USER },
     update: {},
     create: {
-      name: "USER",
+      name: ROLES.USER,
       description: "Default user role",
     },
   });
 
   await prisma.role.upsert({
-    where: { name: "ADMIN" },
+    where: { name: ROLES.ADMIN },
     update: {},
     create: {
-      name: "ADMIN",
+      name: ROLES.ADMIN,
       description: "System administrator",
     },
   });

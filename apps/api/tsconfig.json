@@ -11,6 +11,9 @@
     "target": "esnext",
     "lib": ["esnext"],
     "types": ["node"],
+    "paths": {
+      "@authsphere/shared": ["../../packages/shared/src/index.ts"]
+    },
 
     // Other Outputs
     "sourceMap": true,
