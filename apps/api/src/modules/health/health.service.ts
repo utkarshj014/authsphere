@@ -1,5 +1,4 @@
-import { prisma } from "../../lib/prisma.js";
-import { redis } from "../../lib/redis.js";
+import { healthRepository } from "./health.repository.js";
 
 type ServiceStatus = "UP" | "DOWN";
 
@@ -11,7 +10,7 @@ interface HealthCheckStatus {
 
 const checkDb = async (): Promise<ServiceStatus> => {
   try {
-    await prisma.$queryRaw`SELECT 1`;
+    await healthRepository.checkDatabase();
     return "UP";
   } catch {
     return "DOWN";
@@ -20,7 +19,7 @@ const checkDb = async (): Promise<ServiceStatus> => {
 
 const checkRedis = async (): Promise<ServiceStatus> => {
   try {
-    await redis.ping();
+    await healthRepository.checkRedis();
     return "UP";
   } catch {
     return "DOWN";
