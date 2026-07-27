@@ -1,0 +1,12 @@
+services:
+  redis:
+    image: redis:8-alpine
+    container_name: authsphere-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"
