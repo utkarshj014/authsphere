@@ -1,6 +1,7 @@
 import type { Response, Request, NextFunction } from "express";
 import { logger } from "../../lib/logger.js";
 import { AppError } from "./app-error.js";
+import { ValidationError } from "./validation-error.js";
 
 export const errorHandler = (
   err: Error,
@@ -9,6 +10,12 @@ export const errorHandler = (
   _next: NextFunction,
 ) => {
   logger.error(err);
+
+  if (err instanceof ValidationError) {
+    return res
+      .status(err.statusCode)
+      .json({ success: false, message: err.message, errors: err.errors });
+  }
 
   if (err instanceof AppError) {
     return res
