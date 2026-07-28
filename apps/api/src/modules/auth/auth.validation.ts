@@ -8,3 +8,9 @@ export const signupSchema = z.object({
 });
 
 export type SignupInput = z.infer<typeof signupSchema>;
+
+export const verifyEmailSchema = z.object({
+  token: z.string().trim().min(1),
+});
+
+export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;

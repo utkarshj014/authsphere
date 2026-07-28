@@ -23,7 +23,7 @@ export const authService = {
     const token = generateToken();
     const tokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000 * 24);
 
-    const { user } = await authRepository.createUserWithVerificationToken(
+    const { user } = await authRepository.createUserWithEmailVerificationToken(
       {
         email: input.email,
         passwordHash,
@@ -38,5 +38,24 @@ export const authService = {
     );
 
     await sendVerificationEmail(token, user.email);
+  },
+
+  verifyEmail: async (token: string) => {
+    const tokenHash = hashToken(token);
+
+    const emailVerificationToken =
+      await authRepository.findEmailVerificationToken(tokenHash);
+
+    if (!emailVerificationToken) {
+      throw new AppError("Invalid verification token", 400);
+    }
+
+    if (emailVerificationToken.expiresAt < new Date()) {
+      throw new AppError("Verification token has expired", 400);
+    }
+
+    await authRepository.markVerifiedAndDeleteEmailVerificationToken(
+      emailVerificationToken.userId,
+    );
   },
 };
