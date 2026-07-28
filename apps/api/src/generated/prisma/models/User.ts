@@ -33,6 +33,7 @@ export type UserMinAggregateOutputType = {
   lastName: string | null
   roleId: string | null
   lastLoginAt: Date | null
+  verifiedAt: Date | null
   createdAt: Date | null
   updatedAt: Date | null
 }
@@ -46,6 +47,7 @@ export type UserMaxAggregateOutputType = {
   lastName: string | null
   roleId: string | null
   lastLoginAt: Date | null
+  verifiedAt: Date | null
   createdAt: Date | null
   updatedAt: Date | null
 }
@@ -59,6 +61,7 @@ export type UserCountAggregateOutputType = {
   lastName: number
   roleId: number
   lastLoginAt: number
+  verifiedAt: number
   createdAt: number
   updatedAt: number
   _all: number
@@ -74,6 +77,7 @@ export type UserMinAggregateInputType = {
   lastName?: true
   roleId?: true
   lastLoginAt?: true
+  verifiedAt?: true
   createdAt?: true
   updatedAt?: true
 }
@@ -87,6 +91,7 @@ export type UserMaxAggregateInputType = {
   lastName?: true
   roleId?: true
   lastLoginAt?: true
+  verifiedAt?: true
   createdAt?: true
   updatedAt?: true
 }
@@ -100,6 +105,7 @@ export type UserCountAggregateInputType = {
   lastName?: true
   roleId?: true
   lastLoginAt?: true
+  verifiedAt?: true
   createdAt?: true
   updatedAt?: true
   _all?: true
@@ -186,6 +192,7 @@ export type UserGroupByOutputType = {
   lastName: string | null
   roleId: string
   lastLoginAt: Date | null
+  verifiedAt: Date | null
   createdAt: Date
   updatedAt: Date
   _count: UserCountAggregateOutputType | null
@@ -220,6 +227,7 @@ export type UserWhereInput = {
   lastName?: Prisma.StringNullableFilter<"User"> | string | null
   roleId?: Prisma.StringFilter<"User"> | string
   lastLoginAt?: Prisma.DateTimeNullableFilter<"User"> | Date | string | null
+  verifiedAt?: Prisma.DateTimeNullableFilter<"User"> | Date | string | null
   createdAt?: Prisma.DateTimeFilter<"User"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"User"> | Date | string
   role?: Prisma.XOR<Prisma.RoleScalarRelationFilter, Prisma.RoleWhereInput>
@@ -238,6 +246,7 @@ export type UserOrderByWithRelationInput = {
   lastName?: Prisma.SortOrderInput | Prisma.SortOrder
   roleId?: Prisma.SortOrder
   lastLoginAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  verifiedAt?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   role?: Prisma.RoleOrderByWithRelationInput
@@ -259,6 +268,7 @@ export type UserWhereUniqueInput = Prisma.AtLeast<{
   lastName?: Prisma.StringNullableFilter<"User"> | string | null
   roleId?: Prisma.StringFilter<"User"> | string
   lastLoginAt?: Prisma.DateTimeNullableFilter<"User"> | Date | string | null
+  verifiedAt?: Prisma.DateTimeNullableFilter<"User"> | Date | string | null
   createdAt?: Prisma.DateTimeFilter<"User"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"User"> | Date | string
   role?: Prisma.XOR<Prisma.RoleScalarRelationFilter, Prisma.RoleWhereInput>
@@ -277,6 +287,7 @@ export type UserOrderByWithAggregationInput = {
   lastName?: Prisma.SortOrderInput | Prisma.SortOrder
   roleId?: Prisma.SortOrder
   lastLoginAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  verifiedAt?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   _count?: Prisma.UserCountOrderByAggregateInput
@@ -296,6 +307,7 @@ export type UserScalarWhereWithAggregatesInput = {
   lastName?: Prisma.StringNullableWithAggregatesFilter<"User"> | string | null
   roleId?: Prisma.StringWithAggregatesFilter<"User"> | string
   lastLoginAt?: Prisma.DateTimeNullableWithAggregatesFilter<"User"> | Date | string | null
+  verifiedAt?: Prisma.DateTimeNullableWithAggregatesFilter<"User"> | Date | string | null
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"User"> | Date | string
   updatedAt?: Prisma.DateTimeWithAggregatesFilter<"User"> | Date | string
 }
@@ -308,6 +320,7 @@ export type UserCreateInput = {
   firstName?: string | null
   lastName?: string | null
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   role: Prisma.RoleCreateNestedOneWithoutUsersInput
@@ -326,6 +339,7 @@ export type UserUncheckedCreateInput = {
   lastName?: string | null
   roleId: string
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   sessions?: Prisma.SessionUncheckedCreateNestedManyWithoutUserInput
@@ -342,6 +356,7 @@ export type UserUpdateInput = {
   firstName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   role?: Prisma.RoleUpdateOneRequiredWithoutUsersNestedInput
@@ -360,6 +375,7 @@ export type UserUncheckedUpdateInput = {
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   roleId?: Prisma.StringFieldUpdateOperationsInput | string
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   sessions?: Prisma.SessionUncheckedUpdateManyWithoutUserNestedInput
@@ -377,6 +393,7 @@ export type UserCreateManyInput = {
   lastName?: string | null
   roleId: string
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
 }
@@ -389,6 +406,7 @@ export type UserUpdateManyMutationInput = {
   firstName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -402,6 +420,7 @@ export type UserUncheckedUpdateManyInput = {
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   roleId?: Prisma.StringFieldUpdateOperationsInput | string
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -415,6 +434,7 @@ export type UserCountOrderByAggregateInput = {
   lastName?: Prisma.SortOrder
   roleId?: Prisma.SortOrder
   lastLoginAt?: Prisma.SortOrder
+  verifiedAt?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
@@ -428,6 +448,7 @@ export type UserMaxOrderByAggregateInput = {
   lastName?: Prisma.SortOrder
   roleId?: Prisma.SortOrder
   lastLoginAt?: Prisma.SortOrder
+  verifiedAt?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
@@ -441,6 +462,7 @@ export type UserMinOrderByAggregateInput = {
   lastName?: Prisma.SortOrder
   roleId?: Prisma.SortOrder
   lastLoginAt?: Prisma.SortOrder
+  verifiedAt?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
@@ -586,6 +608,7 @@ export type UserCreateWithoutRoleInput = {
   firstName?: string | null
   lastName?: string | null
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   sessions?: Prisma.SessionCreateNestedManyWithoutUserInput
@@ -602,6 +625,7 @@ export type UserUncheckedCreateWithoutRoleInput = {
   firstName?: string | null
   lastName?: string | null
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   sessions?: Prisma.SessionUncheckedCreateNestedManyWithoutUserInput
@@ -648,6 +672,7 @@ export type UserScalarWhereInput = {
   lastName?: Prisma.StringNullableFilter<"User"> | string | null
   roleId?: Prisma.StringFilter<"User"> | string
   lastLoginAt?: Prisma.DateTimeNullableFilter<"User"> | Date | string | null
+  verifiedAt?: Prisma.DateTimeNullableFilter<"User"> | Date | string | null
   createdAt?: Prisma.DateTimeFilter<"User"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"User"> | Date | string
 }
@@ -660,6 +685,7 @@ export type UserCreateWithoutSessionsInput = {
   firstName?: string | null
   lastName?: string | null
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   role: Prisma.RoleCreateNestedOneWithoutUsersInput
@@ -677,6 +703,7 @@ export type UserUncheckedCreateWithoutSessionsInput = {
   lastName?: string | null
   roleId: string
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   refreshTokens?: Prisma.RefreshTokenUncheckedCreateNestedManyWithoutUserInput
@@ -708,6 +735,7 @@ export type UserUpdateWithoutSessionsInput = {
   firstName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   role?: Prisma.RoleUpdateOneRequiredWithoutUsersNestedInput
@@ -725,6 +753,7 @@ export type UserUncheckedUpdateWithoutSessionsInput = {
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   roleId?: Prisma.StringFieldUpdateOperationsInput | string
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   refreshTokens?: Prisma.RefreshTokenUncheckedUpdateManyWithoutUserNestedInput
@@ -740,6 +769,7 @@ export type UserCreateWithoutRefreshTokensInput = {
   firstName?: string | null
   lastName?: string | null
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   role: Prisma.RoleCreateNestedOneWithoutUsersInput
@@ -757,6 +787,7 @@ export type UserUncheckedCreateWithoutRefreshTokensInput = {
   lastName?: string | null
   roleId: string
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   sessions?: Prisma.SessionUncheckedCreateNestedManyWithoutUserInput
@@ -788,6 +819,7 @@ export type UserUpdateWithoutRefreshTokensInput = {
   firstName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   role?: Prisma.RoleUpdateOneRequiredWithoutUsersNestedInput
@@ -805,6 +837,7 @@ export type UserUncheckedUpdateWithoutRefreshTokensInput = {
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   roleId?: Prisma.StringFieldUpdateOperationsInput | string
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   sessions?: Prisma.SessionUncheckedUpdateManyWithoutUserNestedInput
@@ -820,6 +853,7 @@ export type UserCreateWithoutVerificationTokensInput = {
   firstName?: string | null
   lastName?: string | null
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   role: Prisma.RoleCreateNestedOneWithoutUsersInput
@@ -837,6 +871,7 @@ export type UserUncheckedCreateWithoutVerificationTokensInput = {
   lastName?: string | null
   roleId: string
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   sessions?: Prisma.SessionUncheckedCreateNestedManyWithoutUserInput
@@ -868,6 +903,7 @@ export type UserUpdateWithoutVerificationTokensInput = {
   firstName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   role?: Prisma.RoleUpdateOneRequiredWithoutUsersNestedInput
@@ -885,6 +921,7 @@ export type UserUncheckedUpdateWithoutVerificationTokensInput = {
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   roleId?: Prisma.StringFieldUpdateOperationsInput | string
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   sessions?: Prisma.SessionUncheckedUpdateManyWithoutUserNestedInput
@@ -900,6 +937,7 @@ export type UserCreateWithoutPasswordResetTokensInput = {
   firstName?: string | null
   lastName?: string | null
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   role: Prisma.RoleCreateNestedOneWithoutUsersInput
@@ -917,6 +955,7 @@ export type UserUncheckedCreateWithoutPasswordResetTokensInput = {
   lastName?: string | null
   roleId: string
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   sessions?: Prisma.SessionUncheckedCreateNestedManyWithoutUserInput
@@ -948,6 +987,7 @@ export type UserUpdateWithoutPasswordResetTokensInput = {
   firstName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   role?: Prisma.RoleUpdateOneRequiredWithoutUsersNestedInput
@@ -965,6 +1005,7 @@ export type UserUncheckedUpdateWithoutPasswordResetTokensInput = {
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   roleId?: Prisma.StringFieldUpdateOperationsInput | string
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   sessions?: Prisma.SessionUncheckedUpdateManyWithoutUserNestedInput
@@ -980,6 +1021,7 @@ export type UserCreateManyRoleInput = {
   firstName?: string | null
   lastName?: string | null
   lastLoginAt?: Date | string | null
+  verifiedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
 }
@@ -992,6 +1034,7 @@ export type UserUpdateWithoutRoleInput = {
   firstName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   sessions?: Prisma.SessionUpdateManyWithoutUserNestedInput
@@ -1008,6 +1051,7 @@ export type UserUncheckedUpdateWithoutRoleInput = {
   firstName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   sessions?: Prisma.SessionUncheckedUpdateManyWithoutUserNestedInput
@@ -1024,6 +1068,7 @@ export type UserUncheckedUpdateManyWithoutRoleInput = {
   firstName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastName?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastLoginAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  verifiedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -1095,6 +1140,7 @@ export type UserSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = r
   lastName?: boolean
   roleId?: boolean
   lastLoginAt?: boolean
+  verifiedAt?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   role?: boolean | Prisma.RoleDefaultArgs<ExtArgs>
@@ -1114,6 +1160,7 @@ export type UserSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensio
   lastName?: boolean
   roleId?: boolean
   lastLoginAt?: boolean
+  verifiedAt?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   role?: boolean | Prisma.RoleDefaultArgs<ExtArgs>
@@ -1128,6 +1175,7 @@ export type UserSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensio
   lastName?: boolean
   roleId?: boolean
   lastLoginAt?: boolean
+  verifiedAt?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   role?: boolean | Prisma.RoleDefaultArgs<ExtArgs>
@@ -1142,11 +1190,12 @@ export type UserSelectScalar = {
   lastName?: boolean
   roleId?: boolean
   lastLoginAt?: boolean
+  verifiedAt?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }
 
-export type UserOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "email" | "passwordHash" | "isEmailVerified" | "firstName" | "lastName" | "roleId" | "lastLoginAt" | "createdAt" | "updatedAt", ExtArgs["result"]["user"]>
+export type UserOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "email" | "passwordHash" | "isEmailVerified" | "firstName" | "lastName" | "roleId" | "lastLoginAt" | "verifiedAt" | "createdAt" | "updatedAt", ExtArgs["result"]["user"]>
 export type UserInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   role?: boolean | Prisma.RoleDefaultArgs<ExtArgs>
   sessions?: boolean | Prisma.User$sessionsArgs<ExtArgs>
@@ -1180,6 +1229,7 @@ export type $UserPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs =
     lastName: string | null
     roleId: string
     lastLoginAt: Date | null
+    verifiedAt: Date | null
     createdAt: Date
     updatedAt: Date
   }, ExtArgs["result"]["user"]>
@@ -1618,6 +1668,7 @@ export interface UserFieldRefs {
   readonly lastName: Prisma.FieldRef<"User", 'String'>
   readonly roleId: Prisma.FieldRef<"User", 'String'>
   readonly lastLoginAt: Prisma.FieldRef<"User", 'DateTime'>
+  readonly verifiedAt: Prisma.FieldRef<"User", 'DateTime'>
   readonly createdAt: Prisma.FieldRef<"User", 'DateTime'>
   readonly updatedAt: Prisma.FieldRef<"User", 'DateTime'>
 }
