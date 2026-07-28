@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import z from "zod";
+import { formatZodError } from "../common/errors/format-zod-error.js";
 
 // Always loads apps/api/.env regardless of current working directory
 dotenv.config({ path: new URL("../../.env", import.meta.url) });
@@ -19,7 +20,13 @@ const envSchema = z.object({
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
-  console.error("Invalid environment variables", parsed.error.issues);
+  const formattedErrors = formatZodError(parsed.error);
+
+  console.error("Invalid environment variables configuration:");
+  formattedErrors.forEach((err) => {
+    console.error(`- ${err.field}: ${err.message}`);
+  });
+
   process.exit(1);
 }
 
