@@ -6,11 +6,36 @@ export const authRepository = {
 
   findRoleByName: (name: string) => prisma.role.findUnique({ where: { name } }),
 
-  createUser: (data: {
-    email: string;
-    passwordHash: string | null;
-    firstName?: string;
-    lastName?: string;
-    roleId: string;
-  }) => prisma.user.create({ data }),
+  createUserWithVerificationToken: (
+    data: {
+      email: string;
+      passwordHash: string | null;
+      firstName?: string;
+      lastName?: string;
+      roleId: string;
+    },
+    hashedToken: string,
+    expiresAt: Date,
+  ) => {
+    return prisma.$transaction(async (prisma) => {
+      const user = await prisma.user.create({
+        data,
+      });
+
+      const emailVerificationToken = await prisma.emailVerificationToken.create(
+        {
+          data: {
+            tokenHash: hashedToken,
+            userId: user.id,
+            expiresAt,
+          },
+        },
+      );
+
+      return {
+        user,
+        emailVerificationToken,
+      };
+    });
+  },
 };

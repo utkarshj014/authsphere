@@ -13,8 +13,13 @@ export const signupController = asyncHandler(
       throw new ValidationError(formatZodError(input.error));
     }
 
-    const user = await authService.signup(input.data);
+    await authService.signup(input.data);
 
-    return ApiResponse.success(res, user, "User created successfully", 201);
+    return ApiResponse.success(
+      res,
+      null,
+      "Signed up successfully. Please verify your email",
+      201,
+    );
   },
 );

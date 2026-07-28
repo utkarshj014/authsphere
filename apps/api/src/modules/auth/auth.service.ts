@@ -3,6 +3,8 @@ import { AppError } from "../../common/errors/app-error.js";
 import { authRepository } from "./auth.repository.js";
 import type { SignupInput } from "./auth.validation.js";
 import { hashPassword } from "../../lib/crypto/password.js";
+import { generateToken, hashToken } from "../../lib/crypto/token.js";
+import { sendVerificationEmail } from "../email/demo.js";
 
 export const authService = {
   signup: async (input: SignupInput) => {
@@ -18,19 +20,23 @@ export const authService = {
 
     const passwordHash = await hashPassword(input.password);
 
-    const user = await authRepository.createUser({
-      email: input.email,
-      passwordHash,
-      ...(input.firstName !== undefined ? { firstName: input.firstName } : {}),
-      ...(input.lastName !== undefined ? { lastName: input.lastName } : {}),
-      roleId: userRole.id,
-    });
+    const token = generateToken();
+    const tokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000 * 24);
 
-    return {
-      id: user.id,
-      email: user.email,
-      isEmailVerified: user.isEmailVerified,
-      createdAt: user.createdAt,
-    };
+    const { user } = await authRepository.createUserWithVerificationToken(
+      {
+        email: input.email,
+        passwordHash,
+        ...(input.firstName !== undefined
+          ? { firstName: input.firstName }
+          : {}),
+        ...(input.lastName !== undefined ? { lastName: input.lastName } : {}),
+        roleId: userRole.id,
+      },
+      hashToken(token),
+      tokenExpiresAt,
+    );
+
+    await sendVerificationEmail(token, user.email);
   },
 };
