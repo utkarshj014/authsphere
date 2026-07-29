@@ -7,10 +7,16 @@ export const signupSchema = z.object({
   lastName: z.string().trim().min(1).max(50).optional(),
 });
 
-export type SignupInput = z.infer<typeof signupSchema>;
-
 export const verifyEmailSchema = z.object({
   token: z.string().trim().min(1),
 });
 
+export const resendEmailVerificationTokenSchema = z.object({
+  email: z.email(),
+});
+
+export type SignupInput = z.infer<typeof signupSchema>;
 export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
+export type ResendEmailVerificationTokenInput = z.infer<
+  typeof resendEmailVerificationTokenSchema
+>;

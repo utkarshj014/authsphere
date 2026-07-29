@@ -16,7 +16,7 @@ export const authRepository = {
       lastName?: string;
       roleId: string;
     },
-    hashedToken: string,
+    tokenHash: string,
     expiresAt: Date,
   ) => {
     return prisma.$transaction(async (tx) => {
@@ -24,18 +24,15 @@ export const authRepository = {
         data,
       });
 
-      const emailVerificationToken = await tx.emailVerificationToken.create({
+      await tx.emailVerificationToken.create({
         data: {
-          tokenHash: hashedToken,
+          tokenHash,
           userId: user.id,
           expiresAt,
         },
       });
 
-      return {
-        user,
-        emailVerificationToken,
-      };
+      return user;
     });
   },
 
@@ -51,7 +48,7 @@ export const authRepository = {
         data: {
           isEmailVerified: true,
           verifiedAt: new Date(),
-          verificationTokens: { deleteMany: {} },
+          emailVerificationToken: { delete: {} },
         },
       });
     } catch (error) {
@@ -64,4 +61,15 @@ export const authRepository = {
       throw error;
     }
   },
+
+  reCreateEmailVerificationToken: (
+    tokenHash: string,
+    userId: string,
+    expiresAt: Date,
+  ) =>
+    prisma.emailVerificationToken.upsert({
+      where: { userId },
+      update: { tokenHash, expiresAt, createdAt: new Date() },
+      create: { tokenHash, userId, expiresAt },
+    }),
 };

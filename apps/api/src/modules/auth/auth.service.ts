@@ -1,7 +1,11 @@
 import { ROLES } from "@authsphere/shared";
 import { AppError } from "../../common/errors/app-error.js";
 import { authRepository } from "./auth.repository.js";
-import type { SignupInput } from "./auth.validation.js";
+import type {
+  SignupInput,
+  VerifyEmailInput,
+  ResendEmailVerificationTokenInput,
+} from "./auth.validation.js";
 import { hashPassword } from "../../lib/crypto/password.js";
 import { generateToken, hashToken } from "../../lib/crypto/token.js";
 import { sendVerificationEmail } from "../email/demo.js";
@@ -23,7 +27,7 @@ export const authService = {
     const token = generateToken();
     const tokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000 * 24);
 
-    const { user } = await authRepository.createUserWithEmailVerificationToken(
+    const user = await authRepository.createUserWithEmailVerificationToken(
       {
         email: input.email,
         passwordHash,
@@ -40,8 +44,8 @@ export const authService = {
     await sendVerificationEmail(token, user.email);
   },
 
-  verifyEmail: async (token: string) => {
-    const tokenHash = hashToken(token);
+  verifyEmail: async (input: VerifyEmailInput) => {
+    const tokenHash = hashToken(input.token);
 
     const emailVerificationToken =
       await authRepository.findEmailVerificationToken(tokenHash);
@@ -57,5 +61,26 @@ export const authService = {
     await authRepository.markVerifiedAndDeleteEmailVerificationToken(
       emailVerificationToken.userId,
     );
+  },
+
+  resendEmailVerificationToken: async (
+    input: ResendEmailVerificationTokenInput,
+  ) => {
+    const user = await authRepository.findUserbyEmail(input.email);
+
+    if (!user || user.isEmailVerified) {
+      return;
+    }
+
+    const token = generateToken();
+    const tokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000 * 24);
+
+    await authRepository.reCreateEmailVerificationToken(
+      hashToken(token),
+      user.id,
+      tokenExpiresAt,
+    );
+
+    await sendVerificationEmail(token, user.email);
   },
 };
