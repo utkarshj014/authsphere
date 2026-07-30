@@ -26,14 +26,14 @@ export type AggregateRole = {
 
 export type RoleMinAggregateOutputType = {
   id: string | null
-  name: string | null
+  name: $Enums.RoleName | null
   description: string | null
   createdAt: Date | null
 }
 
 export type RoleMaxAggregateOutputType = {
   id: string | null
-  name: string | null
+  name: $Enums.RoleName | null
   description: string | null
   createdAt: Date | null
 }
@@ -143,7 +143,7 @@ export type RoleGroupByArgs<ExtArgs extends runtime.Types.Extensions.InternalArg
 
 export type RoleGroupByOutputType = {
   id: string
-  name: string
+  name: $Enums.RoleName
   description: string | null
   createdAt: Date
   _count: RoleCountAggregateOutputType | null
@@ -171,7 +171,7 @@ export type RoleWhereInput = {
   OR?: Prisma.RoleWhereInput[]
   NOT?: Prisma.RoleWhereInput | Prisma.RoleWhereInput[]
   id?: Prisma.StringFilter<"Role"> | string
-  name?: Prisma.StringFilter<"Role"> | string
+  name?: Prisma.EnumRoleNameFilter<"Role"> | $Enums.RoleName
   description?: Prisma.StringNullableFilter<"Role"> | string | null
   createdAt?: Prisma.DateTimeFilter<"Role"> | Date | string
   users?: Prisma.UserListRelationFilter
@@ -187,7 +187,7 @@ export type RoleOrderByWithRelationInput = {
 
 export type RoleWhereUniqueInput = Prisma.AtLeast<{
   id?: string
-  name?: string
+  name?: $Enums.RoleName
   AND?: Prisma.RoleWhereInput | Prisma.RoleWhereInput[]
   OR?: Prisma.RoleWhereInput[]
   NOT?: Prisma.RoleWhereInput | Prisma.RoleWhereInput[]
@@ -211,14 +211,14 @@ export type RoleScalarWhereWithAggregatesInput = {
   OR?: Prisma.RoleScalarWhereWithAggregatesInput[]
   NOT?: Prisma.RoleScalarWhereWithAggregatesInput | Prisma.RoleScalarWhereWithAggregatesInput[]
   id?: Prisma.StringWithAggregatesFilter<"Role"> | string
-  name?: Prisma.StringWithAggregatesFilter<"Role"> | string
+  name?: Prisma.EnumRoleNameWithAggregatesFilter<"Role"> | $Enums.RoleName
   description?: Prisma.StringNullableWithAggregatesFilter<"Role"> | string | null
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Role"> | Date | string
 }
 
 export type RoleCreateInput = {
   id?: string
-  name: string
+  name: $Enums.RoleName
   description?: string | null
   createdAt?: Date | string
   users?: Prisma.UserCreateNestedManyWithoutRoleInput
@@ -226,7 +226,7 @@ export type RoleCreateInput = {
 
 export type RoleUncheckedCreateInput = {
   id?: string
-  name: string
+  name: $Enums.RoleName
   description?: string | null
   createdAt?: Date | string
   users?: Prisma.UserUncheckedCreateNestedManyWithoutRoleInput
@@ -234,7 +234,7 @@ export type RoleUncheckedCreateInput = {
 
 export type RoleUpdateInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
-  name?: Prisma.StringFieldUpdateOperationsInput | string
+  name?: Prisma.EnumRoleNameFieldUpdateOperationsInput | $Enums.RoleName
   description?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   users?: Prisma.UserUpdateManyWithoutRoleNestedInput
@@ -242,7 +242,7 @@ export type RoleUpdateInput = {
 
 export type RoleUncheckedUpdateInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
-  name?: Prisma.StringFieldUpdateOperationsInput | string
+  name?: Prisma.EnumRoleNameFieldUpdateOperationsInput | $Enums.RoleName
   description?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   users?: Prisma.UserUncheckedUpdateManyWithoutRoleNestedInput
@@ -250,21 +250,21 @@ export type RoleUncheckedUpdateInput = {
 
 export type RoleCreateManyInput = {
   id?: string
-  name: string
+  name: $Enums.RoleName
   description?: string | null
   createdAt?: Date | string
 }
 
 export type RoleUpdateManyMutationInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
-  name?: Prisma.StringFieldUpdateOperationsInput | string
+  name?: Prisma.EnumRoleNameFieldUpdateOperationsInput | $Enums.RoleName
   description?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
 export type RoleUncheckedUpdateManyInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
-  name?: Prisma.StringFieldUpdateOperationsInput | string
+  name?: Prisma.EnumRoleNameFieldUpdateOperationsInput | $Enums.RoleName
   description?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -309,16 +309,20 @@ export type RoleUpdateOneRequiredWithoutUsersNestedInput = {
   update?: Prisma.XOR<Prisma.XOR<Prisma.RoleUpdateToOneWithWhereWithoutUsersInput, Prisma.RoleUpdateWithoutUsersInput>, Prisma.RoleUncheckedUpdateWithoutUsersInput>
 }
 
+export type EnumRoleNameFieldUpdateOperationsInput = {
+  set?: $Enums.RoleName
+}
+
 export type RoleCreateWithoutUsersInput = {
   id?: string
-  name: string
+  name: $Enums.RoleName
   description?: string | null
   createdAt?: Date | string
 }
 
 export type RoleUncheckedCreateWithoutUsersInput = {
   id?: string
-  name: string
+  name: $Enums.RoleName
   description?: string | null
   createdAt?: Date | string
 }
@@ -341,14 +345,14 @@ export type RoleUpdateToOneWithWhereWithoutUsersInput = {
 
 export type RoleUpdateWithoutUsersInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
-  name?: Prisma.StringFieldUpdateOperationsInput | string
+  name?: Prisma.EnumRoleNameFieldUpdateOperationsInput | $Enums.RoleName
   description?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
 export type RoleUncheckedUpdateWithoutUsersInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
-  name?: Prisma.StringFieldUpdateOperationsInput | string
+  name?: Prisma.EnumRoleNameFieldUpdateOperationsInput | $Enums.RoleName
   description?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -429,7 +433,7 @@ export type $RolePayload<ExtArgs extends runtime.Types.Extensions.InternalArgs =
   }
   scalars: runtime.Types.Extensions.GetPayloadResult<{
     id: string
-    name: string
+    name: $Enums.RoleName
     description: string | null
     createdAt: Date
   }, ExtArgs["result"]["role"]>
@@ -857,7 +861,7 @@ export interface Prisma__RoleClient<T, Null = never, ExtArgs extends runtime.Typ
  */
 export interface RoleFieldRefs {
   readonly id: Prisma.FieldRef<"Role", 'String'>
-  readonly name: Prisma.FieldRef<"Role", 'String'>
+  readonly name: Prisma.FieldRef<"Role", 'RoleName'>
   readonly description: Prisma.FieldRef<"Role", 'String'>
   readonly createdAt: Prisma.FieldRef<"Role", 'DateTime'>
 }

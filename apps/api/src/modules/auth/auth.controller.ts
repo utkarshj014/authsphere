@@ -4,11 +4,16 @@ import { authService } from "./auth.service.js";
 import {
   signupSchema,
   verifyEmailSchema,
-  resendEmailVerificationTokenSchema,
+  resendVerificationTokenSchema,
+  loginSchema,
 } from "./auth.validation.js";
 import { ApiResponse } from "../../common/responses/api-response.js";
 import { ValidationError } from "../../common/errors/validation-error.js";
 import { formatZodError } from "../../common/errors/format-zod-error.js";
+import {
+  accessTokenCookieOptions,
+  refreshTokenCookieOptions,
+} from "../../common/utils/cookie-options.js";
 
 export const signupController = asyncHandler(
   async (req: Request, res: Response) => {
@@ -41,14 +46,14 @@ export const verifyEmailController = asyncHandler(
   },
 );
 
-export const resendEmailVerificationTokenController = asyncHandler(
+export const resendVerificationTokenController = asyncHandler(
   async (req: Request, res: Response) => {
-    const input = resendEmailVerificationTokenSchema.safeParse(req.body);
+    const input = resendVerificationTokenSchema.safeParse(req.body);
     if (!input.success) {
       throw new ValidationError(formatZodError(input.error));
     }
 
-    await authService.resendEmailVerificationToken(input.data);
+    await authService.resendVerificationToken(input.data);
 
     return ApiResponse.success(
       res,
@@ -56,5 +61,32 @@ export const resendEmailVerificationTokenController = asyncHandler(
       "If an account exists and is unverified, a verification email has been sent",
       200,
     );
+  },
+);
+
+export const loginController = asyncHandler(
+  async (req: Request, res: Response) => {
+    const input = loginSchema.safeParse(req.body);
+    if (!input.success) {
+      throw new ValidationError(formatZodError(input.error));
+    }
+
+    const ipAddress = req.ip;
+    const userAgent = req.header("user-agent");
+
+    const authTokens = await authService.login(
+      input.data,
+      ipAddress,
+      userAgent,
+    );
+
+    res.cookie("accessToken", authTokens.accessToken, accessTokenCookieOptions);
+    res.cookie(
+      "refreshToken",
+      authTokens.refreshToken,
+      refreshTokenCookieOptions,
+    );
+
+    return ApiResponse.success(res, null, "Login successful", 200);
   },
 );

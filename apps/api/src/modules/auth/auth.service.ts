@@ -1,18 +1,23 @@
+import crypto from "node:crypto";
 import { ROLES } from "@authsphere/shared";
 import { AppError } from "../../common/errors/app-error.js";
 import { authRepository } from "./auth.repository.js";
 import type {
   SignupInput,
   VerifyEmailInput,
-  ResendEmailVerificationTokenInput,
+  ResendVerificationTokenInput,
+  LoginInput,
 } from "./auth.validation.js";
-import { hashPassword } from "../../lib/crypto/password.js";
+import { hashPassword, verifyPassword } from "../../lib/crypto/password.js";
 import { generateToken, hashToken } from "../../lib/crypto/token.js";
 import { sendVerificationEmail } from "../email/demo.js";
+import { signAccessToken } from "../../lib/jwt/access-token.js";
+import { signRefreshToken } from "../../lib/jwt/refresh-token.js";
+import type { AuthTokens } from "./auth.types.js";
 
 export const authService = {
   signup: async (input: SignupInput) => {
-    const existingUser = await authRepository.findUserbyEmail(input.email);
+    const existingUser = await authRepository.findUserByEmail(input.email);
     if (existingUser) {
       throw new AppError("Email already in use", 409);
     }
@@ -23,11 +28,11 @@ export const authService = {
     }
 
     const passwordHash = await hashPassword(input.password);
-
     const token = generateToken();
+    const tokenHash = hashToken(token);
     const tokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000 * 24);
 
-    const user = await authRepository.createUserWithEmailVerificationToken(
+    const user = await authRepository.createUserWithVerificationToken(
       {
         email: input.email,
         passwordHash,
@@ -37,7 +42,7 @@ export const authService = {
         ...(input.lastName !== undefined ? { lastName: input.lastName } : {}),
         roleId: userRole.id,
       },
-      hashToken(token),
+      tokenHash,
       tokenExpiresAt,
     );
 
@@ -48,26 +53,21 @@ export const authService = {
     const tokenHash = hashToken(input.token);
 
     const emailVerificationToken =
-      await authRepository.findEmailVerificationToken(tokenHash);
-
+      await authRepository.findVerificationToken(tokenHash);
     if (!emailVerificationToken) {
       throw new AppError("Invalid verification token", 400);
     }
-
     if (emailVerificationToken.expiresAt < new Date()) {
       throw new AppError("Verification token has expired", 400);
     }
 
-    await authRepository.markVerifiedAndDeleteEmailVerificationToken(
+    await authRepository.markVerifiedAndDeleteVerificationToken(
       emailVerificationToken.userId,
     );
   },
 
-  resendEmailVerificationToken: async (
-    input: ResendEmailVerificationTokenInput,
-  ) => {
-    const user = await authRepository.findUserbyEmail(input.email);
-
+  resendVerificationToken: async (input: ResendVerificationTokenInput) => {
+    const user = await authRepository.findUserByEmail(input.email);
     if (!user || user.isEmailVerified) {
       return;
     }
@@ -75,12 +75,71 @@ export const authService = {
     const token = generateToken();
     const tokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000 * 24);
 
-    await authRepository.reCreateEmailVerificationToken(
+    await authRepository.reCreateVerificationToken(
       hashToken(token),
       user.id,
       tokenExpiresAt,
     );
 
     await sendVerificationEmail(token, user.email);
+  },
+
+  login: async (
+    input: LoginInput,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<AuthTokens> => {
+    const user = await authRepository.findUserByEmailWithRole(input.email);
+    if (!user) {
+      throw new AppError("Invalid credentials", 401);
+    }
+    if (!user.passwordHash) {
+      throw new AppError("This account is created using social login", 403);
+    }
+
+    const passwordMatch = await verifyPassword(
+      user.passwordHash,
+      input.password,
+    );
+    if (!passwordMatch) {
+      throw new AppError("Invalid credentials", 401);
+    }
+
+    if (!user.isEmailVerified) {
+      throw new AppError("Email not verified", 403);
+    }
+
+    const sessionId = crypto.randomUUIDv7();
+    const sessionExpiresAt = new Date(Date.now() + 60 * 60 * 1000 * 24 * 30);
+
+    const accessToken = await signAccessToken({
+      sub: user.id,
+      sid: sessionId,
+      role: user.role.name,
+    });
+    const refreshToken = await signRefreshToken({
+      sub: user.id,
+      sid: sessionId,
+      role: user.role.name,
+    });
+
+    const refreshTokenHash = hashToken(refreshToken);
+    const refreshTokenExpiresAt = new Date(
+      Date.now() + 60 * 60 * 1000 * 24 * 30,
+    );
+
+    await authRepository.createSessionWithRefreshToken(
+      user.id,
+      {
+        id: sessionId,
+        expiresAt: sessionExpiresAt,
+        ...(ipAddress !== undefined ? { ipAddress } : {}),
+        ...(userAgent !== undefined ? { userAgent } : {}),
+      },
+      refreshTokenHash,
+      refreshTokenExpiresAt,
+    );
+
+    return { accessToken, refreshToken };
   },
 };

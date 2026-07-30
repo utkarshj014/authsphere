@@ -1,14 +1,16 @@
 import { prisma } from "../../lib/prisma.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { AppError } from "../../common/errors/app-error.js";
+import type { RoleName } from "@authsphere/shared";
 
 export const authRepository = {
-  findUserbyEmail: (email: string) =>
+  findUserByEmail: (email: string) =>
     prisma.user.findUnique({ where: { email } }),
 
-  findRoleByName: (name: string) => prisma.role.findUnique({ where: { name } }),
+  findRoleByName: (name: RoleName) =>
+    prisma.role.findUnique({ where: { name } }),
 
-  createUserWithEmailVerificationToken: (
+  createUserWithVerificationToken: (
     data: {
       email: string;
       passwordHash: string | null;
@@ -36,12 +38,12 @@ export const authRepository = {
     });
   },
 
-  findEmailVerificationToken: (tokenHash: string) =>
+  findVerificationToken: (tokenHash: string) =>
     prisma.emailVerificationToken.findUnique({
       where: { tokenHash },
     }),
 
-  markVerifiedAndDeleteEmailVerificationToken: async (userId: string) => {
+  markVerifiedAndDeleteVerificationToken: async (userId: string) => {
     try {
       await prisma.user.update({
         where: { id: userId, isEmailVerified: false },
@@ -62,7 +64,7 @@ export const authRepository = {
     }
   },
 
-  reCreateEmailVerificationToken: (
+  reCreateVerificationToken: (
     tokenHash: string,
     userId: string,
     expiresAt: Date,
@@ -71,5 +73,41 @@ export const authRepository = {
       where: { userId },
       update: { tokenHash, expiresAt, createdAt: new Date() },
       create: { tokenHash, userId, expiresAt },
+    }),
+
+  findUserByEmailWithRole: (email: string) =>
+    prisma.user.findUnique({
+      where: { email },
+      include: { role: true },
+    }),
+
+  createSessionWithRefreshToken: (
+    userId: string,
+    sessionData: {
+      id: string;
+      expiresAt: Date;
+      ipAddress?: string;
+      userAgent?: string;
+    },
+    tokenHash: string,
+    refreshTokenExpiresAt: Date,
+  ) =>
+    prisma.user.update({
+      where: { id: userId },
+      data: {
+        lastLoginAt: new Date(),
+        sessions: {
+          create: {
+            ...sessionData,
+          },
+        },
+        refreshTokens: {
+          create: {
+            tokenHash,
+            sessionId: sessionData.id,
+            expiresAt: refreshTokenExpiresAt,
+          },
+        },
+      },
     }),
 };
