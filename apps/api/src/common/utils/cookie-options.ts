@@ -7,7 +7,7 @@ export const accessTokenCookieOptions: CookieOptions = {
   secure: env.NODE_ENV === "production",
   sameSite: "lax",
   priority: "high",
-  maxAge: 15 * 60 * 1000, // 15 minutes
+  maxAge: env.JWT_ACCESS_EXPIRES_IN_MS,
 };
 
 export const refreshTokenCookieOptions: CookieOptions = {
@@ -16,5 +16,5 @@ export const refreshTokenCookieOptions: CookieOptions = {
   secure: env.NODE_ENV === "production",
   sameSite: "lax",
   priority: "high",
-  maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+  maxAge: env.JWT_REFRESH_EXPIRES_IN_MS,
 };

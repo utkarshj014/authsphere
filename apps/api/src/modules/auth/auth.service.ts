@@ -14,6 +14,7 @@ import { sendVerificationEmail } from "../email/demo.js";
 import { signAccessToken } from "../../lib/jwt/access-token.js";
 import { signRefreshToken } from "../../lib/jwt/refresh-token.js";
 import type { AuthTokens } from "./auth.types.js";
+import { env } from "../../config/env.js";
 
 export const authService = {
   signup: async (input: SignupInput) => {
@@ -110,7 +111,9 @@ export const authService = {
     }
 
     const sessionId = crypto.randomUUIDv7();
-    const sessionExpiresAt = new Date(Date.now() + 60 * 60 * 1000 * 24 * 30);
+    const sessionExpiresAt = new Date(
+      Date.now() + env.JWT_ACCESS_EXPIRES_IN_MS,
+    );
 
     const accessToken = await signAccessToken({
       sub: user.id,
@@ -125,7 +128,7 @@ export const authService = {
 
     const refreshTokenHash = hashToken(refreshToken);
     const refreshTokenExpiresAt = new Date(
-      Date.now() + 60 * 60 * 1000 * 24 * 30,
+      Date.now() + env.JWT_REFRESH_EXPIRES_IN_MS,
     );
 
     await authRepository.createSessionWithRefreshToken(
