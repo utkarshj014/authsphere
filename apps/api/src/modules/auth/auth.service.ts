@@ -164,7 +164,11 @@ export const authService = {
 
     const oldRefreshTokenHash = hashToken(refreshToken);
     if (session.tokenHash !== oldRefreshTokenHash) {
-      await authRepository.deleteSession(session.id);
+      if (env.AUTH_REUSE_DELETION_MODE === "GLOBAL") {
+        await authRepository.deleteAllSessionsForUser(session.userId);
+      } else {
+        await authRepository.deleteSession(session.id);
+      }
       throw new UnauthorizedError("Compromised token detected");
     }
 

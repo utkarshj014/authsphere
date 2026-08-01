@@ -112,6 +112,9 @@ export const authRepository = {
   deleteSession: (sessionId: string) =>
     prisma.session.delete({ where: { id: sessionId } }),
 
+  deleteAllSessionsForUser: (userId: string) =>
+    prisma.session.deleteMany({ where: { userId } }),
+
   rotateSession: (sessionData: {
     id: string;
     tokenHash: string;
