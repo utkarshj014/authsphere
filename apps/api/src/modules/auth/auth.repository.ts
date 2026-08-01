@@ -39,8 +39,8 @@ export const authRepository = {
   },
 
   findVerificationToken: (tokenHash: string) =>
-    prisma.emailVerificationToken.findUnique({
-      where: { tokenHash },
+    prisma.emailVerificationToken.findFirst({
+      where: { tokenHash, expiresAt: { gte: new Date() } },
     }),
 
   markVerifiedAndDeleteVerificationToken: async (userId: string) => {
@@ -81,16 +81,15 @@ export const authRepository = {
       include: { role: true },
     }),
 
-  createSessionWithRefreshToken: (
+  createSession: (
     userId: string,
     sessionData: {
       id: string;
+      tokenHash: string;
       expiresAt: Date;
       ipAddress?: string;
       userAgent?: string;
     },
-    tokenHash: string,
-    refreshTokenExpiresAt: Date,
   ) =>
     prisma.user.update({
       where: { id: userId },
@@ -101,13 +100,29 @@ export const authRepository = {
             ...sessionData,
           },
         },
-        refreshTokens: {
-          create: {
-            tokenHash,
-            sessionId: sessionData.id,
-            expiresAt: refreshTokenExpiresAt,
-          },
-        },
+      },
+    }),
+
+  findSessionById: (sessionId: string) =>
+    prisma.session.findFirst({
+      where: { id: sessionId, expiresAt: { gt: new Date() } },
+      include: { user: { include: { role: true } } },
+    }),
+
+  deleteSession: (sessionId: string) =>
+    prisma.session.delete({ where: { id: sessionId } }),
+
+  rotateSession: (sessionData: {
+    id: string;
+    tokenHash: string;
+    expiresAt: Date;
+    ipAddress?: string;
+    userAgent?: string;
+  }) =>
+    prisma.session.update({
+      where: { id: sessionData.id },
+      data: {
+        ...sessionData,
       },
     }),
 };

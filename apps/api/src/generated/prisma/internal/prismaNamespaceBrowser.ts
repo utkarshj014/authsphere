@@ -54,7 +54,6 @@ export const ModelName = {
   User: 'User',
   Role: 'Role',
   Session: 'Session',
-  RefreshToken: 'RefreshToken',
   EmailVerificationToken: 'EmailVerificationToken',
   PasswordResetToken: 'PasswordResetToken'
 } as const
@@ -105,6 +104,7 @@ export type RoleScalarFieldEnum = (typeof RoleScalarFieldEnum)[keyof typeof Role
 export const SessionScalarFieldEnum = {
   id: 'id',
   userId: 'userId',
+  tokenHash: 'tokenHash',
   ipAddress: 'ipAddress',
   userAgent: 'userAgent',
   expiresAt: 'expiresAt',
@@ -112,19 +112,6 @@ export const SessionScalarFieldEnum = {
 } as const
 
 export type SessionScalarFieldEnum = (typeof SessionScalarFieldEnum)[keyof typeof SessionScalarFieldEnum]
-
-
-export const RefreshTokenScalarFieldEnum = {
-  id: 'id',
-  tokenHash: 'tokenHash',
-  userId: 'userId',
-  sessionId: 'sessionId',
-  expiresAt: 'expiresAt',
-  revokedAt: 'revokedAt',
-  createdAt: 'createdAt'
-} as const
-
-export type RefreshTokenScalarFieldEnum = (typeof RefreshTokenScalarFieldEnum)[keyof typeof RefreshTokenScalarFieldEnum]
 
 
 export const EmailVerificationTokenScalarFieldEnum = {

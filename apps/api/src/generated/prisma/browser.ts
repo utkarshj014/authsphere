@@ -33,11 +33,6 @@ export type Role = Prisma.RoleModel
  */
 export type Session = Prisma.SessionModel
 /**
- * Model RefreshToken
- * 
- */
-export type RefreshToken = Prisma.RefreshTokenModel
-/**
  * Model EmailVerificationToken
  * 
  */

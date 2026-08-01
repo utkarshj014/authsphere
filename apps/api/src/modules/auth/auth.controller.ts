@@ -90,3 +90,27 @@ export const loginController = asyncHandler(
     return ApiResponse.success(res, null, "Login successful", 200);
   },
 );
+
+export const refreshTokenController = asyncHandler(
+  async (req: Request, res: Response) => {
+    const refreshToken = req.cookies.refreshToken;
+
+    const ipAddress = req.ip;
+    const userAgent = req.header("user-agent");
+
+    const authTokens = await authService.refreshToken(
+      refreshToken,
+      ipAddress,
+      userAgent,
+    );
+
+    res.cookie("accessToken", authTokens.accessToken, accessTokenCookieOptions);
+    res.cookie(
+      "refreshToken",
+      authTokens.refreshToken,
+      refreshTokenCookieOptions,
+    );
+
+    return ApiResponse.success(res, null, "Refresh token successful", 200);
+  },
+);

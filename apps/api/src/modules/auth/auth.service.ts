@@ -12,9 +12,13 @@ import { hashPassword, verifyPassword } from "../../lib/crypto/password.js";
 import { generateToken, hashToken } from "../../lib/crypto/token.js";
 import { sendVerificationEmail } from "../email/demo.js";
 import { signAccessToken } from "../../lib/jwt/access-token.js";
-import { signRefreshToken } from "../../lib/jwt/refresh-token.js";
+import {
+  signRefreshToken,
+  verifyRefreshToken,
+} from "../../lib/jwt/refresh-token.js";
 import type { AuthTokens } from "./auth.types.js";
 import { env } from "../../config/env.js";
+import { UnauthorizedError } from "../../common/errors/unauthorized-error.js";
 
 export const authService = {
   signup: async (input: SignupInput) => {
@@ -58,9 +62,6 @@ export const authService = {
     if (!emailVerificationToken) {
       throw new AppError("Invalid verification token", 400);
     }
-    if (emailVerificationToken.expiresAt < new Date()) {
-      throw new AppError("Verification token has expired", 400);
-    }
 
     await authRepository.markVerifiedAndDeleteVerificationToken(
       emailVerificationToken.userId,
@@ -74,10 +75,11 @@ export const authService = {
     }
 
     const token = generateToken();
+    const tokenHash = hashToken(token);
     const tokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000 * 24);
 
     await authRepository.reCreateVerificationToken(
-      hashToken(token),
+      tokenHash,
       user.id,
       tokenExpiresAt,
     );
@@ -92,7 +94,7 @@ export const authService = {
   ): Promise<AuthTokens> => {
     const user = await authRepository.findUserByEmailWithRole(input.email);
     if (!user) {
-      throw new AppError("Invalid credentials", 401);
+      throw new UnauthorizedError("Invalid credentials");
     }
     if (!user.passwordHash) {
       throw new AppError("This account is created using social login", 403);
@@ -103,7 +105,7 @@ export const authService = {
       input.password,
     );
     if (!passwordMatch) {
-      throw new AppError("Invalid credentials", 401);
+      throw new UnauthorizedError("Invalid credentials");
     }
 
     if (!user.isEmailVerified) {
@@ -112,7 +114,7 @@ export const authService = {
 
     const sessionId = crypto.randomUUIDv7();
     const sessionExpiresAt = new Date(
-      Date.now() + env.JWT_ACCESS_EXPIRES_IN_MS,
+      Date.now() + env.JWT_REFRESH_EXPIRES_IN_MS,
     );
 
     const accessToken = await signAccessToken({
@@ -127,22 +129,71 @@ export const authService = {
     });
 
     const refreshTokenHash = hashToken(refreshToken);
-    const refreshTokenExpiresAt = new Date(
+
+    await authRepository.createSession(user.id, {
+      id: sessionId,
+      tokenHash: refreshTokenHash,
+      expiresAt: sessionExpiresAt,
+      ...(ipAddress !== undefined ? { ipAddress } : {}),
+      ...(userAgent !== undefined ? { userAgent } : {}),
+    });
+
+    return { accessToken, refreshToken };
+  },
+
+  refreshToken: async (
+    refreshToken?: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<AuthTokens> => {
+    if (!refreshToken) {
+      throw new UnauthorizedError("No refresh token provided");
+    }
+
+    const payload = await verifyRefreshToken(refreshToken);
+
+    const session = await authRepository.findSessionById(payload.sid);
+    if (!session) {
+      throw new UnauthorizedError("Invalid or expired refresh token");
+    }
+
+    // Defense-in-depth
+    if (session.userId !== payload.sub) {
+      throw new UnauthorizedError("Compromised token detected");
+    }
+
+    const oldRefreshTokenHash = hashToken(refreshToken);
+    if (session.tokenHash !== oldRefreshTokenHash) {
+      await authRepository.deleteSession(session.id);
+      throw new UnauthorizedError("Compromised token detected");
+    }
+
+    const user = session.user;
+
+    const newAccessToken = await signAccessToken({
+      sub: user.id,
+      sid: session.id,
+      role: user.role.name,
+    });
+    const newRefreshToken = await signRefreshToken({
+      sub: user.id,
+      sid: session.id,
+      role: user.role.name,
+    });
+
+    const newRefreshTokenHash = hashToken(newRefreshToken);
+    const sessionExpiresAt = new Date(
       Date.now() + env.JWT_REFRESH_EXPIRES_IN_MS,
     );
 
-    await authRepository.createSessionWithRefreshToken(
-      user.id,
-      {
-        id: sessionId,
-        expiresAt: sessionExpiresAt,
-        ...(ipAddress !== undefined ? { ipAddress } : {}),
-        ...(userAgent !== undefined ? { userAgent } : {}),
-      },
-      refreshTokenHash,
-      refreshTokenExpiresAt,
-    );
+    await authRepository.rotateSession({
+      id: session.id,
+      tokenHash: newRefreshTokenHash,
+      expiresAt: sessionExpiresAt,
+      ...(ipAddress !== undefined ? { ipAddress } : {}),
+      ...(userAgent !== undefined ? { userAgent } : {}),
+    });
 
-    return { accessToken, refreshToken };
+    return { accessToken: newAccessToken, refreshToken: newRefreshToken };
   },
 };
