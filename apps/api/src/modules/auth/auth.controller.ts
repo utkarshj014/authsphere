@@ -11,6 +11,7 @@ import { ApiResponse } from "../../common/responses/api-response.js";
 import { ValidationError } from "../../common/errors/validation-error.js";
 import { formatZodError } from "../../common/errors/format-zod-error.js";
 import { setAuthCookies, clearAuthCookies } from "../../common/utils/cookie.js";
+import { authRepository } from "./auth.repository.js";
 
 export const signupController = asyncHandler(
   async (req: Request, res: Response) => {
@@ -123,5 +124,13 @@ export const logoutAllController = asyncHandler(
     clearAuthCookies(res);
 
     return ApiResponse.success(res, null, "Logout all successful", 200);
+  },
+);
+
+export const getMeController = asyncHandler(
+  async (req: Request, res: Response) => {
+    const user = await authService.getMe(req.userId);
+
+    return ApiResponse.success(res, user, "User fetched successfully", 200);
   },
 );

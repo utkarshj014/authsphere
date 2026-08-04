@@ -7,7 +7,9 @@ import {
   refreshTokenController,
   logoutController,
   logoutAllController,
+  getMeController,
 } from "./auth.controller.js";
+import { auth } from "../../middlewares/auth.js";
 
 const router = Router();
 
@@ -18,6 +20,7 @@ router
   .post("/login", loginController)
   .post("/refresh-token", refreshTokenController)
   .post("/logout", logoutController)
-  .post("/logout-all", logoutAllController);
+  .post("/logout-all", logoutAllController)
+  .get("/me", auth, getMeController);
 
 export default router;

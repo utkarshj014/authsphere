@@ -128,4 +128,10 @@ export const authRepository = {
         ...sessionData,
       },
     }),
+
+  findUserById: (userId: string) =>
+    prisma.user.findUnique({
+      where: { id: userId },
+      include: { role: true },
+    }),
 };

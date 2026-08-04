@@ -233,11 +233,32 @@ export const authService = {
 
     const payload = await verifyAccessToken(accessToken);
 
-    const user = await authRepository.findUserByEmail(payload.sub);
+    const user = await authRepository.findUserById(payload.sub);
     if (!user) {
       return;
     }
 
     await authRepository.deleteAllSessionsByUserId(user.id);
+  },
+
+  getMe: async (userId?: string) => {
+    if (!userId) {
+      throw new UnauthorizedError("No user ID provided");
+    }
+
+    const user = await authRepository.findUserById(userId);
+    if (!user) {
+      throw new UnauthorizedError("User not found");
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role.name,
+      verifiedAt: user.verifiedAt,
+      createdAt: user.createdAt,
+    };
   },
 };
