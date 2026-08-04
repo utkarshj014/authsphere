@@ -109,10 +109,10 @@ export const authRepository = {
       include: { user: { include: { role: true } } },
     }),
 
-  deleteSession: (sessionId: string) =>
+  deleteSessionById: (sessionId: string) =>
     prisma.session.delete({ where: { id: sessionId } }),
 
-  deleteAllSessionsForUser: (userId: string) =>
+  deleteAllSessionsByUserId: (userId: string) =>
     prisma.session.deleteMany({ where: { userId } }),
 
   rotateSession: (sessionData: {

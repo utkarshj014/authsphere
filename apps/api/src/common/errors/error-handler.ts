@@ -3,10 +3,7 @@ import { logger } from "../../lib/logger.js";
 import { AppError } from "./app-error.js";
 import { ValidationError } from "./validation-error.js";
 import { UnauthorizedError } from "./unauthorized-error.js";
-import {
-  accessTokenCookieOptions,
-  refreshTokenCookieOptions,
-} from "../utils/cookie-options.js";
+import { clearAuthCookies } from "../utils/cookie.js";
 import { env } from "../../config/env.js";
 
 const responseDto = (message: string, errors?: unknown[]) => ({
@@ -30,13 +27,7 @@ export const errorHandler = (
   }
 
   if (err instanceof UnauthorizedError) {
-    const { maxAge: _noNeed1, ...clearAccessOptions } =
-      accessTokenCookieOptions;
-    const { maxAge: _noNeed2, ...clearRefreshOptions } =
-      refreshTokenCookieOptions;
-
-    res.clearCookie("accessToken", clearAccessOptions);
-    res.clearCookie("refreshToken", clearRefreshOptions);
+    clearAuthCookies(res);
 
     return res.status(err.statusCode).json(responseDto(err.message));
   }

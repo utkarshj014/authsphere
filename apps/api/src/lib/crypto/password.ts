@@ -31,3 +31,7 @@ export async function verifyPassword(
     return false;
   }
 }
+
+export const DUMMY_PASSWORD_HASH = await hashPassword(
+  "This is dummy password to prevent timing attacks",
+);

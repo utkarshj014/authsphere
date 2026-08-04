@@ -1,7 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { TokenPayload } from "./jwt.types.js";
 import { env } from "../../config/env.js";
-import { AppError } from "../../common/errors/app-error.js";
+import { UnauthorizedError } from "../../common/errors/unauthorized-error.js";
 
 const secret = new TextEncoder().encode(env.JWT_REFRESH_SECRET);
 
@@ -25,6 +25,6 @@ export async function verifyRefreshToken(token: string) {
       role: payload.role,
     };
   } catch (error) {
-    throw new AppError("Invalid or expired refresh token", 401);
+    throw new UnauthorizedError("Invalid or expired refresh token");
   }
 }

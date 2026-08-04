@@ -10,10 +10,7 @@ import {
 import { ApiResponse } from "../../common/responses/api-response.js";
 import { ValidationError } from "../../common/errors/validation-error.js";
 import { formatZodError } from "../../common/errors/format-zod-error.js";
-import {
-  accessTokenCookieOptions,
-  refreshTokenCookieOptions,
-} from "../../common/utils/cookie-options.js";
+import { setAuthCookies, clearAuthCookies } from "../../common/utils/cookie.js";
 
 export const signupController = asyncHandler(
   async (req: Request, res: Response) => {
@@ -80,12 +77,7 @@ export const loginController = asyncHandler(
       userAgent,
     );
 
-    res.cookie("accessToken", authTokens.accessToken, accessTokenCookieOptions);
-    res.cookie(
-      "refreshToken",
-      authTokens.refreshToken,
-      refreshTokenCookieOptions,
-    );
+    setAuthCookies(res, authTokens);
 
     return ApiResponse.success(res, null, "Login successful", 200);
   },
@@ -104,13 +96,32 @@ export const refreshTokenController = asyncHandler(
       userAgent,
     );
 
-    res.cookie("accessToken", authTokens.accessToken, accessTokenCookieOptions);
-    res.cookie(
-      "refreshToken",
-      authTokens.refreshToken,
-      refreshTokenCookieOptions,
-    );
+    setAuthCookies(res, authTokens);
 
     return ApiResponse.success(res, null, "Refresh token successful", 200);
+  },
+);
+
+export const logoutController = asyncHandler(
+  async (req: Request, res: Response) => {
+    const refreshToken = req.cookies.refreshToken;
+
+    await authService.logout(refreshToken);
+
+    clearAuthCookies(res);
+
+    return ApiResponse.success(res, null, "Logout successful", 200);
+  },
+);
+
+export const logoutAllController = asyncHandler(
+  async (req: Request, res: Response) => {
+    const accessToken = req.cookies.accessToken;
+
+    await authService.logoutAll(accessToken);
+
+    clearAuthCookies(res);
+
+    return ApiResponse.success(res, null, "Logout all successful", 200);
   },
 );

@@ -8,10 +8,17 @@ import type {
   ResendVerificationTokenInput,
   LoginInput,
 } from "./auth.validation.js";
-import { hashPassword, verifyPassword } from "../../lib/crypto/password.js";
+import {
+  hashPassword,
+  verifyPassword,
+  DUMMY_PASSWORD_HASH,
+} from "../../lib/crypto/password.js";
 import { generateToken, hashToken } from "../../lib/crypto/token.js";
 import { sendVerificationEmail } from "../email/demo.js";
-import { signAccessToken } from "../../lib/jwt/access-token.js";
+import {
+  signAccessToken,
+  verifyAccessToken,
+} from "../../lib/jwt/access-token.js";
 import {
   signRefreshToken,
   verifyRefreshToken,
@@ -94,8 +101,11 @@ export const authService = {
   ): Promise<AuthTokens> => {
     const user = await authRepository.findUserByEmailWithRole(input.email);
     if (!user) {
+      // Dummy password check for constant time response
+      await verifyPassword(DUMMY_PASSWORD_HASH, input.password);
       throw new UnauthorizedError("Invalid credentials");
     }
+
     if (!user.passwordHash) {
       throw new AppError("This account is created using social login", 403);
     }
@@ -154,22 +164,22 @@ export const authService = {
 
     const session = await authRepository.findSessionById(payload.sid);
     if (!session) {
-      throw new UnauthorizedError("Invalid or expired refresh token");
+      throw new UnauthorizedError("Invalid session");
     }
 
     // Defense-in-depth
     if (session.userId !== payload.sub) {
-      throw new UnauthorizedError("Compromised token detected");
+      throw new UnauthorizedError("Compromised session detected");
     }
 
     const oldRefreshTokenHash = hashToken(refreshToken);
     if (session.tokenHash !== oldRefreshTokenHash) {
       if (env.AUTH_REUSE_DELETION_MODE === "GLOBAL") {
-        await authRepository.deleteAllSessionsForUser(session.userId);
+        await authRepository.deleteAllSessionsByUserId(session.userId);
       } else {
-        await authRepository.deleteSession(session.id);
+        await authRepository.deleteSessionById(session.id);
       }
-      throw new UnauthorizedError("Compromised token detected");
+      throw new UnauthorizedError("Compromised session detected");
     }
 
     const user = session.user;
@@ -199,5 +209,35 @@ export const authService = {
     });
 
     return { accessToken: newAccessToken, refreshToken: newRefreshToken };
+  },
+
+  logout: async (refreshToken?: string) => {
+    if (!refreshToken) {
+      throw new UnauthorizedError("No refresh token provided");
+    }
+
+    const payload = await verifyRefreshToken(refreshToken);
+
+    const session = await authRepository.findSessionById(payload.sid);
+    if (!session) {
+      return;
+    }
+
+    await authRepository.deleteSessionById(session.id);
+  },
+
+  logoutAll: async (accessToken?: string) => {
+    if (!accessToken) {
+      throw new UnauthorizedError("No access token provided");
+    }
+
+    const payload = await verifyAccessToken(accessToken);
+
+    const user = await authRepository.findUserByEmail(payload.sub);
+    if (!user) {
+      return;
+    }
+
+    await authRepository.deleteAllSessionsByUserId(user.id);
   },
 };
