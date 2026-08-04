@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
+import { ApiResponse } from "../common/responses/api-response.js";
 
 export const notFoundHandler = (_req: Request, res: Response) => {
-  return res.status(404).json({ success: false, message: "Route not found!" });
+  return ApiResponse.error(res, null, "Route not found!", 404);
 };
