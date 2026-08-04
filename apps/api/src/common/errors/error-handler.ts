@@ -47,7 +47,15 @@ export const errorHandler = (
 
   const isProduction = env.NODE_ENV === "production";
   const message = isProduction ? "Internal Server Error" : err.message;
-  const errors = isProduction ? undefined : [err];
+  const errors = isProduction
+    ? undefined
+    : [
+        {
+          name: err.name,
+          message: err.message,
+          stack: err.stack,
+        },
+      ];
 
   return res.status(500).json(responseDto(message, errors));
 };
