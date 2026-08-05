@@ -73,9 +73,9 @@ const logout = asyncHandler(async (req: Request, res: Response) => {
 });
 
 const logoutAll = asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.userId;
+  const userId = req.auth.userId;
 
-  await authService.logoutAll(userId!);
+  await authService.logoutAll(userId);
 
   clearAuthCookies(res);
 
@@ -83,7 +83,9 @@ const logoutAll = asyncHandler(async (req: Request, res: Response) => {
 });
 
 const getMe = asyncHandler(async (req: Request, res: Response) => {
-  const user = await authService.getMe(req.userId);
+  const userId = req.auth.userId;
+
+  const user = await authService.getCurrentUser(userId);
 
   return ApiResponse.success(res, user, "User fetched successfully", 200);
 });
@@ -106,9 +108,9 @@ const resetPassword = asyncHandler(async (req: Request, res: Response) => {
 });
 
 const changePassword = asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.userId;
+  const userId = req.auth.userId;
 
-  await authService.changePassword(userId!, req.body);
+  await authService.changePassword(userId, req.body);
 
   clearAuthCookies(res);
 

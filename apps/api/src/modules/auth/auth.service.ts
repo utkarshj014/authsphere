@@ -21,10 +21,7 @@ import {
   sendForgotPasswordEmail,
   sendVerificationEmail,
 } from "../email/demo.js";
-import {
-  signAccessToken,
-  verifyAccessToken,
-} from "../../lib/jwt/access-token.js";
+import { signAccessToken } from "../../lib/jwt/access-token.js";
 import {
   signRefreshToken,
   verifyRefreshToken,
@@ -102,7 +99,10 @@ const login = async (
   }
 
   if (!user.passwordHash) {
-    throw new AppError("This account is created using social login", 403);
+    throw new AppError(
+      "This account is created using social login. Please login using your social account",
+      403,
+    );
   }
 
   const passwordMatch = await verifyPassword(user.passwordHash, input.password);
@@ -188,8 +188,7 @@ const refreshToken = async (
   const newRefreshTokenHash = hashToken(newRefreshToken);
   const sessionExpiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_MS);
 
-  await authRepository.rotateSession({
-    id: session.id,
+  await authRepository.rotateSession(session.id, {
     tokenHash: newRefreshTokenHash,
     expiresAt: sessionExpiresAt,
     ...(ipAddress !== undefined ? { ipAddress } : {}),
@@ -223,11 +222,7 @@ const logoutAll = async (userId: string) => {
   await authRepository.deleteAllSessionsByUserId(user.id);
 };
 
-const getMe = async (userId?: string) => {
-  if (!userId) {
-    throw new UnauthorizedError("No user ID provided");
-  }
-
+const getCurrentUser = async (userId: string) => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
     throw new UnauthorizedError("User not found");
@@ -246,7 +241,7 @@ const getMe = async (userId?: string) => {
 
 const forgotPassword = async (input: ForgotPasswordInput) => {
   const user = await authRepository.findUserByEmail(input.email);
-  if (!user) {
+  if (!user || !user.passwordHash) {
     return;
   }
 
@@ -288,8 +283,16 @@ const changePassword = async (userId: string, input: ChangePasswordInput) => {
     input.oldPassword,
   );
   if (!passwordMatch) {
-    // Not use UnauthorizedError because the user is already authenticated, just password is wrong
+    // Not using UnauthorizedError because the user is already authenticated, just password is wrong
     throw new AppError("Invalid old password", 400);
+  }
+
+  const samePassword = await verifyPassword(
+    user.passwordHash,
+    input.newPassword,
+  );
+  if (samePassword) {
+    throw new AppError("New password cannot be same as old password", 400);
   }
 
   const newPasswordHash = await hashPassword(input.newPassword);
@@ -305,7 +308,7 @@ export const authService = {
   refreshToken,
   logout,
   logoutAll,
-  getMe,
+  getCurrentUser,
   forgotPassword,
   resetPassword,
   changePassword,

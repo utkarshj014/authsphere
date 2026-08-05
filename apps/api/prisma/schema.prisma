@@ -34,6 +34,8 @@ model User {
 
   verifiedAt DateTime? @map("verified_at")
 
+  passwordChangedAt DateTime? @map("password_changed_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

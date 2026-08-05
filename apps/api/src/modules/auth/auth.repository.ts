@@ -114,23 +114,23 @@ const findSessionById = (sessionId: string) =>
   });
 
 const deleteSessionById = (sessionId: string) =>
-  prisma.session.delete({ where: { id: sessionId } });
+  prisma.session.deleteMany({ where: { id: sessionId } });
 
 const deleteAllSessionsByUserId = (userId: string) =>
   prisma.session.deleteMany({ where: { userId } });
 
-const rotateSession = (sessionData: {
-  id: string;
-  tokenHash: string;
-  expiresAt: Date;
-  ipAddress?: string;
-  userAgent?: string;
-}) =>
+const rotateSession = (
+  sessionId: string,
+  sessionUpdateData: {
+    tokenHash: string;
+    expiresAt: Date;
+    ipAddress?: string;
+    userAgent?: string;
+  },
+) =>
   prisma.session.update({
-    where: { id: sessionData.id },
-    data: {
-      ...sessionData,
-    },
+    where: { id: sessionId },
+    data: { ...sessionUpdateData },
   });
 
 const findUserById = (userId: string) =>
@@ -168,6 +168,7 @@ const resetPasswordAndDeleteToken = (
         where: { id: passwordResetToken.userId },
         data: {
           passwordHash,
+          passwordChangedAt: new Date(),
           passwordResetToken: { delete: {} },
           sessions: { deleteMany: {} },
         },
@@ -187,7 +188,11 @@ const resetPasswordAndDeleteToken = (
 const changePassword = (userId: string, newPasswordHash: string) =>
   prisma.user.update({
     where: { id: userId },
-    data: { passwordHash: newPasswordHash, sessions: { deleteMany: {} } },
+    data: {
+      passwordHash: newPasswordHash,
+      passwordChangedAt: new Date(),
+      sessions: { deleteMany: {} },
+    },
   });
 
 export const authRepository = {
