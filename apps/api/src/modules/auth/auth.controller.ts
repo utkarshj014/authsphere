@@ -1,8 +1,8 @@
 import type { Request, Response } from "express";
-import { asyncHandler } from "../../common/errors/async-handler.js";
+import { asyncHandler } from "../../common/errors/index.js";
 import { authService } from "./auth.service.js";
-import { ApiResponse } from "../../common/responses/api-response.js";
-import { setAuthCookies, clearAuthCookies } from "../../common/utils/cookie.js";
+import { ApiResponse } from "../../common/responses/index.js";
+import { setAuthCookies, clearAuthCookies } from "../../common/utils/index.js";
 
 const signup = asyncHandler(async (req: Request, res: Response) => {
   await authService.signup(req.body);

@@ -7,7 +7,7 @@ import { env } from "./config/env.js";
 
 import { healthRouter } from "./modules/health/index.js";
 import testRouter from "./routes/test.route.js";
-import { errorHandler } from "./common/errors/error-handler.js";
+import { errorHandler } from "./common/errors/index.js";
 import { notFoundHandler } from "./middlewares/not-found.js";
 import { requestId } from "./middlewares/request-id.js";
 import { requestLogger } from "./middlewares/request-logger.js";

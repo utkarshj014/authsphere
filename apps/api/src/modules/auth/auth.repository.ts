@@ -1,6 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { Prisma } from "../../generated/prisma/client.js";
-import { AppError } from "../../common/errors/app-error.js";
+import { AppError } from "../../common/errors/index.js";
 import type { RoleName } from "@authsphere/shared";
 
 const findUserByEmail = (email: string) =>

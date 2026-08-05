@@ -1,7 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { TokenPayload } from "./jwt.types.js";
 import { env } from "../../config/env.js";
-import { UnauthorizedError } from "../../common/errors/unauthorized-error.js";
+import { UnauthorizedError } from "../../common/errors/index.js";
 
 const secret = new TextEncoder().encode(env.JWT_ACCESS_SECRET);
 

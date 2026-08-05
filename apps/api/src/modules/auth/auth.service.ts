@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { ROLES } from "@authsphere/shared";
-import { AppError } from "../../common/errors/app-error.js";
+import { AppError, UnauthorizedError } from "../../common/errors/index.js";
 import { authRepository } from "./auth.repository.js";
 import type {
   SignupInput,
@@ -15,20 +15,20 @@ import {
   hashPassword,
   verifyPassword,
   DUMMY_PASSWORD_HASH,
-} from "../../lib/crypto/password.js";
-import { generateToken, hashToken } from "../../lib/crypto/token.js";
+  generateToken,
+  hashToken,
+} from "../../lib/crypto/index.js";
 import {
   sendForgotPasswordEmail,
   sendVerificationEmail,
 } from "../email/demo.js";
-import { signAccessToken } from "../../lib/jwt/access-token.js";
 import {
+  signAccessToken,
   signRefreshToken,
   verifyRefreshToken,
-} from "../../lib/jwt/refresh-token.js";
+} from "../../lib/jwt/index.js";
 import type { AuthTokens } from "./auth.types.js";
 import { env } from "../../config/env.js";
-import { UnauthorizedError } from "../../common/errors/unauthorized-error.js";
 
 const signup = async (input: SignupInput) => {
   const existingUser = await authRepository.findUserByEmail(input.email);

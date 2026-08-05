@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import z from "zod";
-import { formatZodError } from "../common/errors/format-zod-error.js";
-import { parseDurationToMs } from "../common/utils/time.js";
+import { formatZodError } from "../common/errors/index.js";
+import { parseDurationToMs } from "../common/utils/index.js";
 
 // Always loads apps/api/.env regardless of current working directory
 dotenv.config({ path: new URL("../../.env", import.meta.url) });
@@ -17,9 +17,7 @@ const envSchema = z
     JWT_REFRESH_SECRET: z.string().min(1),
     JWT_ACCESS_EXPIRES_IN: z.string().min(1),
     JWT_REFRESH_EXPIRES_IN: z.string().min(1),
-    AUTH_REUSE_DELETION_MODE: z
-      .enum(["SESSION", "GLOBAL"])
-      .default("SESSION"),
+    AUTH_REUSE_DELETION_MODE: z.enum(["SESSION", "GLOBAL"]).default("SESSION"),
   })
   .transform((config) => ({
     ...config,

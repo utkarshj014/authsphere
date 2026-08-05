@@ -1,7 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
-import { UnauthorizedError } from "../common/errors/unauthorized-error.js";
-import { verifyAccessToken } from "../lib/jwt/access-token.js";
-import { asyncHandler } from "../common/errors/async-handler.js";
+import { asyncHandler, UnauthorizedError } from "../common/errors/index.js";
+import { verifyAccessToken } from "../lib/jwt/index.js";
 
 export const auth = asyncHandler(
   async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
