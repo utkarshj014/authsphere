@@ -7,6 +7,8 @@ import type {
   VerifyEmailInput,
   ResendVerificationTokenInput,
   LoginInput,
+  ForgotPasswordInput,
+  ResetPasswordInput,
 } from "./auth.validation.js";
 import {
   hashPassword,
@@ -14,7 +16,10 @@ import {
   DUMMY_PASSWORD_HASH,
 } from "../../lib/crypto/password.js";
 import { generateToken, hashToken } from "../../lib/crypto/token.js";
-import { sendVerificationEmail } from "../email/demo.js";
+import {
+  sendForgotPasswordEmail,
+  sendVerificationEmail,
+} from "../email/demo.js";
 import {
   signAccessToken,
   verifyAccessToken,
@@ -67,7 +72,7 @@ export const authService = {
     const emailVerificationToken =
       await authRepository.findVerificationToken(tokenHash);
     if (!emailVerificationToken) {
-      throw new AppError("Invalid verification token", 400);
+      throw new AppError("Invalid or expired verification token", 400);
     }
 
     await authRepository.markVerifiedAndDeleteVerificationToken(
@@ -260,5 +265,35 @@ export const authService = {
       verifiedAt: user.verifiedAt,
       createdAt: user.createdAt,
     };
+  },
+
+  forgotPassword: async (input: ForgotPasswordInput) => {
+    const user = await authRepository.findUserByEmail(input.email);
+    if (!user) {
+      return;
+    }
+
+    const token = generateToken();
+    const tokenHash = hashToken(token);
+    const tokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000 * 24);
+
+    await authRepository.createPasswordResetToken(
+      tokenHash,
+      user.id,
+      tokenExpiresAt,
+    );
+
+    await sendForgotPasswordEmail(token, user.email);
+  },
+
+  resetPassword: async (input: ResetPasswordInput) => {
+    const tokenHash = hashToken(input.token);
+
+    const newPasswordHash = await hashPassword(input.password);
+
+    await authRepository.changePasswordAndDeleteResetToken(
+      tokenHash,
+      newPasswordHash,
+    );
   },
 };

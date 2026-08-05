@@ -6,12 +6,13 @@ import {
   verifyEmailSchema,
   resendVerificationTokenSchema,
   loginSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
 } from "./auth.validation.js";
 import { ApiResponse } from "../../common/responses/api-response.js";
 import { ValidationError } from "../../common/errors/validation-error.js";
 import { formatZodError } from "../../common/errors/format-zod-error.js";
 import { setAuthCookies, clearAuthCookies } from "../../common/utils/cookie.js";
-import { authRepository } from "./auth.repository.js";
 
 export const signupController = asyncHandler(
   async (req: Request, res: Response) => {
@@ -56,7 +57,7 @@ export const resendVerificationTokenController = asyncHandler(
     return ApiResponse.success(
       res,
       null,
-      "If an account exists and is unverified, a verification email has been sent",
+      "If an account exists with this email and is unverified, a verification email has been sent",
       200,
     );
   },
@@ -132,5 +133,36 @@ export const getMeController = asyncHandler(
     const user = await authService.getMe(req.userId);
 
     return ApiResponse.success(res, user, "User fetched successfully", 200);
+  },
+);
+
+export const forgotPasswordController = asyncHandler(
+  async (req: Request, res: Response) => {
+    const input = forgotPasswordSchema.safeParse(req.body);
+    if (!input.success) {
+      throw new ValidationError(formatZodError(input.error));
+    }
+
+    await authService.forgotPassword(input.data);
+
+    return ApiResponse.success(
+      res,
+      null,
+      "If an account exists with this email, a password reset email has been sent",
+      200,
+    );
+  },
+);
+
+export const resetPasswordController = asyncHandler(
+  async (req: Request, res: Response) => {
+    const input = resetPasswordSchema.safeParse(req.body);
+    if (!input.success) {
+      throw new ValidationError(formatZodError(input.error));
+    }
+
+    await authService.resetPassword(input.data);
+
+    return ApiResponse.success(res, null, "Password reset successful", 200);
   },
 );

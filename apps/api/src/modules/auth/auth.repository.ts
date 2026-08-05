@@ -134,4 +134,49 @@ export const authRepository = {
       where: { id: userId },
       include: { role: true },
     }),
+
+  createPasswordResetToken: (
+    tokenHash: string,
+    userId: string,
+    expiresAt: Date,
+  ) =>
+    prisma.passwordResetToken.upsert({
+      where: { userId },
+      update: { tokenHash, expiresAt, createdAt: new Date() },
+      create: { tokenHash, userId, expiresAt },
+    }),
+
+  changePasswordAndDeleteResetToken: (
+    tokenHash: string,
+    passwordHash: string,
+  ) => {
+    return prisma.$transaction(async (tx) => {
+      const passwordResetToken = await tx.passwordResetToken.findFirst({
+        where: { tokenHash, expiresAt: { gte: new Date() } },
+      });
+
+      if (!passwordResetToken) {
+        throw new AppError("Invalid or expired reset token", 400);
+      }
+
+      try {
+        await tx.user.update({
+          where: { id: passwordResetToken.userId },
+          data: {
+            passwordHash,
+            passwordResetToken: { delete: {} },
+            sessions: { deleteMany: {} },
+          },
+        });
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2025"
+        ) {
+          throw new AppError("Invalid or expired reset token", 400);
+        }
+        throw error;
+      }
+    });
+  },
 };

@@ -8,6 +8,8 @@ import {
   logoutController,
   logoutAllController,
   getMeController,
+  forgotPasswordController,
+  resetPasswordController,
 } from "./auth.controller.js";
 import { auth } from "../../middlewares/auth.js";
 
@@ -21,6 +23,8 @@ router
   .post("/refresh-token", refreshTokenController)
   .post("/logout", logoutController)
   .post("/logout-all", logoutAllController)
-  .get("/me", auth, getMeController);
+  .get("/me", auth, getMeController)
+  .post("/forgot-password", forgotPasswordController)
+  .post("/reset-password", resetPasswordController);
 
 export default router;
