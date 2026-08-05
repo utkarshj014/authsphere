@@ -1,58 +1,29 @@
 import type { Request, Response } from "express";
 import { asyncHandler } from "../../common/errors/async-handler.js";
 import { authService } from "./auth.service.js";
-import {
-  signupSchema,
-  verifyEmailSchema,
-  resendVerificationTokenSchema,
-  loginSchema,
-  forgotPasswordSchema,
-  resetPasswordSchema,
-} from "./auth.validation.js";
 import { ApiResponse } from "../../common/responses/api-response.js";
-import { ValidationError } from "../../common/errors/validation-error.js";
-import { formatZodError } from "../../common/errors/format-zod-error.js";
 import { setAuthCookies, clearAuthCookies } from "../../common/utils/cookie.js";
 
-export const signupController = asyncHandler(
+const signup = asyncHandler(async (req: Request, res: Response) => {
+  await authService.signup(req.body);
+
+  return ApiResponse.success(
+    res,
+    null,
+    "Signed up successfully. Please verify your email",
+    201,
+  );
+});
+
+const verifyEmail = asyncHandler(async (req: Request, res: Response) => {
+  await authService.verifyEmail(req.body);
+
+  return ApiResponse.success(res, null, "Email verified successfully", 200);
+});
+
+const resendVerificationToken = asyncHandler(
   async (req: Request, res: Response) => {
-    const input = signupSchema.safeParse(req.body);
-    if (!input.success) {
-      throw new ValidationError(formatZodError(input.error));
-    }
-
-    await authService.signup(input.data);
-
-    return ApiResponse.success(
-      res,
-      null,
-      "Signed up successfully. Please verify your email",
-      201,
-    );
-  },
-);
-
-export const verifyEmailController = asyncHandler(
-  async (req: Request, res: Response) => {
-    const input = verifyEmailSchema.safeParse(req.body);
-    if (!input.success) {
-      throw new ValidationError(formatZodError(input.error));
-    }
-
-    await authService.verifyEmail(input.data);
-
-    return ApiResponse.success(res, null, "Email verified successfully", 200);
-  },
-);
-
-export const resendVerificationTokenController = asyncHandler(
-  async (req: Request, res: Response) => {
-    const input = resendVerificationTokenSchema.safeParse(req.body);
-    if (!input.success) {
-      throw new ValidationError(formatZodError(input.error));
-    }
-
-    await authService.resendVerificationToken(input.data);
+    await authService.resendVerificationToken(req.body);
 
     return ApiResponse.success(
       res,
@@ -63,106 +34,86 @@ export const resendVerificationTokenController = asyncHandler(
   },
 );
 
-export const loginController = asyncHandler(
-  async (req: Request, res: Response) => {
-    const input = loginSchema.safeParse(req.body);
-    if (!input.success) {
-      throw new ValidationError(formatZodError(input.error));
-    }
+const login = asyncHandler(async (req: Request, res: Response) => {
+  const ipAddress = req.ip;
+  const userAgent = req.header("user-agent");
 
-    const ipAddress = req.ip;
-    const userAgent = req.header("user-agent");
+  const authTokens = await authService.login(req.body, ipAddress, userAgent);
 
-    const authTokens = await authService.login(
-      input.data,
-      ipAddress,
-      userAgent,
-    );
+  setAuthCookies(res, authTokens);
 
-    setAuthCookies(res, authTokens);
+  return ApiResponse.success(res, null, "Login successful", 200);
+});
 
-    return ApiResponse.success(res, null, "Login successful", 200);
-  },
-);
+const refreshToken = asyncHandler(async (req: Request, res: Response) => {
+  const refreshToken = req.cookies.refreshToken;
 
-export const refreshTokenController = asyncHandler(
-  async (req: Request, res: Response) => {
-    const refreshToken = req.cookies.refreshToken;
+  const ipAddress = req.ip;
+  const userAgent = req.header("user-agent");
 
-    const ipAddress = req.ip;
-    const userAgent = req.header("user-agent");
+  const authTokens = await authService.refreshToken(
+    refreshToken,
+    ipAddress,
+    userAgent,
+  );
 
-    const authTokens = await authService.refreshToken(
-      refreshToken,
-      ipAddress,
-      userAgent,
-    );
+  setAuthCookies(res, authTokens);
 
-    setAuthCookies(res, authTokens);
+  return ApiResponse.success(res, null, "Refresh token successful", 200);
+});
 
-    return ApiResponse.success(res, null, "Refresh token successful", 200);
-  },
-);
+const logout = asyncHandler(async (req: Request, res: Response) => {
+  const refreshToken = req.cookies.refreshToken;
 
-export const logoutController = asyncHandler(
-  async (req: Request, res: Response) => {
-    const refreshToken = req.cookies.refreshToken;
+  await authService.logout(refreshToken);
 
-    await authService.logout(refreshToken);
+  clearAuthCookies(res);
 
-    clearAuthCookies(res);
+  return ApiResponse.success(res, null, "Logout successful", 200);
+});
 
-    return ApiResponse.success(res, null, "Logout successful", 200);
-  },
-);
+const logoutAll = asyncHandler(async (req: Request, res: Response) => {
+  const accessToken = req.cookies.accessToken;
 
-export const logoutAllController = asyncHandler(
-  async (req: Request, res: Response) => {
-    const accessToken = req.cookies.accessToken;
+  await authService.logoutAll(accessToken);
 
-    await authService.logoutAll(accessToken);
+  clearAuthCookies(res);
 
-    clearAuthCookies(res);
+  return ApiResponse.success(res, null, "Logout all successful", 200);
+});
 
-    return ApiResponse.success(res, null, "Logout all successful", 200);
-  },
-);
+const getMe = asyncHandler(async (req: Request, res: Response) => {
+  const user = await authService.getMe(req.userId);
 
-export const getMeController = asyncHandler(
-  async (req: Request, res: Response) => {
-    const user = await authService.getMe(req.userId);
+  return ApiResponse.success(res, user, "User fetched successfully", 200);
+});
 
-    return ApiResponse.success(res, user, "User fetched successfully", 200);
-  },
-);
+const forgotPassword = asyncHandler(async (req: Request, res: Response) => {
+  await authService.forgotPassword(req.body);
 
-export const forgotPasswordController = asyncHandler(
-  async (req: Request, res: Response) => {
-    const input = forgotPasswordSchema.safeParse(req.body);
-    if (!input.success) {
-      throw new ValidationError(formatZodError(input.error));
-    }
+  return ApiResponse.success(
+    res,
+    null,
+    "If an account exists with this email, a password reset email has been sent",
+    200,
+  );
+});
 
-    await authService.forgotPassword(input.data);
+const resetPassword = asyncHandler(async (req: Request, res: Response) => {
+  await authService.resetPassword(req.body);
 
-    return ApiResponse.success(
-      res,
-      null,
-      "If an account exists with this email, a password reset email has been sent",
-      200,
-    );
-  },
-);
+  return ApiResponse.success(res, null, "Password reset successful", 200);
+});
 
-export const resetPasswordController = asyncHandler(
-  async (req: Request, res: Response) => {
-    const input = resetPasswordSchema.safeParse(req.body);
-    if (!input.success) {
-      throw new ValidationError(formatZodError(input.error));
-    }
-
-    await authService.resetPassword(input.data);
-
-    return ApiResponse.success(res, null, "Password reset successful", 200);
-  },
-);
+export const authController = {
+  signup,
+  verifyEmail,
+  resendVerificationToken,
+  login,
+  refreshToken,
+  logout,
+  logoutAll,
+  getMe,
+  forgotPassword,
+  resetPassword,
+};

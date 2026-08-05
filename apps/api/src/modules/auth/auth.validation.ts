@@ -1,39 +1,43 @@
 import { z } from "zod";
 
-export const signupSchema = z.object({
-  email: z.email(),
-  password: z.string().min(8).max(128),
-  firstName: z.string().trim().min(1).max(50).optional(),
-  lastName: z.string().trim().min(1).max(50).optional(),
-});
+const nameSchema = z.string().trim().min(1).max(50);
 
-export const verifyEmailSchema = z.object({
-  token: z.string().trim().min(1),
-});
+export const authSchema = {
+  signup: z.object({
+    email: z.email(),
+    password: z.string().min(8).max(128),
+    firstName: nameSchema.optional(),
+    lastName: nameSchema.optional(),
+  }),
 
-export const resendVerificationTokenSchema = z.object({
-  email: z.email(),
-});
+  verifyEmail: z.object({
+    token: z.string().trim().min(1),
+  }),
 
-export const loginSchema = z.object({
-  email: z.email(),
-  password: z.string().min(8).max(128),
-});
+  resendVerificationToken: z.object({
+    email: z.email(),
+  }),
 
-export const forgotPasswordSchema = z.object({
-  email: z.email(),
-});
+  login: z.object({
+    email: z.email(),
+    password: z.string().min(8).max(128),
+  }),
 
-export const resetPasswordSchema = z.object({
-  token: z.string().trim().min(1),
-  password: z.string().min(8).max(128),
-});
+  forgotPassword: z.object({
+    email: z.email(),
+  }),
 
-export type SignupInput = z.infer<typeof signupSchema>;
-export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
+  resetPassword: z.object({
+    token: z.string().trim().min(1),
+    password: z.string().min(8).max(128),
+  }),
+};
+
+export type SignupInput = z.infer<typeof authSchema.signup>;
+export type VerifyEmailInput = z.infer<typeof authSchema.verifyEmail>;
 export type ResendVerificationTokenInput = z.infer<
-  typeof resendVerificationTokenSchema
+  typeof authSchema.resendVerificationToken
 >;
-export type LoginInput = z.infer<typeof loginSchema>;
-export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
-export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+export type LoginInput = z.infer<typeof authSchema.login>;
+export type ForgotPasswordInput = z.infer<typeof authSchema.forgotPassword>;
+export type ResetPasswordInput = z.infer<typeof authSchema.resetPassword>;
