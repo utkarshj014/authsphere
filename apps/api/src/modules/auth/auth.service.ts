@@ -9,6 +9,7 @@ import type {
   LoginInput,
   ForgotPasswordInput,
   ResetPasswordInput,
+  ChangePasswordInput,
 } from "./auth.validation.js";
 import {
   hashPassword,
@@ -213,14 +214,8 @@ const logout = async (token?: string) => {
   await authRepository.deleteSessionById(session.id);
 };
 
-const logoutAll = async (token?: string) => {
-  if (!token) {
-    throw new UnauthorizedError("No access token provided");
-  }
-
-  const payload = await verifyAccessToken(token);
-
-  const user = await authRepository.findUserById(payload.sub);
+const logoutAll = async (userId: string) => {
+  const user = await authRepository.findUserById(userId);
   if (!user) {
     return;
   }
@@ -273,10 +268,33 @@ const resetPassword = async (input: ResetPasswordInput) => {
 
   const newPasswordHash = await hashPassword(input.password);
 
-  await authRepository.changePasswordAndDeleteResetToken(
-    tokenHash,
-    newPasswordHash,
+  await authRepository.resetPasswordAndDeleteToken(tokenHash, newPasswordHash);
+};
+
+const changePassword = async (userId: string, input: ChangePasswordInput) => {
+  const user = await authRepository.findUserById(userId);
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+  if (!user.passwordHash) {
+    throw new AppError(
+      "This account is created using social login. You cannot change your password.",
+      403,
+    );
+  }
+
+  const passwordMatch = await verifyPassword(
+    user.passwordHash,
+    input.oldPassword,
   );
+  if (!passwordMatch) {
+    // Not use UnauthorizedError because the user is already authenticated, just password is wrong
+    throw new AppError("Invalid old password", 400);
+  }
+
+  const newPasswordHash = await hashPassword(input.newPassword);
+
+  await authRepository.changePassword(userId, newPasswordHash);
 };
 
 export const authService = {
@@ -290,4 +308,5 @@ export const authService = {
   getMe,
   forgotPassword,
   resetPassword,
+  changePassword,
 };

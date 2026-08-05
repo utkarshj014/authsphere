@@ -73,9 +73,9 @@ const logout = asyncHandler(async (req: Request, res: Response) => {
 });
 
 const logoutAll = asyncHandler(async (req: Request, res: Response) => {
-  const accessToken = req.cookies.accessToken;
+  const userId = req.userId;
 
-  await authService.logoutAll(accessToken);
+  await authService.logoutAll(userId!);
 
   clearAuthCookies(res);
 
@@ -105,6 +105,16 @@ const resetPassword = asyncHandler(async (req: Request, res: Response) => {
   return ApiResponse.success(res, null, "Password reset successful", 200);
 });
 
+const changePassword = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.userId;
+
+  await authService.changePassword(userId!, req.body);
+
+  clearAuthCookies(res);
+
+  return ApiResponse.success(res, null, "Password changed successfully", 200);
+});
+
 export const authController = {
   signup,
   verifyEmail,
@@ -116,4 +126,5 @@ export const authController = {
   getMe,
   forgotPassword,
   resetPassword,
+  changePassword,
 };

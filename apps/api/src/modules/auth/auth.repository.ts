@@ -150,7 +150,7 @@ const createPasswordResetToken = (
     create: { tokenHash, userId, expiresAt },
   });
 
-const changePasswordAndDeleteResetToken = (
+const resetPasswordAndDeleteToken = (
   tokenHash: string,
   passwordHash: string,
 ) => {
@@ -184,6 +184,12 @@ const changePasswordAndDeleteResetToken = (
   });
 };
 
+const changePassword = (userId: string, newPasswordHash: string) =>
+  prisma.user.update({
+    where: { id: userId },
+    data: { passwordHash: newPasswordHash, sessions: { deleteMany: {} } },
+  });
+
 export const authRepository = {
   findUserByEmail,
   findRoleByName,
@@ -198,5 +204,6 @@ export const authRepository = {
   rotateSession,
   findUserById,
   createPasswordResetToken,
-  changePasswordAndDeleteResetToken,
+  resetPasswordAndDeleteToken,
+  changePassword,
 };

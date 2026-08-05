@@ -21,7 +21,7 @@ router
   .post("/login", validate(authSchema.login), authController.login)
   .post("/refresh-token", authController.refreshToken)
   .post("/logout", authController.logout)
-  .post("/logout-all", authController.logoutAll)
+  .post("/logout-all", auth, authController.logoutAll)
   .get("/me", auth, authController.getMe)
   .post(
     "/forgot-password",
@@ -32,6 +32,12 @@ router
     "/reset-password",
     validate(authSchema.resetPassword),
     authController.resetPassword,
+  )
+  .post(
+    "/change-password",
+    auth,
+    validate(authSchema.changePassword),
+    authController.changePassword,
   );
 
 export default router;

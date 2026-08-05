@@ -14,6 +14,11 @@ export const auth = asyncHandler(
 
     req.userId = payload.sub;
 
+    if (!req.userId) {
+      // throw new UnauthorizedError("No user ID found");
+      throw new UnauthorizedError("Invalid or expired access token");
+    }
+
     next();
   },
 );
