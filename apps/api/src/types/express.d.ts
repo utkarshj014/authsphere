@@ -1,5 +1,5 @@
 import "express";
-import type { RoleName } from "@authsphere/shared";
+import type { RoleName, PermissionName } from "@authsphere/shared";
 
 declare global {
   namespace Express {
@@ -7,8 +7,9 @@ declare global {
       id: string;
       auth: {
         userId: string;
-        sessionId: string;
         role: RoleName;
+        sessionId: string;
+        permissions: PermissionName[];
       };
     }
   }

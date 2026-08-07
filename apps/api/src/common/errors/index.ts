@@ -4,3 +4,4 @@ export * from "./error-handler.js";
 export * from "./validation-error.js";
 export * from "./format-zod-error.js";
 export * from "./unauthorized-error.js";
+export * from "./forbidden-error.js";
