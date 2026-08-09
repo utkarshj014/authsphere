@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { asyncHandler, UnauthorizedError } from "../common/errors/index.js";
 import { verifyAccessToken } from "../lib/jwt/index.js";
-import { findPermissionsByRole } from "../modules/authorization/authorization.repository.js";
+import { authorizationService } from "../modules/authorization/index.js";
 
 export const auth = asyncHandler(
   async (req: Request, _res: Response, next: NextFunction) => {
@@ -11,7 +11,9 @@ export const auth = asyncHandler(
     }
 
     const payload = await verifyAccessToken(accessToken);
-    const permissions = await findPermissionsByRole(payload.role);
+    const permissions = await authorizationService.getPermissionsByRole(
+      payload.role,
+    );
 
     req.auth = {
       userId: payload.sub,

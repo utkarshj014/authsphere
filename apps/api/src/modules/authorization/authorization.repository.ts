@@ -1,7 +1,7 @@
 import { prisma } from "../../lib/prisma.js";
 import type { RoleName, PermissionName } from "@authsphere/shared";
 
-export const findPermissionsByRole = async (
+const findPermissionsByRole = async (
   roleName: RoleName,
 ): Promise<PermissionName[]> => {
   const role = await prisma.role.findUnique({
@@ -20,4 +20,8 @@ export const findPermissionsByRole = async (
   });
   return (role?.rolePermissions.map((rp) => rp.permission.name) ??
     []) as PermissionName[];
+};
+
+export const authorizationRepository = {
+  findPermissionsByRole,
 };
