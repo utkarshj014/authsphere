@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import z from "zod";
-import { formatZodError } from "../common/errors/index.js";
-import { parseDurationToMs } from "../common/utils/index.js";
+import { formatZodError } from "../common/errors/format-zod-error.js";
+import { parseDurationToMs } from "../common/utils/time.js";
 
 // Always loads apps/api/.env regardless of current working directory
 dotenv.config({ path: new URL("../../.env", import.meta.url) });
