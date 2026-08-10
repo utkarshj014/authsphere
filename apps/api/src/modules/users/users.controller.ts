@@ -9,6 +9,17 @@ const getUser = asyncHandler(async (req: Request, res: Response) => {
   return ApiResponse.success(res, user, "User fetched successfully", 200);
 });
 
+const changeRole = asyncHandler(async (req: Request, res: Response) => {
+  const user = await usersService.changeRole(
+    req.auth.userId,
+    req.params.id as string,
+    req.body,
+  );
+
+  return ApiResponse.success(res, user, "User role changed successfully", 200);
+});
+
 export const usersController = {
   getUser,
+  changeRole,
 };

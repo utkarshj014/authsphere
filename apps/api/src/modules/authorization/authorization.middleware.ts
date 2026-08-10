@@ -37,6 +37,9 @@ export const requireSelfOrPermission = (permission: PermissionName) => {
   return asyncHandler(
     async (req: Request, _res: Response, next: NextFunction) => {
       const { userId, permissions } = req.auth;
+
+      // Early return if user is self or has the permission.
+      // Positive conditions are easier to read and reason about than negative conditions.
       if (req.params.id === userId || permissions.includes(permission)) {
         return next();
       }
