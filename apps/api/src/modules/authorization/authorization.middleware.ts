@@ -2,6 +2,9 @@ import type { Request, Response, NextFunction } from "express";
 import type { PermissionName, RoleName } from "@authsphere/shared";
 import { asyncHandler, ForbiddenError } from "../../common/errors/index.js";
 
+// In this file, we don't need asyncHandler, as we don't have redis/database calls,
+// but we are using it for consistency with the authentication middleware.
+
 export const requireRole = (...roles: RoleName[]) => {
   return asyncHandler(
     async (req: Request, _res: Response, next: NextFunction) => {
@@ -21,7 +24,7 @@ export const requirePermission = (...permissions: PermissionName[]) => {
       const { permissions: userPermissions } = req.auth;
       if (!permissions.every((p) => userPermissions.includes(p))) {
         throw new ForbiddenError(
-          `Access Denied: User does not have required permissions.`,
+          "Access Denied: You do not have the required permissions.",
         );
       }
 
@@ -39,7 +42,7 @@ export const requireSelfOrPermission = (permission: PermissionName) => {
       }
 
       throw new ForbiddenError(
-        `Access Denied: User does not have required permissions.`,
+        "Access Denied: You do not have the required permissions.",
       );
     },
   );

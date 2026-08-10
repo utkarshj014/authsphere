@@ -6,15 +6,24 @@ import {
   formatZodError,
 } from "../common/errors/index.js";
 
-export const validate = (schema: ZodType) => {
+export enum ValidationTarget {
+  BODY = "body",
+  PARAMS = "params",
+  QUERY = "query",
+}
+
+export const validate = (
+  schema: ZodType,
+  target: ValidationTarget = ValidationTarget.BODY,
+) => {
   return asyncHandler(
     async (req: Request, _res: Response, next: NextFunction) => {
-      const input = schema.safeParse(req.body);
+      const input = schema.safeParse(req[target]);
       if (!input.success) {
         throw new ValidationError(formatZodError(input.error));
       }
 
-      req.body = input.data;
+      req[target] = input.data;
 
       next();
     },

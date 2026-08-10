@@ -12,6 +12,7 @@ import { notFoundHandler } from "./middlewares/not-found.js";
 import { requestId } from "./middlewares/request-id.js";
 import { requestLogger } from "./middlewares/request-logger.js";
 import { authRouter } from "./modules/auth/index.js";
+import { usersRouter } from "./modules/users/index.js";
 
 const app = express();
 
@@ -37,6 +38,7 @@ app.use(requestLogger);
 app.use("/health", healthRouter);
 app.use("/test", testRouter);
 app.use("/auth", authRouter);
+app.use("/users", usersRouter);
 
 // 404 Handler
 app.use(notFoundHandler);

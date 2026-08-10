@@ -25,7 +25,7 @@ const getPermissionsByRole = async (
       );
     }
   } else {
-    logger.warn(
+    logger.debug(
       { roleName, cacheKey },
       "Redis client is not open; bypassing cache read",
     );
@@ -48,7 +48,7 @@ const getPermissionsByRole = async (
       logger.error({ err, roleName, cacheKey }, "Error writing to Redis cache");
     }
   } else {
-    logger.warn(
+    logger.debug(
       { roleName, cacheKey },
       "Redis client is not open; bypassing cache write",
     );
