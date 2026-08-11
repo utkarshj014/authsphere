@@ -31,7 +31,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-023: Silent Return for Enumeration-Sensitive Endpoints](#adr-023--silent-return-for-enumeration-sensitive-endpoints)
 - [ADR-024: Atomic Token Verification Transactions](#adr-024--atomic-token-verification-transactions)
 - [ADR-025: Idempotent Token Re-issuance via Upsert](#adr-025--idempotent-token-re-issuance-via-upsert)
-- [ADR-026: Middleware-Based Request Validation with Zod 4](#adr-026--middleware-based-request-validation-with-zod-4)
+- [ADR-026: Multi-Target Middleware Validation with Zod 4](#adr-026--multi-target-middleware-validation-with-zod-4)
 - [ADR-027: Session Revocation on Password Change and Reset](#adr-027--session-revocation-on-password-change-and-reset)
 - [ADR-028: Password Change Distinctness Enforcement](#adr-028--password-change-distinctness-enforcement)
 - [ADR-029: `deleteMany` for Idempotent Session Deletion](#adr-029--deletemany-for-idempotent-session-deletion)
@@ -39,6 +39,11 @@ This document records the architectural and engineering decisions made during th
 - [ADR-031: Argon2id Password Hashing with OWASP Parameters](#adr-031--argon2id-password-hashing-with-owasp-parameters)
 - [ADR-032: Social Login Account Guarding](#adr-032--social-login-account-guarding)
 - [ADR-033: Cookie-Based Token Transport](#adr-033--cookie-based-token-transport)
+- [ADR-034: Shared Domain Constants via `@authsphere/shared`](#adr-034--shared-domain-constants-via-authsphereshared)
+- [ADR-035: Redis Permission Caching with Fail-Safe Bypass](#adr-035--redis-permission-caching-with-fail-safe-bypass)
+- [ADR-036: Middleware-Based Authorization Guards](#adr-036--middleware-based-authorization-guards)
+- [ADR-037: Atomic Role-Permission Replacement via Nested Prisma Mutations](#adr-037--atomic-role-permission-replacement-via-nested-prisma-mutations)
+- [ADR-038: Validation-Layer Input Normalization via Zod Transforms](#adr-038--validation-layer-input-normalization-via-zod-transforms)
 
 ---
 
@@ -48,17 +53,17 @@ This document records the architectural and engineering decisions made during th
 
 ### Context
 
-AuthSphere consists of backend API services, potential frontend clients, shared type definitions, validation schemas, and domain constants. Managing these in separate repositories leads to version drift, duplicated contracts, and cumbersome development workflows.
+AuthSphere consists of API services, frontend clients, shared types, validation schemas, and domain constants. Separate repositories cause version drift and duplicated contracts.
 
 ### Decision
 
-Use an **npm workspace monorepo** structure (`apps/*`, `packages/*`).
+Use an **npm workspace monorepo** (`apps/*`, `packages/*`).
 
 ### Rationale
 
-- Enables seamless code sharing (e.g., `@authsphere/shared` for domain roles, validation types, and shared constants).
+- Enables seamless code sharing (`@authsphere/shared` for roles, permissions, types).
 - Guarantees strict type safety across application boundaries.
-- Simplifies dependency management and unified linting/formatting pipelines.
+- Simplifies dependency management and unified linting/formatting.
 
 ---
 
@@ -68,21 +73,24 @@ Use an **npm workspace monorepo** structure (`apps/*`, `packages/*`).
 
 ### Context
 
-Traditional layer-first folder structures (`controllers/`, `services/`, `models/`) cause fragmentation as the application grows, requiring developers to touch multiple distant directories for a single domain change.
+Layer-first folder structures (`controllers/`, `services/`, `models/`) fragment related logic across distant directories as the application grows.
 
 ### Decision
 
-Organize backend code inside `apps/api/src/modules/` by feature domains (`auth/`, `health/`, `email/`). Each module encapsulates its routes, controllers, services, repositories, validation schemas, and types.
+Organize backend code inside `apps/api/src/modules/` by feature domain. Each module encapsulates its routes, controllers, services, repositories, validation schemas, and types.
 
-### Rationale
+### Current Modules
 
-- **High Cohesion:** Keeps related logic, validation, and data access tightly coupled within the module.
-- **Maintainability:** Adding or refactoring a feature is contained within a single directory.
-- **Scalability:** Easily scales as new domain modules are added without cluttering global directories.
+| Module | Domain | Key Endpoints |
+|---|---|---|
+| `auth/` | Authentication & session management | `POST /auth/signup`, `POST /auth/login`, `POST /auth/refresh-token`, etc. |
+| `authorization/` | Permission resolution & caching | Internal service (consumed by `auth` middleware) |
+| `users/` | User profile & role assignment | `GET /users/:id`, `PATCH /users/:id/role` |
+| `roles/` | Role-permission management | `PUT /roles/:roleName/permissions` |
+| `health/` | Operational health monitoring | `GET /health` |
+| `email/` | Email dispatch (verification, reset) | Internal service |
 
 ### Module File Convention
-
-Each module follows a consistent internal file naming convention:
 
 | File | Responsibility |
 |---|---|
@@ -102,17 +110,17 @@ Each module follows a consistent internal file naming convention:
 
 ### Context
 
-Direct usage of `process.env` scattered across codebase files leads to hidden runtime dependencies, missing environment variables at runtime, and untyped configuration values.
+Scattered `process.env` usage leads to hidden runtime dependencies, missing variables, and untyped values.
 
 ### Decision
 
-Access all environment variables exclusively through `src/config/env.ts`. Direct calls to `process.env` outside this file are prohibited.
+Access all environment variables exclusively through `src/config/env.ts`. Direct `process.env` calls outside this file are prohibited.
 
 ### Rationale
 
-- Establishes a single source of truth for application configuration.
-- Facilitates central auditing of required and optional environment variables.
-- Ensures configuration defaults and type coercions are applied predictably.
+- Single source of truth for configuration.
+- Central auditing of required/optional variables.
+- Predictable defaults and type coercions.
 
 ---
 
@@ -122,17 +130,17 @@ Access all environment variables exclusively through `src/config/env.ts`. Direct
 
 ### Context
 
-Starting an application with invalid or missing configuration (e.g., malformed database URIs, missing JWT secrets) causes latent runtime crashes during user requests instead of at startup.
+Starting with invalid configuration (malformed URIs, missing JWT secrets) causes latent runtime crashes during user requests.
 
 ### Decision
 
-Validate environment variables at process startup using **Zod** (`envSchema.safeParse(process.env)`). The process fails fast (`process.exit(1)`) with clear, formatted diagnostic logs if validation fails.
+Validate environment variables at startup using **Zod** (`envSchema.safeParse(process.env)`). Fails fast (`process.exit(1)`) with formatted diagnostics if validation fails.
 
 ### Rationale
 
-- **Fail-Fast:** Guarantees invalid configurations prevent application boot.
-- **Type Safety:** Exports a strongly typed `env` object consumed across the application.
-- Supports inline value transformations (e.g., converting string duration `"15m"` to numeric milliseconds via `.transform()`).
+- **Fail-Fast:** Invalid config prevents boot.
+- **Type Safety:** Exports a strongly typed `env` object.
+- Supports inline transformations (e.g., `"15m"` → milliseconds via `.transform()`).
 
 ---
 
@@ -142,16 +150,16 @@ Validate environment variables at process startup using **Zod** (`envSchema.safe
 
 ### Context
 
-Database access requires type safety, robust migration support, and high performance connection handling.
+Database access requires type safety, migration support, and performant connection handling.
 
 ### Decision
 
-Adopt **Prisma 7** configured with `@prisma/adapter-pg` and `pg` pool connections.
+Adopt **Prisma 7** with `@prisma/adapter-pg` and `pg` pool connections.
 
 ### Rationale
 
-- Delivers end-to-end TypeScript safety generated directly from `schema.prisma`.
-- `@prisma/adapter-pg` leverages native Node.js PostgreSQL driver connection pools for optimal performance.
+- End-to-end TypeScript safety from `schema.prisma`.
+- Native PostgreSQL driver pools for optimal performance.
 - Declarative migration workflow via Prisma CLI.
 
 ---
@@ -162,17 +170,17 @@ Adopt **Prisma 7** configured with `@prisma/adapter-pg` and `pg` pool connection
 
 ### Context
 
-Default Prisma client generation outputs into `node_modules/@prisma/client`, which can suffer from path resolution issues in monorepos or pnpm/npm workspace hoisting environments.
+Default Prisma client output into `node_modules/@prisma/client` suffers from path resolution issues in monorepo hoisting environments.
 
 ### Decision
 
-Generate the Prisma Client explicitly inside `apps/api/src/generated/prisma` via `generator client { output = "../src/generated/prisma" }`.
+Generate client into `apps/api/src/generated/prisma` via `generator client { output = "../src/generated/prisma" }`.
 
 ### Rationale
 
-- Ensures explicit and reliable imports (`import { Prisma } from "../../generated/prisma/client.js"`).
-- Prevents workspace package hoisting conflicts or missing module resolution errors in CI/CD.
-- Keeps generated artifacts versioned or explicitly ignored within the project workspace boundary.
+- Explicit, reliable imports (`import { Prisma } from "../../generated/prisma/client.js"`).
+- Prevents workspace hoisting conflicts in CI/CD.
+- Keeps generated artifacts within the project boundary.
 
 ---
 
@@ -182,17 +190,17 @@ Generate the Prisma Client explicitly inside `apps/api/src/generated/prisma` via
 
 ### Context
 
-Mixing infrastructure initialization (Prisma client instance, Redis connection, Pino logger) with business logic or route handlers hampers testability and clean separation of concerns.
+Mixing infrastructure initialization (Prisma, Redis, Pino) with business logic hampers testability.
 
 ### Decision
 
-Instantiate and export infrastructure singletons strictly inside `src/lib/` (`prisma.ts`, `redis.ts`, `logger.ts`). Domain-specific library code is organized into sub-directories (`lib/crypto/`, `lib/jwt/`).
+Instantiate and export infrastructure singletons strictly inside `src/lib/` (`prisma.ts`, `redis.ts`, `logger.ts`). Domain-specific library code lives in sub-directories (`lib/crypto/`, `lib/jwt/`).
 
 ### Rationale
 
-- Decouples infrastructure setup from feature modules and controllers.
-- Enables central configuration for connection pools, reconnect strategies, and logging handlers.
-- Simplifies mocking or swapping infrastructure clients during integration testing.
+- Decouples infrastructure from feature modules.
+- Centralizes connection pool configuration and reconnect strategies.
+- Simplifies mocking during testing.
 
 ---
 
@@ -202,26 +210,25 @@ Instantiate and export infrastructure singletons strictly inside `src/lib/` (`pr
 
 ### Context
 
-Handling errors inconsistently across controllers leads to repetitive `try/catch` boilerplate, leaking internal stack traces to clients, and non-standard HTTP status codes.
+Inconsistent error handling leads to repetitive try/catch, leaked stack traces, and non-standard HTTP codes.
 
 ### Decision
 
-Implement a custom error hierarchy extending `AppError` (`ValidationError`, `UnauthorizedError`), coupled with an `asyncHandler` higher-order function and a global Express error middleware (`errorHandler`).
-
-### Error Class Hierarchy
+Custom error hierarchy extending `AppError`, coupled with `asyncHandler` HOF and global `errorHandler` middleware.
 
 ```
 AppError (base — carries statusCode)
-├── ValidationError (400 — carries errors[] array of field-level details)
-└── UnauthorizedError (401 — triggers cookie cleanup in error middleware)
+├── ValidationError (400 — carries errors[] array)
+├── UnauthorizedError (401 — triggers cookie cleanup)
+└── ForbiddenError (403)
 ```
 
 ### Rationale
 
-- **Dry Controllers:** `asyncHandler` wraps every controller, automatically catching thrown errors and forwarding them to the global error middleware — eliminates all manual `try/catch` blocks.
-- **Consistent Response DTO:** Guarantees all API errors return a standardized `{ success: false, message, errors? }` response body.
-- **Information Leak Protection:** Masks unhandled system errors (500) as `"Internal Server Error"` in production while providing detailed error fields (name, message, stack) in non-production environments.
-- **Semantic Error Routing:** The error middleware discriminates between `ValidationError` (returns field-level errors array), `UnauthorizedError` (clears auth cookies and returns 401), and generic `AppError` (returns status and message).
+- **Dry Controllers:** `asyncHandler` wraps every controller, forwarding thrown errors to global middleware.
+- **Consistent DTO:** All errors return `{ success: false, message, errors? }`.
+- **Information Leak Protection:** Masks 500 errors as `"Internal Server Error"` in production.
+- **Semantic Routing:** `ValidationError` → field errors, `UnauthorizedError` → cookie cleanup + 401.
 
 ---
 
@@ -231,16 +238,16 @@ AppError (base — carries statusCode)
 
 ### Context
 
-Unstructured `console.log` statements degrade performance and are difficult to index, query, and trace in production log aggregators (e.g., Datadog, ELK stack).
+Unstructured `console.log` degrades performance and is difficult to query in log aggregators.
 
 ### Decision
 
-Use **Pino** for high-performance structured JSON logging, integrated with Express via `pino-http` and custom `requestId` middleware using `X-Request-Id` headers.
+Use **Pino** for structured JSON logging, integrated with Express via `pino-http` and `requestId` middleware using `X-Request-Id` headers.
 
 ### Rationale
 
-- **Performance:** Pino is significantly faster than traditional loggers like Winston.
-- **Traceability:** Every incoming HTTP request is assigned (or inherits) a unique `requestId` (`req.id`), which automatically correlates all log lines associated with that request lifecycle.
+- **Performance:** Pino is significantly faster than Winston.
+- **Traceability:** Every request gets a unique `requestId` that correlates all associated log lines.
 
 ---
 
@@ -250,18 +257,15 @@ Use **Pino** for high-performance structured JSON logging, integrated with Expre
 
 ### Context
 
-Abruptly terminating application processes (e.g., during Kubernetes rolling updates or SIGTERM signals) leads to dropped active HTTP requests and orphaned database/Redis connection sockets.
+Abrupt process termination drops active requests and orphans database/Redis connections.
 
 ### Decision
 
-Implement a graceful shutdown lifecycle in `server.ts` that intercepts `SIGINT`, `SIGTERM`, `uncaughtException`, and `unhandledRejection`.
+Intercept `SIGINT`, `SIGTERM`, `uncaughtException`, and `unhandledRejection` in `server.ts` to:
 
-### Rationale
-
-1. Stops accepting new HTTP connections via `server.close()`.
-2. Drains active connections using `server.closeIdleConnections()` with a 10-second hard timeout buffer.
-3. Concurrently disconnects Prisma (`prisma.$disconnect()`) and Redis (`redis.quit()`) using `Promise.allSettled`.
-4. Guarantees zero connection leaks and safe state persistence on shutdown.
+1. Stop accepting new connections (`server.close()`).
+2. Drain active connections with a 10-second hard timeout.
+3. Concurrently disconnect Prisma and Redis via `Promise.allSettled`.
 
 ---
 
@@ -271,16 +275,11 @@ Implement a graceful shutdown lifecycle in `server.ts` that intercepts `SIGINT`,
 
 ### Context
 
-Container orchestrators (Kubernetes, AWS ECS) rely on liveness and readiness probes to determine service health. Throwing unhandled exceptions on health check failures can trigger crash loops.
+Container orchestrators rely on liveness/readiness probes. Health check failures should not trigger crash loops.
 
 ### Decision
 
-The `/health` endpoint executes active connection checks against PostgreSQL (`prisma.$queryRaw`) and Redis (`redis.ping()`), returning explicit JSON status reports (`200 OK` when healthy, `503 Service Unavailable` when degraded).
-
-### Rationale
-
-- Communicates granular infrastructure operational state (`"UP"` vs `"DOWN"`).
-- Provides deterministic HTTP status codes suitable for load balancer health probes without throwing unhandled application exceptions.
+`/health` executes active checks against PostgreSQL (`prisma.$queryRaw`) and Redis (`redis.ping()`), returning `200 OK` or `503 Service Unavailable` with granular `"UP"`/`"DOWN"` status per dependency.
 
 ---
 
@@ -290,17 +289,17 @@ The `/health` endpoint executes active connection checks against PostgreSQL (`pr
 
 ### Context
 
-Maintaining separate `Session` and `RefreshToken` database models requires cross-table joins, multi-step database operations, and complex state synchronization.
+Separate `Session` and `RefreshToken` models require cross-table joins and complex state synchronization.
 
 ### Decision
 
-Merge `Session` and `RefreshToken` into a single, unified `Session` entity that stores the hashed refresh token (`tokenHash`), expiration timestamp (`expiresAt`), client metadata (`ipAddress`, `userAgent`), and user relationship.
+Merge into a single `Session` entity storing hashed refresh token (`tokenHash`), expiration (`expiresAt`), and client metadata (`ipAddress`, `userAgent`).
 
 ### Rationale
 
-- **Simplicity:** An active session maps 1-to-1 with a valid refresh token.
-- **Performance:** Eliminates cross-table JOINs and multi-query transactions during refresh token verification and rotation.
-- **Security:** Stores only strong cryptographic hashes (`sha256`) of refresh tokens in persistent storage rather than raw tokens.
+- **1-to-1 Mapping:** Active session = valid refresh token.
+- **Performance:** No cross-table JOINs during refresh verification.
+- **Security:** Stores only `sha256` hashes of refresh tokens.
 
 ---
 
@@ -310,17 +309,17 @@ Merge `Session` and `RefreshToken` into a single, unified `Session` entity that 
 
 ### Context
 
-Soft-deleting sessions (`isRevoked` flags) leaves sensitive token fingerprints and expired session rows indefinitely in primary database tables, inflating table size and increasing query latency.
+Soft-deleting sessions leaves sensitive token fingerprints indefinitely, inflating table size.
 
 ### Decision
 
-Revoke sessions by performing hard database deletions (`DELETE`) upon user logout, token reuse detection, password change, password reset, or session termination.
+Revoke sessions via hard `DELETE` upon logout, token reuse detection, password change/reset, or session termination.
 
 ### Rationale
 
-- Instantly removes token fingerprints from storage, preventing post-revocation hash leakage.
-- Keeps the `Session` table lean and fast for high-throughput authentication queries.
-- Audit history, if required, is delegated to dedicated asynchronous audit log tables.
+- Instantly removes token fingerprints from storage.
+- Keeps `Session` table lean for high-throughput auth queries.
+- Audit history delegated to dedicated audit log tables.
 
 ---
 
@@ -330,20 +329,16 @@ Revoke sessions by performing hard database deletions (`DELETE`) upon user logou
 
 ### Context
 
-Long-lived refresh tokens present a major security risk if stolen or intercepted by malicious actors.
+Long-lived refresh tokens present major security risk if stolen.
 
 ### Decision
 
-Implement strict **Refresh Token Rotation (RTR)**. Every refresh request generates a new access token and refresh token pair while invalidating the old token. If a previously invalidated refresh token is presented, it is flagged as a potential breach (Token Reuse), triggering immediate session revocation.
-
-### Implementation Detail
-
-During refresh, the service performs a defense-in-depth check: it verifies that the JWT's `sub` (user ID) matches `session.userId`. A mismatch indicates a compromised session and is rejected immediately.
+Strict **Refresh Token Rotation (RTR)**: every refresh generates a new token pair while invalidating the old. Reuse of an invalidated token triggers immediate session revocation. Defense-in-depth: JWT `sub` must match `session.userId`.
 
 ### Rationale
 
-- Limits the window of exposure for any single token.
-- **Reuse Detection:** Automatically detects stolen token replay attempts and invalidates compromised sessions (configured via `AUTH_REUSE_DELETION_MODE` — `"SESSION"` deletes only the affected session, `"GLOBAL"` deletes all sessions for the user).
+- Limits single-token exposure window.
+- **Reuse Detection:** Stolen token replay → session revocation (configurable: `"SESSION"` or `"GLOBAL"` deletion mode).
 - Follows OAuth 2.0 Security Best Current Practices (RFC 6819 / RFC 8725).
 
 ---
@@ -354,17 +349,17 @@ During refresh, the service performs a defense-in-depth check: it verifies that 
 
 ### Context
 
-Signed JWT Access Tokens include the Session ID (`sid`) in their payload. If the database auto-generates the primary key upon insert, signing JWTs requires a multi-step database roundtrip.
+JWT Access Tokens include Session ID (`sid`). Database-generated PKs require a multi-step roundtrip before signing.
 
 ### Decision
 
-Generate the Session ID (`crypto.randomUUIDv7()`) in the service layer _before_ performing database creation or signing JWT tokens.
+Generate Session ID (`crypto.randomUUIDv7()`) in the service layer _before_ database insertion or JWT signing.
 
 ### Rationale
 
-- **Time-Ordered Sorting:** UUIDv7 contains a time-based prefix, ensuring efficient B-Tree index placement in PostgreSQL.
-- **Atomic Operations:** Enables constructing signed Access and Refresh JWTs and persisting the session in a single database write step.
-- Prevents orphaned database records if JWT signing or parameter assembly fails.
+- **Time-Ordered:** UUIDv7's time prefix ensures efficient B-Tree index placement in PostgreSQL.
+- **Atomic:** Enables constructing JWTs and persisting the session in a single write.
+- Prevents orphaned records if JWT signing fails.
 
 ---
 
@@ -374,21 +369,17 @@ Generate the Session ID (`crypto.randomUUIDv7()`) in the service layer _before_ 
 
 ### Context
 
-When authentication fails (e.g., expired refresh token, compromised session), stale authentication cookies (`accessToken`, `refreshToken`) remain in the user's browser, leading to redundant failed requests.
+Stale auth cookies after authentication failure cause redundant failed requests.
 
 ### Decision
 
-Clear authentication cookies inside the global `errorHandler` middleware whenever an `UnauthorizedError` is caught.
-
-### Implementation Detail
-
-Cookie clearing reuses the same `CookieOptions` configuration (path, httpOnly, secure, sameSite) defined in `common/utils/cookie.ts` — stripping only the `maxAge` property via destructuring — to guarantee attributes match between `setCookie` and `clearCookie` calls.
+Clear `accessToken` and `refreshToken` cookies in the global `errorHandler` whenever `UnauthorizedError` is caught. Cookie clearing reuses the same `CookieOptions` (path, httpOnly, secure, sameSite) defined in `common/utils/cookie.ts`.
 
 ### Rationale
 
-- **Clean State:** Automatically purges invalid authentication cookies from the client browser on authentication failure.
-- **DRY Architecture:** Eliminates duplicated `res.clearCookie()` calls across individual controllers and routes.
-- Ensures consistent cookie clearing attributes (`path`, `httpOnly`, `secure`, `sameSite`).
+- Automatically purges invalid cookies on auth failure.
+- Eliminates duplicated `res.clearCookie()` across controllers.
+- Guarantees matching cookie attributes between set and clear.
 
 ---
 
@@ -398,16 +389,16 @@ Cookie clearing reuses the same `CookieOptions` configuration (path, httpOnly, s
 
 ### Context
 
-Defining token and session lifetimes as separate numeric literals across JWT signers, cookie configurations, and database query calculations causes subtle synchronization mismatches.
+Defining token lifetimes as separate numeric literals across JWT signers, cookies, and DB queries causes synchronization mismatches.
 
 ### Decision
 
-Specify token expirations in environment variables using human-readable duration strings (e.g., `JWT_ACCESS_EXPIRES_IN="15m"`, `JWT_REFRESH_EXPIRES_IN="7d"`). Automatically parse these at startup into numeric milliseconds (`JWT_ACCESS_EXPIRES_IN_MS`, `JWT_REFRESH_EXPIRES_IN_MS`) via Zod's `.transform()` in `config/env.ts`.
+Specify expirations as human-readable strings in `.env` (`JWT_ACCESS_EXPIRES_IN="15m"`). Parse into milliseconds at startup via Zod `.transform()`.
 
 ### Rationale
 
-- **Single Source of Truth:** JWT `exp` claims, Express cookie `maxAge`, and database `expiresAt` fields share identical duration parameters derived from the same environment variables.
-- **Operations Friendly:** Token lifetimes can be adjusted centrally via `.env` without code changes.
+- **Single Source of Truth:** JWT `exp`, cookie `maxAge`, and DB `expiresAt` share identical durations.
+- **Ops Friendly:** Adjustable via `.env` without code changes.
 
 ---
 
@@ -417,16 +408,16 @@ Specify token expirations in environment variables using human-readable duration
 
 ### Context
 
-Relying on service-layer code to filter out expired database sessions risks accidental security bugs if a developer forgets an `expiresAt` check in a new endpoint.
+Service-layer expiration filtering risks accidental omission in new endpoints.
 
 ### Decision
 
-Enforce expiration filtering directly in repository lookup methods (e.g., `authRepository.findSessionById` filters `where: { id: sessionId, expiresAt: { gt: new Date() } }`). Similarly, token lookup methods (`findFirst`) filter `where: { tokenHash, expiresAt: { gte: new Date() } }`.
+Enforce expiration filtering in repository lookups (e.g., `where: { expiresAt: { gt: new Date() } }`). Expired sessions never leak into the service layer.
 
 ### Rationale
 
-- **Defense in Depth:** Expired sessions and tokens are filtered at the query level and never leak into the service layer.
-- Keeps domain services clean, focused on business logic rather than database timestamp checks.
+- **Defense in Depth:** Query-level filtering prevents expired records from reaching business logic.
+- Keeps services focused on domain logic, not timestamp checks.
 
 ---
 
@@ -436,34 +427,24 @@ Enforce expiration filtering directly in repository lookup methods (e.g., `authR
 
 ### Context
 
-Module files can export functionality using multiple patterns: inline object methods, individual named exports, or standalone function declarations with a bottom-level namespace export object. The team needed a consistent convention across the codebase.
-
-### Alternatives Considered
-
-1. **Inline object methods** — `export const authService = { signup: async () => { ... } }`. Cons: deeply nested, harder to read, cannot self-reference without `this`.
-2. **Individual named exports** — `export const signup = ...`. Cons: no logical grouping at import site; consumers must import each function individually.
-3. **Standalone functions + bottom export object** — Functions defined as `const` at module scope, grouped into a single named export object at the bottom of the file.
+Module files need a consistent export convention across controller, service, repository, and validation layers.
 
 ### Decision
 
-Adopt pattern (3) across all module files: `auth.controller.ts`, `auth.service.ts`, `auth.repository.ts`, `auth.validation.ts`.
+Define functions as `const` at module scope, grouped into a single named export object at the bottom:
 
 ```typescript
 const signup = async (input: SignupInput) => { ... };
 const login = async (input: LoginInput) => { ... };
 
-export const authService = {
-  signup,
-  login,
-};
+export const authService = { signup, login };
 ```
 
 ### Rationale
 
-- **Readability:** Functions are defined at the top-level scope with flat indentation — no nesting inside an object literal.
-- **Self-reference:** Functions can call each other directly by name (no `this` binding issues).
-- **Grouped imports:** Consumers import a single named namespace (`authService.signup`) providing clear provenance at the call site.
-- **Consistency:** Applied uniformly across controller, service, repository, and validation layers.
+- **Readability:** Flat indentation, no object literal nesting.
+- **Self-reference:** Functions call each other by name (no `this` binding).
+- **Grouped imports:** `authService.signup` provides clear provenance at the call site.
 
 ---
 
@@ -473,34 +454,22 @@ export const authService = {
 
 ### Context
 
-With native Node.js ES Modules (`"type": "module"`), every import must include the explicit `.js` file extension. As the codebase grows, consumers repeatedly import from deeply nested paths like `../../common/errors/app-error.js`, `../../common/errors/async-handler.js`, etc.
-
-### Alternatives Considered
-
-1. **Node.js `#imports` subpath aliases** — Eliminates relative paths but still requires explicit file targets. Needs corresponding `tsconfig.json` `paths` mapping.
-2. **TypeScript path aliases (`@common/*`)** — Works at compile time but fails at runtime under native ESM without a module resolver loader.
-3. **Barrel `index.ts` files** — Consolidates re-exports; consumers import from `../../common/errors/index.js`.
+Native Node.js ESM requires explicit `.js` extensions. Deep imports become verbose as the codebase grows.
 
 ### Decision
 
-Adopt barrel `index.ts` files at directory boundaries (`common/errors/index.ts`, `common/utils/index.ts`, `common/responses/index.ts`, `lib/crypto/index.ts`, `lib/jwt/index.ts`). Consumers import from the barrel using the explicit `index.js` extension required by native ESM.
+Barrel `index.ts` files at directory boundaries consolidate re-exports. Consumers import from `../../common/errors/index.js`.
 
 ```typescript
-// Before (multiple deep imports)
-import { AppError } from "../../common/errors/app-error.js";
-import { asyncHandler } from "../../common/errors/async-handler.js";
-import { UnauthorizedError } from "../../common/errors/unauthorized-error.js";
-
-// After (single barrel import)
+// Single barrel import replaces multiple deep imports
 import { AppError, asyncHandler, UnauthorizedError } from "../../common/errors/index.js";
 ```
 
 ### Rationale
 
-- **Zero runtime dependencies:** No external module resolvers, loaders, or build tools required — fully compliant with Node.js native ESM.
-- **Cleaner imports:** Reduces import statement count and shortens paths.
-- **Encapsulation:** Barrel files serve as the public API surface of a directory; internal file reorganization does not break external consumers.
-- The explicit `index.js` extension remains necessary because Node.js ESM does not support automatic directory index resolution (unlike CommonJS).
+- **Zero runtime dependencies:** Fully compliant with Node.js native ESM.
+- **Cleaner imports:** Fewer statements, shorter paths.
+- **Encapsulation:** Internal reorganization doesn't break consumers.
 
 ---
 
@@ -510,37 +479,32 @@ import { AppError, asyncHandler, UnauthorizedError } from "../../common/errors/i
 
 ### Context
 
-Originally, the `auth` middleware attached a single `req.userId` property. As more authenticated context was needed (session ID, user role), adding individual properties to the Express `Request` interface created a flat, unstructured surface prone to name collisions and required nullable types (`userId?: string`) leading to non-null assertions (`userId!`) in controllers.
+Individual properties (`req.userId`, `req.sessionId`, `req.role`) on the Express `Request` interface create a flat, collision-prone, nullable surface.
 
 ### Decision
 
-Replace `req.userId` with a structured `req.auth` object populated by the `auth` middleware from the verified JWT payload:
+Populate a structured `req.auth` object from the JWT payload and authorization service:
 
 ```typescript
 // express.d.ts
-interface Request {
-  id: string;
-  auth: {
-    userId: string;
-    sessionId: string;
-    role: RoleName;
-  };
-}
+auth: {
+  userId: string;
+  role: RoleName;
+  sessionId: string;
+  permissions: PermissionName[];
+};
 
 // middlewares/auth.ts
-req.auth = {
-  userId: payload.sub,
-  sessionId: payload.sid,
-  role: payload.role,
-};
+const payload = await verifyAccessToken(accessToken);
+const permissions = await authorizationService.getPermissionsByRole(payload.role);
+req.auth = { userId: payload.sub, role: payload.role, sessionId: payload.sid, permissions };
 ```
 
 ### Rationale
 
-- **Type Safety:** Controllers access `req.auth.userId` without non-null assertions — the `auth` middleware guarantees the object exists on protected routes.
-- **Namespace Isolation:** All authenticated context lives under `req.auth`, preventing property name collisions with Express internals or other middleware.
-- **Extensibility:** New authenticated context fields (e.g., permissions, organization ID) can be added to the `auth` object without polluting the top-level `Request` interface.
-- **Industry Standard:** Follows the pattern used by production auth providers (Clerk, Auth0, Kinde).
+- **Type Safety:** No non-null assertions — `auth` middleware guarantees the object on protected routes.
+- **Namespace Isolation:** All auth context under `req.auth`, no collisions with Express internals.
+- **Eager Permission Loading:** Permissions resolved once during authentication, available to all downstream guards.
 
 ---
 
@@ -550,27 +514,16 @@ req.auth = {
 
 ### Context
 
-When a login attempt uses a non-existent email, the server could return immediately without performing password hashing. An attacker measuring response times can distinguish "email not found" (fast) from "wrong password" (slow, due to Argon2 hashing), enabling email enumeration.
+Fast "user not found" vs. slow "wrong password" (Argon2 hashing) enables email enumeration via response timing.
 
 ### Decision
 
-When a user is not found during login, execute a dummy password verification against a pre-computed hash (`DUMMY_PASSWORD_HASH`) before returning the error:
-
-```typescript
-if (!user) {
-  await verifyPassword(DUMMY_PASSWORD_HASH, input.password);
-  throw new UnauthorizedError("Invalid credentials");
-}
-```
-
-### Implementation Detail
-
-`DUMMY_PASSWORD_HASH` is computed once at module load time (top-level `await`) using the same Argon2id parameters, avoiding expensive hash generation overhead during request processing.
+When user is not found, execute a dummy `verifyPassword(DUMMY_PASSWORD_HASH, input.password)` before throwing. `DUMMY_PASSWORD_HASH` is pre-computed at module load time (top-level `await`).
 
 ### Rationale
 
-- **Timing Attack Prevention:** Ensures both "user not found" and "wrong password" paths take approximately equal time (~100ms with Argon2id), preventing email enumeration via timing analysis.
-- **Identical Error Messages:** Both paths return the same `"Invalid credentials"` message, providing no oracle for distinguishing the two failure modes.
+- Both "user not found" and "wrong password" paths take ~equal time (~100ms).
+- Identical `"Invalid credentials"` message on both paths — no oracle for distinguishing failure modes.
 
 ---
 
@@ -580,21 +533,19 @@ if (!user) {
 
 ### Context
 
-Endpoints like "Forgot Password", "Resend Verification Token", and "Logout" could reveal whether an email is registered in the system based on differential error responses or HTTP status codes.
+Endpoints like "Forgot Password" and "Resend Verification" could reveal whether an email is registered.
 
 ### Decision
 
-Enumeration-sensitive endpoints return identical success responses regardless of whether the target user exists, is already verified, or uses social login:
+Return identical success responses regardless of user existence, verification status, or social login:
 
-- `forgotPassword`: Returns silently if the user doesn't exist or has no password (social login account).
-- `resendVerificationToken`: Returns silently if the user doesn't exist or is already verified.
-- `logout`: Returns silently if the session has already been deleted.
-- `logoutAll`: Returns silently if the user doesn't exist.
+- `forgotPassword` / `resendVerificationToken`: Silent return if user doesn't exist or is already verified.
+- `logout` / `logoutAll`: Silent return if session already deleted.
 
 ### Rationale
 
-- **Account Enumeration Prevention:** An attacker cannot distinguish "email registered" from "email not registered" based on API response or status code.
-- **Idempotency:** Repeated calls to these endpoints are safe and produce no side effects if the target state is already reached.
+- **Enumeration Prevention:** No differential response between registered and unregistered emails.
+- **Idempotency:** Repeated calls are safe with no unintended side effects.
 
 ---
 
@@ -604,21 +555,20 @@ Enumeration-sensitive endpoints return identical success responses regardless of
 
 ### Context
 
-Email verification and password reset both involve a "find token → mutate user → delete token" sequence. If these steps are executed as separate queries, two concurrent requests using the same token can both read it as valid, leading to race conditions.
+"Find token → mutate user → delete token" as separate queries allows race conditions where two concurrent requests both read the same token as valid.
 
 ### Decision
 
-Wrap token lookup, user mutation, and token deletion inside Prisma `$transaction` blocks:
+Wrap in Prisma `$transaction` blocks:
 
-- `verifyEmailAndDeleteToken`: Finds the verification token, marks the user as verified, and deletes the token — all within a single transaction.
-- `resetPasswordAndDeleteToken`: Finds the reset token, updates the password hash, deletes the token, and revokes all sessions — all within a single transaction.
+- `verifyEmailAndDeleteToken`: Find token + mark user verified + delete token.
+- `resetPasswordAndDeleteToken`: Find token + update password + delete token + revoke sessions.
 
-Both catch Prisma `P2025` errors ("Record to delete not found") to handle the case where a concurrent transaction already consumed the token, returning a clean `400 Bad Request` instead of an unhandled `500`.
+Both catch `P2025` to handle concurrent token consumption gracefully.
 
 ### Rationale
 
-- **ACID Guarantees:** The read-update-delete sequence is atomic. A concurrent duplicate request either sees the token or fails cleanly.
-- **Race Safety:** The `P2025` catch clause handles concurrent token consumption gracefully, ensuring exactly one request succeeds.
+- **ACID:** Read-update-delete is atomic; concurrent duplicates fail cleanly with `400 Bad Request`.
 - **Data Integrity:** User state mutations and token cleanup are never partially applied.
 
 ---
@@ -629,71 +579,62 @@ Both catch Prisma `P2025` errors ("Record to delete not found") to handle the ca
 
 ### Context
 
-Users may click "Resend Verification Email" or "Forgot Password" multiple times. If the database uses `create` for token insertion, repeated clicks throw unique constraint violations on the `userId` column (since both `EmailVerificationToken` and `PasswordResetToken` enforce `@unique` on `userId`).
+Repeated "Resend Verification" or "Forgot Password" clicks would throw unique constraint violations on `userId`.
 
 ### Decision
 
-Use Prisma `upsert` for token re-issuance:
-
-```typescript
-prisma.emailVerificationToken.upsert({
-  where: { userId },
-  update: { tokenHash, expiresAt, createdAt: new Date() },
-  create: { tokenHash, userId, expiresAt },
-});
-```
-
-The same pattern is applied for `PasswordResetToken`.
+Use Prisma `upsert` for token re-issuance — existing records get updated, new ones get created.
 
 ### Rationale
 
-- **Idempotency:** Repeated clicks safely update the existing token record rather than throwing constraint violations.
-- **Token Refresh:** Each re-issuance resets `createdAt` and `expiresAt`, giving the user a fresh window.
-- **Single Token Per User:** The `@unique` constraint on `userId` guarantees at most one active token per user per token type, preventing token accumulation.
+- **Idempotency:** Repeated clicks safely update existing tokens.
+- **Token Refresh:** Each re-issuance resets `expiresAt`, giving a fresh window.
+- **Single Token Per User:** `@unique` on `userId` guarantees at most one active token per type.
 
 ---
 
-## ADR-026 — Middleware-Based Request Validation with Zod 4
+## ADR-026 — Multi-Target Middleware Validation with Zod 4
 
 **Status:** Accepted
 
 ### Context
 
-Validating request bodies inside controllers creates repetitive boilerplate and mixes validation concerns with HTTP handling logic.
+Validation inside controllers creates boilerplate and must target different request properties (`body`, `params`, `query`).
 
 ### Decision
 
-Implement a `validate` middleware factory that accepts a `ZodType` schema and returns an Express middleware. The middleware validates `req.body` via `schema.safeParse()`, replaces `req.body` with the parsed output (stripping unknown fields), and calls `next()` on success or throws a `ValidationError` on failure.
+`validate` middleware factory accepts a `ZodType` schema and explicit `ValidationTarget` enum:
 
 ```typescript
-export const validate = (schema: ZodType) => {
+export enum ValidationTarget {
+  BODY = "body",
+  PARAMS = "params",
+  QUERY = "query",
+}
+
+export const validate = (schema: ZodType, target: ValidationTarget = ValidationTarget.BODY) => {
   return asyncHandler(async (req, _res, next) => {
-    const input = schema.safeParse(req.body);
-    if (!input.success) {
-      throw new ValidationError(formatZodError(input.error));
-    }
-    req.body = input.data;
+    const input = schema.safeParse(req[target]);
+    if (!input.success) throw new ValidationError(formatZodError(input.error));
+    req[target] = input.data;
     next();
   });
 };
 
-// Usage in routes:
-router.post("/signup", validate(authSchema.signup), authController.signup);
+// Usage — multiple targets chainable on a single route:
+router.put("/:roleName/permissions",
+  validate(rolesSchema.updatePermissionsParams, ValidationTarget.PARAMS),
+  validate(rolesSchema.updatePermissionsBody, ValidationTarget.BODY),
+  rolesController.updatePermissions,
+);
 ```
-
-### Implementation Details
-
-- Uses `ZodType` (not the deprecated `ZodSchema` alias) for forward compatibility with Zod v4+.
-- Validation schemas are defined in `auth.validation.ts` as a single `authSchema` namespace object.
-- Shared sub-schemas (e.g., `password = z.string().min(8).max(128)`) are extracted as reusable constants to enforce consistent constraints across `signup`, `login`, `resetPassword`, and `changePassword`.
-- TypeScript types are inferred from schemas via `z.infer<typeof authSchema.signup>`, ensuring validation and type definitions never drift apart.
 
 ### Rationale
 
-- **DRY Validation:** Each route's validation logic is declared once as a schema and wired via middleware.
-- **Clean Controllers:** Controllers receive pre-validated, strongly typed `req.body` data.
-- **Stripping Unknown Fields:** `safeParse` output contains only declared fields, preventing mass-assignment vulnerabilities.
-- **Higher-Order Function Composition:** The `validate()` factory returns a curried middleware, composable with Express's middleware chain.
+- **DRY:** Schema declared once per route, wired via middleware.
+- **Clean Controllers:** Pre-validated, typed data. Unknown fields stripped (mass-assignment prevention).
+- **Multi-Target:** Single factory handles `body`, `params`, `query` without separate utilities.
+- Types inferred via `z.infer<>` — validation and type definitions never drift.
 
 ---
 
@@ -703,17 +644,16 @@ router.post("/signup", validate(authSchema.signup), authController.signup);
 
 ### Context
 
-When a user changes or resets their password, existing sessions authenticated with the old credentials should no longer be valid. Leaving them active creates a window where a compromised session can still be used.
+Existing sessions authenticated with old credentials should be invalidated immediately on password change/reset.
 
 ### Decision
 
-Both `changePassword` and `resetPasswordAndDeleteToken` repository methods atomically delete all user sessions (`sessions: { deleteMany: {} }`) as part of the same database update operation. The controller additionally calls `clearAuthCookies(res)` to purge the current browser's cookies.
+Both `changePassword` and `resetPasswordAndDeleteToken` atomically delete all user sessions (`sessions: { deleteMany: {} }`) in the same database write. Controller additionally clears auth cookies.
 
 ### Rationale
 
-- **Immediate Invalidation:** All sessions across all devices are terminated instantly when credentials change.
-- **Atomic Operation:** Session deletion happens in the same database write as the password update — no window where old sessions remain valid with the new password.
-- **Clean Client State:** Cookie clearing ensures the current browser doesn't attempt requests with stale tokens.
+- **Immediate Invalidation:** All sessions across all devices terminated instantly.
+- **Atomic:** No window where old sessions remain valid with the new password.
 
 ---
 
@@ -723,16 +663,16 @@ Both `changePassword` and `resetPasswordAndDeleteToken` repository methods atomi
 
 ### Context
 
-Users may attempt to "change" their password to their current password, which provides no security benefit and may indicate confusion or misuse.
+Changing password to the current password provides no security benefit.
 
 ### Decision
 
-During `changePassword`, after verifying the old password, the service verifies that the new password is different from the current one by running `verifyPassword(user.passwordHash, input.newPassword)`. If they match, a `400 Bad Request` is returned.
+After verifying the old password, verify the new password differs via `verifyPassword(user.passwordHash, input.newPassword)`. If identical, return `400 Bad Request`.
 
 ### Rationale
 
-- **Security Hygiene:** Prevents users from performing no-op password changes that create a false sense of security.
-- **Correct Error Semantics:** Uses `AppError` (400) rather than `UnauthorizedError` (401) because the user is already authenticated — only the input is invalid.
+- Prevents no-op password changes.
+- Uses `AppError(400)` not `UnauthorizedError(401)` — user is authenticated, only the input is invalid.
 
 ---
 
@@ -742,17 +682,16 @@ During `changePassword`, after verifying the old password, the service verifies 
 
 ### Context
 
-Prisma's `session.delete({ where: { id } })` throws a `P2025` error ("Record to delete does not exist") if the session has already been deleted by a concurrent request or has already expired and been cleaned up.
+`session.delete()` throws `P2025` if the record doesn't exist (already deleted or expired).
 
 ### Decision
 
-Use `session.deleteMany({ where: { id: sessionId } })` for single-session deletion instead of `session.delete()`.
+Use `session.deleteMany({ where: { id: sessionId } })` — returns `{ count: 0 }` instead of throwing.
 
 ### Rationale
 
-- **Idempotency:** `deleteMany` returns `{ count: 0 }` instead of throwing if the record doesn't exist.
-- **Race Safety:** Concurrent logout requests or token reuse detection can safely attempt to delete the same session without error handling overhead.
-- **Simpler Code:** Eliminates the need for try-catch blocks around session deletion operations.
+- **Idempotent:** Concurrent logout/reuse-detection requests don't need error handling.
+- Eliminates try-catch around session deletion.
 
 ---
 
@@ -762,17 +701,11 @@ Use `session.deleteMany({ where: { id: sessionId } })` for single-session deleti
 
 ### Context
 
-Tracking when a user's password was last changed is important for security auditing, compliance reporting, and potential future features like forced password rotation policies.
+Tracking last password change is needed for security auditing and potential forced-rotation policies.
 
 ### Decision
 
-Add a `passwordChangedAt` (`DateTime?`) column to the `User` model. It is updated atomically during both `resetPasswordAndDeleteToken` and `changePassword` repository operations.
-
-### Rationale
-
-- **Audit Trail:** Provides a persistent record of the last credential change timestamp.
-- **Future-Proofing:** Enables features like "require password change after N days" or "invalidate sessions created before password change".
-- **Nullable Design:** `null` indicates the password has never been changed since account creation.
+`passwordChangedAt` (`DateTime?`) column on `User`, updated atomically during both `resetPassword` and `changePassword`. `null` = never changed since creation.
 
 ---
 
@@ -780,29 +713,21 @@ Add a `passwordChangedAt` (`DateTime?`) column to the `User` model. It is update
 
 **Status:** Accepted
 
-### Context
-
-Password hashing algorithm and parameter selection directly impact the security of stored credentials. Weak algorithms (MD5, SHA-256) or insufficient work factors make brute-force attacks feasible.
-
 ### Decision
 
-Use **Argon2id** with OWASP-recommended parameters:
+**Argon2id** with explicit OWASP-recommended parameters:
 
 | Parameter | Value |
 |---|---|
-| Algorithm | Argon2id |
 | Memory Cost | 65,536 KiB (64 MiB) |
 | Time Cost | 3 iterations |
 | Parallelism | 4 threads |
 | Hash Length | 32 bytes |
 
-Configuration is explicitly declared in `ARGON2_OPTIONS` rather than relying on library defaults.
-
 ### Rationale
 
-- **OWASP Compliance:** Parameters align with OWASP Password Storage Cheat Sheet recommendations.
-- **Argon2id Variant:** Provides resistance against both side-channel (timing) attacks and GPU-based brute-force attacks.
-- **Explicit Configuration:** Declaring parameters prevents silent security regressions if library defaults change across versions.
+- **OWASP Compliance:** Resists both side-channel and GPU brute-force attacks.
+- **Explicit Config:** Prevents silent regressions if library defaults change.
 
 ---
 
@@ -812,21 +737,15 @@ Configuration is explicitly declared in `ARGON2_OPTIONS` rather than relying on 
 
 ### Context
 
-Users who register via social login (OAuth) have a `null` `passwordHash`. Allowing password-based operations on these accounts leads to confusing errors or security issues.
+Social login users have `null` `passwordHash`. Password operations on these accounts cause confusing errors.
 
 ### Decision
 
-Guard all password-dependent flows against social login accounts:
+Guard all password-dependent flows:
 
-- **Login:** Returns `403 Forbidden` with a message directing the user to their social login provider.
-- **Forgot Password:** Returns silently (same as "user not found") to prevent enumeration.
-- **Change Password:** Returns `403 Forbidden` with an explicit message explaining that social login accounts cannot change passwords.
-
-### Rationale
-
-- **User Experience:** Clear, actionable error messages guide social login users to the correct authentication flow.
-- **Enumeration Prevention:** `forgotPassword` treats social login accounts identically to non-existent accounts (silent return).
-- **Data Integrity:** Prevents setting a password on an account that was never intended to use password-based authentication.
+- **Login:** `403` directing user to their social provider.
+- **Forgot Password:** Silent return (same as "user not found").
+- **Change Password:** `403` explaining social accounts cannot change passwords.
 
 ---
 
@@ -836,21 +755,179 @@ Guard all password-dependent flows against social login accounts:
 
 ### Context
 
-Authentication tokens can be transported via HTTP headers (`Authorization: Bearer`), local storage, or HTTP cookies. Each approach has different security tradeoffs.
+Tokens can be transported via headers, localStorage, or cookies — each with different security tradeoffs.
 
 ### Decision
 
-Transport both access tokens and refresh tokens exclusively via `httpOnly`, `secure`, `sameSite: "lax"` cookies. Tokens are never exposed to client-side JavaScript or returned in response bodies.
+Transport both tokens exclusively via `httpOnly`, `secure`, `sameSite: "lax"` cookies. Never exposed to client-side JS or response bodies.
 
-### Implementation Details
-
-- **Access Token Cookie:** Scoped to path `/`, available to all API routes. `maxAge` synchronized with `JWT_ACCESS_EXPIRES_IN_MS`.
-- **Refresh Token Cookie:** Scoped to path `/auth/refresh-token`, restricting its transmission to only the refresh endpoint. `maxAge` synchronized with `JWT_REFRESH_EXPIRES_IN_MS`.
-- Both cookies use `priority: "high"` to prevent browser eviction under storage pressure.
+- **Access Token:** Path `/`, `maxAge` = `JWT_ACCESS_EXPIRES_IN_MS`.
+- **Refresh Token:** Path `/auth/refresh-token` (scoped to refresh endpoint only), `maxAge` = `JWT_REFRESH_EXPIRES_IN_MS`.
+- Both use `priority: "high"` to prevent browser eviction.
 
 ### Rationale
 
-- **XSS Protection:** `httpOnly` prevents client-side JavaScript from reading tokens, eliminating the primary XSS token theft vector.
-- **CSRF Mitigation:** `sameSite: "lax"` prevents cookies from being sent on cross-origin POST requests.
-- **Minimal Exposure:** Scoping the refresh token cookie to `/auth/refresh-token` ensures it is only transmitted when refreshing, reducing the attack surface.
-- **Automatic Transport:** Browsers automatically include cookies on matching requests, simplifying client-side implementation.
+- **XSS Protection:** `httpOnly` prevents JS token theft.
+- **CSRF Mitigation:** `sameSite: "lax"` blocks cross-origin POST cookies.
+- **Minimal Exposure:** Refresh token scoped to `/auth/refresh-token` only.
+
+---
+
+## ADR-034 — Shared Domain Constants via `@authsphere/shared`
+
+**Status:** Accepted
+
+### Context
+
+Role names and permission strings referenced across the API, middleware, validation, and clients. Scattered string literals cause duplication and type-unsafe comparisons.
+
+### Decision
+
+Define domain constants in `@authsphere/shared` as `as const` object maps with inferred union types:
+
+```typescript
+export const ROLES = { USER: "USER", ADMIN: "ADMIN" } as const;
+export type RoleName = (typeof ROLES)[keyof typeof ROLES];
+
+export const PERMISSIONS = {
+  PROFILE_READ: "profile.read",
+  USER_READ: "user.read",
+  ROLE_MANAGE: "role.manage",
+  // ...
+} as const;
+export type PermissionName = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
+```
+
+### Rationale
+
+- **Standard JS:** `as const` objects — no transpiler transformations, ESM and tree-shaking compatible.
+- **Zod 4 Native:** `z.enum(ROLES)` accepts `as const` object maps directly.
+- TS `enum` reserved for internal framework options (e.g., `ValidationTarget`); `as const` for domain data.
+
+---
+
+## ADR-035 — Redis Permission Caching with Fail-Safe Bypass
+
+**Status:** Accepted
+
+### Context
+
+Every authenticated request resolves role → permissions. Querying PostgreSQL on every request adds unnecessary latency for rarely-changing data.
+
+### Decision
+
+Cache via `authorizationService.getPermissionsByRole()` in Redis. Fall back to DB on cache miss or Redis unavailability.
+
+| Property | Value |
+|---|---|
+| Key Pattern | `role:permissions:<ROLE_NAME>` |
+| Value | JSON-serialized `PermissionName[]` |
+| TTL | 24 hours |
+| Invalidation | `DEL` via `invalidateRolePermissionsCache(roleName)` |
+
+### Fail-Safe
+
+Checks `redis.isOpen` before every read/write. Redis outages → transparent DB fallback, zero downtime. Cache bypass logged at `debug` level.
+
+### Invalidation
+
+Cache invalidation occurs **only after** the DB transaction succeeds:
+
+```
+PUT /roles/:roleName/permissions → DB update → Redis DEL
+```
+
+---
+
+## ADR-036 — Middleware-Based Authorization Guards
+
+**Status:** Accepted
+
+### Context
+
+Authorization checks scattered in controllers mix access control with business logic.
+
+### Decision
+
+Composable Express middleware factories in `authorization.middleware.ts`:
+
+| Guard | Logic | Use Case |
+|---|---|---|
+| `requireRole(...roles)` | OR — at least one role | Admin-only endpoints |
+| `requirePermission(...permissions)` | AND — all permissions required | Fine-grained capability checks |
+| `requireSelfOrPermission(permission)` | Self OR permission | User profile endpoints |
+
+Each guard includes defensive `if (!req.auth)` → `UnauthorizedError`.
+
+### Middleware Pipeline Ordering
+
+```
+auth → validate(params) → validate(body) → requireRole/requirePermission → controller
+```
+
+Validation before authorization ensures malformed input returns `400` not `403`.
+
+### Rationale
+
+- **Declarative:** Authorization visible in route definitions.
+- **AND vs OR:** `requirePermission` uses `.every()` (Least Privilege); `requireRole` uses `.includes()` (single role).
+
+---
+
+## ADR-037 — Atomic Role-Permission Replacement via Nested Prisma Mutations
+
+**Status:** Accepted
+
+### Context
+
+Updating role permissions requires deleting existing mappings and inserting new ones. Separate queries risk partial application.
+
+### Decision
+
+Single atomic `role.update()` with nested writes:
+
+```typescript
+prisma.role.update({
+  where: { name: roleName },
+  data: {
+    rolePermissions: {
+      deleteMany: {},
+      create: permissionNames.map((name) => ({
+        permission: { connect: { name } },
+      })),
+    },
+  },
+});
+```
+
+`P2025` caught → `AppError("Role not found", 404)`.
+
+### Rationale
+
+- **Atomic:** Implicit transaction — all-or-nothing.
+- **Minimal Code:** Replaces ~40 lines of manual `$transaction` orchestration.
+- **Relation Integrity:** `connect: { name }` validates each permission exists.
+
+---
+
+## ADR-038 — Validation-Layer Input Normalization via Zod Transforms
+
+**Status:** Accepted
+
+### Context
+
+Duplicate array entries (e.g., `["profile.read", "profile.read"]`) cause unique constraint violations on composite PKs.
+
+### Decision
+
+Apply `.transform()` in Zod to silently deduplicate at the validation boundary:
+
+```typescript
+permissions: z.enum(PERMISSIONS).array().transform((items) => Array.from(new Set(items)))
+```
+
+### Rationale
+
+- **Boundary Enforcement:** Normalization at the earliest point keeps downstream layers clean.
+- **Idempotent API:** Duplicates produce the same result as unique entries — client-friendly.
+- Alternative: `.refine()` rejects duplicates with `400` (stricter but less forgiving).
