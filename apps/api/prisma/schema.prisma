@@ -36,6 +36,9 @@ model User {
 
   passwordChangedAt DateTime? @map("password_changed_at")
 
+  mfaEnabled Boolean @default(false) @map("mfa_enabled")
+  mfaSecret  String? @map("mfa_secret")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -44,6 +47,8 @@ model User {
   emailVerificationToken EmailVerificationToken?
   passwordResetToken     PasswordResetToken?
   sessions               Session[]
+  mfaRecoveryCodes       MfaRecoveryCode[]
+  mfaChallenges          MfaChallenge[]
 
   @@map("users")
 }
@@ -141,4 +146,33 @@ model PasswordResetToken {
 
   @@index([expiresAt])
   @@map("password_reset_tokens")
+}
+
+model MfaRecoveryCode {
+  id String @id @default(uuid(7))
+
+  userId String @map("user_id")
+
+  codeHash String @unique @map("code_hash")
+
+  usedAt    DateTime? @default(now()) @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("mfa_recovery_codes")
+}
+
+model MfaChallenge {
+  id String @id @default(uuid(7))
+
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("mfa_challenges")
 }
