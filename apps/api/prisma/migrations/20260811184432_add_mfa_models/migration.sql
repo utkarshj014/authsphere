@@ -7,7 +7,7 @@ CREATE TABLE "mfa_recovery_codes" (
     "id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "code_hash" TEXT NOT NULL,
-    "used_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
+    "used_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "mfa_recovery_codes_pkey" PRIMARY KEY ("id")

@@ -10,6 +10,7 @@ import type {
   ForgotPasswordInput,
   ResetPasswordInput,
   ChangePasswordInput,
+  MfaVerifySetupInput,
 } from "./auth.validation.js";
 import {
   hashPassword,
@@ -18,6 +19,7 @@ import {
   generateToken,
   hashToken,
 } from "../../lib/crypto/index.js";
+import { totp } from "../../lib/totp/index.js";
 import {
   sendForgotPasswordEmail,
   sendVerificationEmail,
@@ -300,6 +302,69 @@ const changePassword = async (userId: string, input: ChangePasswordInput) => {
   await authRepository.changePassword(userId, newPasswordHash);
 };
 
+const mfaSetup = async (userId: string) => {
+  const user = await authRepository.findUserById(userId);
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  if (user.mfaEnabled) {
+    throw new AppError("MFA is already enabled", 400);
+  }
+
+  const secret = totp.generateSecret();
+  await authRepository.savePendingMfaSecret(userId, secret);
+
+  const otpauthUri = totp.generateOtpUri(secret, user.email);
+
+  return {
+    secret,
+    otpauthUri,
+  };
+};
+
+const mfaVerifySetup = async (userId: string, input: MfaVerifySetupInput) => {
+  const user = await authRepository.findUserById(userId);
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  if (user.mfaEnabled) {
+    throw new AppError("MFA is already enabled", 400);
+  }
+  if (!user.mfaSecret) {
+    throw new AppError(
+      "MFA setup has not been initiated. Please start MFA setup first",
+      400,
+    );
+  }
+
+  const isValid = totp.verifyCode(user.mfaSecret, input.code);
+  if (!isValid) {
+    throw new AppError("Invalid MFA code", 400);
+  }
+
+  // Generate 10 random recovery codes
+  const recoveryCodes: string[] = [];
+  const recoveryCodeHashes: string[] = [];
+
+  for (let i = 0; i < 10; i++) {
+    const raw = crypto.randomBytes(5).toString("hex").toUpperCase();
+    const formatted = `${raw.slice(0, 5)}-${raw.slice(5)}`;
+    recoveryCodes.push(formatted);
+    recoveryCodeHashes.push(hashToken(formatted));
+  }
+
+  await authRepository.enableMfaAndSaveRecoveryCodes(
+    userId,
+    recoveryCodeHashes,
+  );
+
+  return {
+    recoveryCodes,
+  };
+};
+
 export const authService = {
   signup,
   verifyEmail,
@@ -312,4 +377,6 @@ export const authService = {
   forgotPassword,
   resetPassword,
   changePassword,
+  mfaSetup,
+  mfaVerifySetup,
 };

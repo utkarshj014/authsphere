@@ -2,6 +2,10 @@ import { z } from "zod";
 
 const nameSchema = z.string().trim().min(1).max(50);
 const password = z.string().min(8).max(128);
+const totpCode = z
+  .string()
+  .trim()
+  .regex(/^\d{6}$/, "MFA code must be exactly 6 digits");
 
 export const authSchema = {
   signup: z.object({
@@ -37,6 +41,10 @@ export const authSchema = {
     oldPassword: password,
     newPassword: password,
   }),
+
+  mfaVerifySetup: z.object({
+    code: totpCode,
+  }),
 };
 
 export type SignupInput = z.infer<typeof authSchema.signup>;
@@ -48,3 +56,4 @@ export type LoginInput = z.infer<typeof authSchema.login>;
 export type ForgotPasswordInput = z.infer<typeof authSchema.forgotPassword>;
 export type ResetPasswordInput = z.infer<typeof authSchema.resetPassword>;
 export type ChangePasswordInput = z.infer<typeof authSchema.changePassword>;
+export type MfaVerifySetupInput = z.infer<typeof authSchema.mfaVerifySetup>;

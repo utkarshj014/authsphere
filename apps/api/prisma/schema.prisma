@@ -155,7 +155,7 @@ model MfaRecoveryCode {
 
   codeHash String @unique @map("code_hash")
 
-  usedAt    DateTime? @default(now()) @map("used_at")
+  usedAt    DateTime? @map("used_at")
   createdAt DateTime  @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

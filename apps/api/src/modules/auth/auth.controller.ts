@@ -117,6 +117,32 @@ const changePassword = asyncHandler(async (req: Request, res: Response) => {
   return ApiResponse.success(res, null, "Password changed successfully", 200);
 });
 
+const mfaSetup = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.auth.userId;
+
+  const result = await authService.mfaSetup(userId);
+
+  return ApiResponse.success(
+    res,
+    result,
+    "MFA setup initiated successfully",
+    200,
+  );
+});
+
+const mfaVerifySetup = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.auth.userId;
+
+  const result = await authService.mfaVerifySetup(userId, req.body);
+
+  return ApiResponse.success(
+    res,
+    result,
+    "MFA enabled successfully. Store these recovery codes securely",
+    200,
+  );
+});
+
 export const authController = {
   signup,
   verifyEmail,
@@ -129,4 +155,6 @@ export const authController = {
   forgotPassword,
   resetPassword,
   changePassword,
+  mfaSetup,
+  mfaVerifySetup,
 };

@@ -195,6 +195,32 @@ const changePassword = (userId: string, newPasswordHash: string) =>
     },
   });
 
+const savePendingMfaSecret = (userId: string, mfaSecret: string) =>
+  prisma.user.update({
+    where: { id: userId },
+    data: {
+      mfaSecret,
+      mfaEnabled: false,
+    },
+  });
+
+const enableMfaAndSaveRecoveryCodes = (
+  userId: string,
+  recoveryCodeHashes: string[],
+) =>
+  prisma.user.update({
+    where: { id: userId },
+    data: {
+      mfaEnabled: true,
+      mfaRecoveryCodes: {
+        deleteMany: {},
+        create: recoveryCodeHashes.map((codeHash) => ({
+          codeHash,
+        })),
+      },
+    },
+  });
+
 export const authRepository = {
   findUserByEmail,
   findRoleByName,
@@ -211,4 +237,6 @@ export const authRepository = {
   createPasswordResetToken,
   resetPasswordAndDeleteToken,
   changePassword,
+  savePendingMfaSecret,
+  enableMfaAndSaveRecoveryCodes,
 };

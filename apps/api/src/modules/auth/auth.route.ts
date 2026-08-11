@@ -38,6 +38,13 @@ router
     auth,
     validate(authSchema.changePassword),
     authController.changePassword,
+  )
+  .post("/mfa/setup", auth, authController.mfaSetup)
+  .post(
+    "/mfa/verify-setup",
+    auth,
+    validate(authSchema.mfaVerifySetup),
+    authController.mfaVerifySetup,
   );
 
 export default router;
