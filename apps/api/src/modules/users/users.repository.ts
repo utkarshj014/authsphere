@@ -46,7 +46,17 @@ const updateUserRole = async (userId: string, roleName: RoleName) => {
   }
 };
 
+const countUsersByRole = (roleName: RoleName) =>
+  prisma.user.count({
+    where: {
+      role: {
+        name: roleName,
+      },
+    },
+  });
+
 export const usersRepository = {
   findUserById,
   updateUserRole,
+  countUsersByRole,
 };

@@ -8,7 +8,7 @@ dotenv.config({ path: new URL("../../.env", import.meta.url) });
 
 const envSchema = z
   .object({
-    NODE_ENV: z.enum(["development", "production"]),
+    NODE_ENV: z.enum(["development", "production", "test"]),
     PORT: z.coerce.number().int().positive(),
     FRONTEND_URL: z.url(),
     DATABASE_URL: z.url(),

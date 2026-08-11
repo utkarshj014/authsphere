@@ -17,8 +17,8 @@ import type * as Prisma from "./prismaNamespace.js"
 
 const config: runtime.GetPrismaClientConfig = {
   "previewFeatures": [],
-  "clientVersion": "7.8.0",
-  "engineVersion": "3c6e192761c0362d496ed980de936e2f3cebcd3a",
+  "clientVersion": "7.9.1",
+  "engineVersion": "e922089b7d7502aff4249d5da3420f6fa55fc6ad",
   "activeProvider": "postgresql",
   "inlineSchema": "// This is your Prisma schema file,\n// learn more about it in the docs: https://pris.ly/d/prisma-schema\n\n// Get a free hosted Postgres database in seconds: `npx create-db`\n\ngenerator client {\n  provider = \"prisma-client\"\n  output   = \"../src/generated/prisma\"\n}\n\ndatasource db {\n  provider = \"postgresql\"\n}\n\nenum RoleName {\n  USER\n  ADMIN\n}\n\nmodel User {\n  id String @id @default(uuid(7))\n\n  email        String  @unique\n  passwordHash String? @map(\"password_hash\")\n\n  isEmailVerified Boolean @default(false) @map(\"is_email_verified\")\n\n  firstName String? @map(\"first_name\")\n  lastName  String? @map(\"last_name\")\n\n  roleId String @map(\"role_id\")\n\n  lastLoginAt DateTime? @map(\"last_login_at\")\n\n  verifiedAt DateTime? @map(\"verified_at\")\n\n  passwordChangedAt DateTime? @map(\"password_changed_at\")\n\n  createdAt DateTime @default(now()) @map(\"created_at\")\n  updatedAt DateTime @updatedAt @map(\"updated_at\")\n\n  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)\n\n  emailVerificationToken EmailVerificationToken?\n  passwordResetToken     PasswordResetToken?\n  sessions               Session[]\n\n  @@map(\"users\")\n}\n\nmodel Role {\n  id String @id @default(uuid(7))\n\n  name        RoleName @unique\n  description String?\n\n  createdAt DateTime @default(now()) @map(\"created_at\")\n\n  users           User[]\n  rolePermissions RolePermission[]\n\n  @@map(\"roles\")\n}\n\nmodel Permission {\n  id String @id @default(uuid(7))\n\n  name        String  @unique\n  description String?\n\n  createdAt DateTime @default(now()) @map(\"created_at\")\n\n  rolePermissions RolePermission[]\n\n  @@map(\"permissions\")\n}\n\nmodel RolePermission {\n  roleId       String @map(\"role_id\")\n  permissionId String @map(\"permission_id\")\n\n  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)\n  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)\n\n  @@id([roleId, permissionId])\n  @@map(\"role_permissions\")\n}\n\nmodel Session {\n  id String @id @default(uuid(7))\n\n  userId String @map(\"user_id\")\n\n  tokenHash String @unique @map(\"token_hash\")\n\n  ipAddress String? @map(\"ip_address\")\n\n  userAgent String? @map(\"user_agent\")\n\n  expiresAt DateTime @map(\"expires_at\")\n\n  createdAt DateTime @default(now()) @map(\"created_at\")\n\n  user User @relation(fields: [userId], references: [id], onDelete: Cascade)\n\n  @@index([userId])\n  @@index([expiresAt])\n  @@map(\"sessions\")\n}\n\nmodel EmailVerificationToken {\n  id String @id @default(uuid(7))\n\n  tokenHash String @unique @map(\"token_hash\")\n\n  userId String @unique @map(\"user_id\")\n\n  expiresAt DateTime @map(\"expires_at\")\n\n  createdAt DateTime @default(now()) @map(\"created_at\")\n  updatedAt DateTime @updatedAt @map(\"updated_at\")\n\n  user User @relation(fields: [userId], references: [id], onDelete: Cascade)\n\n  @@index([expiresAt])\n  @@map(\"email_verification_tokens\")\n}\n\nmodel PasswordResetToken {\n  id String @id @default(uuid(7))\n\n  tokenHash String @unique @map(\"token_hash\")\n\n  userId String @unique @map(\"user_id\")\n\n  expiresAt DateTime @map(\"expires_at\")\n\n  createdAt DateTime @default(now()) @map(\"created_at\")\n\n  user User @relation(fields: [userId], references: [id], onDelete: Cascade)\n\n  @@index([expiresAt])\n  @@map(\"password_reset_tokens\")\n}\n",
   "runtimeDataModel": {
@@ -82,7 +82,7 @@ export interface PrismaClientConstructor {
     LogOpts extends LogOptions<Options> = LogOptions<Options>,
     OmitOpts extends Prisma.PrismaClientOptions['omit'] = Options extends { omit: infer U } ? U : Prisma.PrismaClientOptions['omit'],
     ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs
-  >(options: Prisma.Subset<Options, Prisma.PrismaClientOptions> ): PrismaClient<LogOpts, OmitOpts, ExtArgs>
+  >(options: Prisma.PrismaClientConstructorArgs<Options>): PrismaClient<LogOpts, OmitOpts, ExtArgs>
 }
 
 /**
@@ -103,7 +103,7 @@ export interface PrismaClientConstructor {
 
 export interface PrismaClient<
   in LogOpts extends Prisma.LogLevel = never,
-  in out OmitOpts extends Prisma.PrismaClientOptions['omit'] = undefined,
+  in out OmitOpts extends Prisma.PrismaClientOptions['omit'] = Prisma.PrismaClientOptions['omit'],
   in out ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs
 > {
   [K: symbol]: { types: Prisma.TypeMap<ExtArgs>['other'] }

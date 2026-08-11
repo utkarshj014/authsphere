@@ -6,7 +6,6 @@ import helmet from "helmet";
 import { env } from "./config/env.js";
 
 import { healthRouter } from "./modules/health/index.js";
-import testRouter from "./routes/test.route.js";
 import { errorHandler } from "./common/errors/index.js";
 import { notFoundHandler } from "./middlewares/not-found.js";
 import { requestId } from "./middlewares/request-id.js";
@@ -37,7 +36,6 @@ app.use(requestLogger);
 
 // Routes
 app.use("/health", healthRouter);
-app.use("/test", testRouter);
 app.use("/auth", authRouter);
 app.use("/users", usersRouter);
 app.use("/roles", rolesRouter);

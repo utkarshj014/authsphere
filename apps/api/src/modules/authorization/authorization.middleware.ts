@@ -1,6 +1,10 @@
 import type { Request, Response, NextFunction } from "express";
 import type { PermissionName, RoleName } from "@authsphere/shared";
-import { asyncHandler, ForbiddenError } from "../../common/errors/index.js";
+import {
+  asyncHandler,
+  ForbiddenError,
+  UnauthorizedError,
+} from "../../common/errors/index.js";
 
 // In this file, we don't need asyncHandler, as we don't have redis/database calls,
 // but we are using it for consistency with the authentication middleware.
@@ -8,9 +12,16 @@ import { asyncHandler, ForbiddenError } from "../../common/errors/index.js";
 export const requireRole = (...roles: RoleName[]) => {
   return asyncHandler(
     async (req: Request, _res: Response, next: NextFunction) => {
+      // Defensive check
+      if (!req.auth) {
+        throw new UnauthorizedError("Authentication required");
+      }
+
       const { role } = req.auth;
       if (!roles.includes(role)) {
-        throw new ForbiddenError();
+        throw new ForbiddenError(
+          "Access Denied: You do not have the required role.",
+        );
       }
 
       next();
@@ -21,6 +32,11 @@ export const requireRole = (...roles: RoleName[]) => {
 export const requirePermission = (...permissions: PermissionName[]) => {
   return asyncHandler(
     async (req: Request, _res: Response, next: NextFunction) => {
+      // Defensive check
+      if (!req.auth) {
+        throw new UnauthorizedError("Authentication required");
+      }
+
       const { permissions: userPermissions } = req.auth;
       if (!permissions.every((p) => userPermissions.includes(p))) {
         throw new ForbiddenError(
@@ -36,6 +52,11 @@ export const requirePermission = (...permissions: PermissionName[]) => {
 export const requireSelfOrPermission = (permission: PermissionName) => {
   return asyncHandler(
     async (req: Request, _res: Response, next: NextFunction) => {
+      // Defensive check
+      if (!req.auth) {
+        throw new UnauthorizedError("Authentication required");
+      }
+
       const { userId, permissions } = req.auth;
 
       // Early return if user is self or has the permission.
