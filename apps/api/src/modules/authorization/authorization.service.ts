@@ -57,6 +57,28 @@ const getPermissionsByRole = async (
   return permissions;
 };
 
+const invalidateRolePermissionsCache = async (
+  roleName: RoleName,
+): Promise<void> => {
+  const cacheKey = `role:permissions:${roleName}`;
+
+  if (redis.isOpen) {
+    try {
+      await redis.del(cacheKey);
+      logger.debug(
+        { roleName, cacheKey },
+        "Invalidated role permissions cache in Redis",
+      );
+    } catch (err) {
+      logger.error(
+        { err, roleName, cacheKey },
+        "Error invalidating Redis cache",
+      );
+    }
+  }
+};
+
 export const authorizationService = {
   getPermissionsByRole,
+  invalidateRolePermissionsCache,
 };

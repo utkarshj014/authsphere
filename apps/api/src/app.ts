@@ -13,6 +13,7 @@ import { requestId } from "./middlewares/request-id.js";
 import { requestLogger } from "./middlewares/request-logger.js";
 import { authRouter } from "./modules/auth/index.js";
 import { usersRouter } from "./modules/users/index.js";
+import { rolesRouter } from "./modules/roles/index.js";
 
 const app = express();
 
@@ -39,6 +40,7 @@ app.use("/health", healthRouter);
 app.use("/test", testRouter);
 app.use("/auth", authRouter);
 app.use("/users", usersRouter);
+app.use("/roles", rolesRouter);
 
 // 404 Handler
 app.use(notFoundHandler);
