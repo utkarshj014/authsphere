@@ -221,6 +221,85 @@ const enableMfaAndSaveRecoveryCodes = (
     },
   });
 
+const createMfaChallenge = (userId: string, expiresAt: Date) =>
+  prisma.mfaChallenge.create({
+    data: {
+      userId,
+      expiresAt,
+    },
+  });
+
+const findMfaChallengeById = (mfaToken: string) =>
+  prisma.mfaChallenge.findFirst({
+    where: {
+      id: mfaToken,
+      expiresAt: { gte: new Date() },
+    },
+    include: {
+      user: {
+        include: {
+          role: {
+            select: {
+              name: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+const updateMfaLastUsedWindow = async (
+  userId: string,
+  matchedWindow: number,
+): Promise<boolean> => {
+  const result = await prisma.user.updateMany({
+    where: {
+      id: userId,
+      OR: [
+        { mfaLastUsedWindow: null },
+        { mfaLastUsedWindow: { lt: matchedWindow } },
+      ],
+    },
+    data: {
+      mfaLastUsedWindow: matchedWindow,
+    },
+  });
+
+  return result.count > 0;
+};
+
+const verifyAndConsumeRecoveryCode = async (
+  userId: string,
+  codeHash: string,
+) => {
+  const result = await prisma.mfaRecoveryCode.updateMany({
+    where: {
+      userId,
+      codeHash,
+      usedAt: null,
+    },
+    data: {
+      usedAt: new Date(),
+    },
+  });
+
+  return result.count > 0;
+};
+
+/**
+ * Deletes an MFA challenge by ID.
+ *
+ * Uses `deleteMany` for idempotent deletion (ADR-029). Returns `{ count: 0 }` instead
+ * of throwing Prisma P2025 if the challenge record is missing or already deleted.
+ * However, upstream code verification guarantees that only a single
+ * valid request reaches this point while the challenge exists.
+ * We could have used delete here.
+ */
+const deleteMfaChallenge = (mfaToken: string) =>
+  prisma.mfaChallenge.deleteMany({
+    where: { id: mfaToken },
+  });
+
 export const authRepository = {
   findUserByEmail,
   findRoleByName,
@@ -239,4 +318,9 @@ export const authRepository = {
   changePassword,
   savePendingMfaSecret,
   enableMfaAndSaveRecoveryCodes,
+  createMfaChallenge,
+  findMfaChallengeById,
+  updateMfaLastUsedWindow,
+  verifyAndConsumeRecoveryCode,
+  deleteMfaChallenge,
 };

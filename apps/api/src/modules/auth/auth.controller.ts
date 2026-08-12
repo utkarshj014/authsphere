@@ -38,9 +38,18 @@ const login = asyncHandler(async (req: Request, res: Response) => {
   const ipAddress = req.ip;
   const userAgent = req.header("user-agent");
 
-  const authTokens = await authService.login(req.body, ipAddress, userAgent);
+  const result = await authService.login(req.body, ipAddress, userAgent);
 
-  setAuthCookies(res, authTokens);
+  if (result.mfaRequired) {
+    return ApiResponse.success(
+      res,
+      { mfaRequired: true, mfaToken: result.mfaToken },
+      "MFA verification required",
+      200,
+    );
+  }
+
+  setAuthCookies(res, result.tokens);
 
   return ApiResponse.success(res, null, "Login successful", 200);
 });
@@ -143,6 +152,21 @@ const mfaVerifySetup = asyncHandler(async (req: Request, res: Response) => {
   );
 });
 
+const mfaVerifyLogin = asyncHandler(async (req: Request, res: Response) => {
+  const ipAddress = req.ip;
+  const userAgent = req.header("user-agent");
+
+  const authTokens = await authService.mfaVerifyLogin(
+    req.body,
+    ipAddress,
+    userAgent,
+  );
+
+  setAuthCookies(res, authTokens);
+
+  return ApiResponse.success(res, null, "Login successful", 200);
+});
+
 export const authController = {
   signup,
   verifyEmail,
@@ -157,4 +181,5 @@ export const authController = {
   changePassword,
   mfaSetup,
   mfaVerifySetup,
+  mfaVerifyLogin,
 };

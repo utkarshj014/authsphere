@@ -1,1 +1,1 @@
-export { totp } from "./totp.js";
+export { totp, TOTP_CODE_REGEX } from "./totp.js";

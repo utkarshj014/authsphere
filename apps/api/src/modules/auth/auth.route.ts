@@ -45,6 +45,11 @@ router
     auth,
     validate(authSchema.mfaVerifySetup),
     authController.mfaVerifySetup,
+  )
+  .post(
+    "/mfa/verify",
+    validate(authSchema.mfaVerifyLogin),
+    authController.mfaVerifyLogin,
   );
 
 export default router;

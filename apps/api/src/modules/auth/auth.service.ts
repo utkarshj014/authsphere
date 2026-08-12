@@ -11,6 +11,7 @@ import type {
   ResetPasswordInput,
   ChangePasswordInput,
   MfaVerifySetupInput,
+  MfaVerifyLoginInput,
 } from "./auth.validation.js";
 import {
   hashPassword,
@@ -92,7 +93,10 @@ const login = async (
   input: LoginInput,
   ipAddress?: string,
   userAgent?: string,
-): Promise<AuthTokens> => {
+): Promise<
+  | { mfaRequired: false; tokens: AuthTokens }
+  | { mfaRequired: true; mfaToken: string }
+> => {
   const user = await authRepository.findUserByEmailWithRole(input.email);
   if (!user) {
     // Dummy password check for constant time response
@@ -114,6 +118,19 @@ const login = async (
 
   if (!user.isEmailVerified) {
     throw new AppError("Email not verified", 403);
+  }
+
+  if (user.mfaEnabled) {
+    const challengeExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    const challenge = await authRepository.createMfaChallenge(
+      user.id,
+      challengeExpiresAt,
+    );
+
+    return {
+      mfaRequired: true,
+      mfaToken: challenge.id,
+    };
   }
 
   const sessionId = crypto.randomUUIDv7();
@@ -140,7 +157,10 @@ const login = async (
     ...(userAgent !== undefined ? { userAgent } : {}),
   });
 
-  return { accessToken, refreshToken };
+  return {
+    mfaRequired: false,
+    tokens: { accessToken, refreshToken },
+  };
 };
 
 const refreshToken = async (
@@ -339,8 +359,8 @@ const mfaVerifySetup = async (userId: string, input: MfaVerifySetupInput) => {
     );
   }
 
-  const isValid = totp.verifyCode(user.mfaSecret, input.code);
-  if (!isValid) {
+  const { valid } = totp.verifyCode(user.mfaSecret, input.code);
+  if (!valid) {
     throw new AppError("Invalid MFA code", 400);
   }
 
@@ -365,6 +385,74 @@ const mfaVerifySetup = async (userId: string, input: MfaVerifySetupInput) => {
   };
 };
 
+const mfaVerifyLogin = async (
+  input: MfaVerifyLoginInput,
+  ipAddress?: string,
+  userAgent?: string,
+): Promise<AuthTokens> => {
+  const challenge = await authRepository.findMfaChallengeById(input.mfaToken);
+  if (!challenge) {
+    throw new AppError("Invalid or expired MFA challenge", 400);
+  }
+
+  const { user } = challenge;
+  const code = input.code;
+  let isCodeValid = false;
+
+  if (totp.isTotpCode(code) && user.mfaEnabled && user.mfaSecret) {
+    const { valid, matchedWindow } = totp.verifyCode(user.mfaSecret, code);
+    if (valid && matchedWindow !== undefined) {
+      const windowUpdated = await authRepository.updateMfaLastUsedWindow(
+        user.id,
+        matchedWindow,
+      );
+      if (windowUpdated) {
+        isCodeValid = true;
+      }
+    }
+  }
+
+  if (!isCodeValid) {
+    const codeHash = hashToken(code);
+    isCodeValid = await authRepository.verifyAndConsumeRecoveryCode(
+      user.id,
+      codeHash,
+    );
+  }
+
+  if (!isCodeValid) {
+    throw new AppError("Invalid or expired MFA code or recovery code", 400);
+  }
+
+  await authRepository.deleteMfaChallenge(input.mfaToken);
+
+  const sessionId = crypto.randomUUIDv7();
+  const sessionExpiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_MS);
+
+  const accessToken = await signAccessToken({
+    sub: user.id,
+    sid: sessionId,
+    role: user.role.name,
+  });
+  const refreshToken = await signRefreshToken({
+    sub: user.id,
+    sid: sessionId,
+    role: user.role.name,
+  });
+
+  const refreshTokenHash = hashToken(refreshToken);
+
+  await authRepository.createSession(user.id, {
+    id: sessionId,
+    tokenHash: refreshTokenHash,
+    expiresAt: sessionExpiresAt,
+    ...(ipAddress !== undefined ? { ipAddress } : {}),
+    ...(userAgent !== undefined ? { userAgent } : {}),
+  });
+
+  return { accessToken, refreshToken };
+};
+
 export const authService = {
   signup,
   verifyEmail,
@@ -379,4 +467,5 @@ export const authService = {
   changePassword,
   mfaSetup,
   mfaVerifySetup,
+  mfaVerifyLogin,
 };

@@ -36,8 +36,9 @@ model User {
 
   passwordChangedAt DateTime? @map("password_changed_at")
 
-  mfaEnabled Boolean @default(false) @map("mfa_enabled")
-  mfaSecret  String? @map("mfa_secret")
+  mfaEnabled        Boolean @default(false) @map("mfa_enabled")
+  mfaSecret         String? @map("mfa_secret")
+  mfaLastUsedWindow Int?    @map("mfa_last_used_window")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
