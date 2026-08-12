@@ -19,53 +19,46 @@ const createUserWithVerificationToken = (
   },
   tokenHash: string,
   expiresAt: Date,
-) => {
-  return prisma.$transaction(async (tx) => {
-    const user = await tx.user.create({
-      data,
-    });
+) =>
+  prisma.user.create({
+    data: {
+      ...data,
+      emailVerificationToken: {
+        create: {
+          tokenHash,
+          expiresAt,
+        },
+      },
+    },
+  });
 
-    await tx.emailVerificationToken.create({
+const verifyEmailAndDeleteToken = async (tokenHash: string) => {
+  const verificationToken = await prisma.emailVerificationToken.findFirst({
+    where: { tokenHash, expiresAt: { gte: new Date() } },
+  });
+
+  if (!verificationToken) {
+    throw new AppError("Invalid or expired verification token", 400);
+  }
+
+  try {
+    await prisma.user.update({
+      where: { id: verificationToken.userId, isEmailVerified: false },
       data: {
-        tokenHash,
-        userId: user.id,
-        expiresAt,
+        isEmailVerified: true,
+        verifiedAt: new Date(),
+        emailVerificationToken: { delete: {} },
       },
     });
-
-    return user;
-  });
-};
-
-const verifyEmailAndDeleteToken = (tokenHash: string) => {
-  return prisma.$transaction(async (tx) => {
-    const verificationToken = await tx.emailVerificationToken.findFirst({
-      where: { tokenHash, expiresAt: { gte: new Date() } },
-    });
-
-    if (!verificationToken) {
-      throw new AppError("Invalid or expired verification token", 400);
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2025"
+    ) {
+      throw new AppError("Email is already verified", 400);
     }
-
-    try {
-      await tx.user.update({
-        where: { id: verificationToken.userId, isEmailVerified: false },
-        data: {
-          isEmailVerified: true,
-          verifiedAt: new Date(),
-          emailVerificationToken: { delete: {} },
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2025"
-      ) {
-        throw new AppError("Email is already verified", 400);
-      }
-      throw error;
-    }
-  });
+    throw error;
+  }
 };
 
 const reCreateVerificationToken = (
@@ -150,39 +143,37 @@ const createPasswordResetToken = (
     create: { tokenHash, userId, expiresAt },
   });
 
-const resetPasswordAndDeleteToken = (
+const resetPasswordAndDeleteToken = async (
   tokenHash: string,
   passwordHash: string,
 ) => {
-  return prisma.$transaction(async (tx) => {
-    const passwordResetToken = await tx.passwordResetToken.findFirst({
-      where: { tokenHash, expiresAt: { gte: new Date() } },
-    });
+  const resetToken = await prisma.passwordResetToken.findFirst({
+    where: { tokenHash, expiresAt: { gte: new Date() } },
+  });
 
-    if (!passwordResetToken) {
+  if (!resetToken) {
+    throw new AppError("Invalid or expired reset token", 400);
+  }
+
+  try {
+    await prisma.user.update({
+      where: { id: resetToken.userId },
+      data: {
+        passwordHash,
+        passwordChangedAt: new Date(),
+        passwordResetToken: { delete: {} }, // Deletes the token
+        sessions: { deleteMany: {} }, // Revokes all sessions
+      },
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2025"
+    ) {
       throw new AppError("Invalid or expired reset token", 400);
     }
-
-    try {
-      await tx.user.update({
-        where: { id: passwordResetToken.userId },
-        data: {
-          passwordHash,
-          passwordChangedAt: new Date(),
-          passwordResetToken: { delete: {} },
-          sessions: { deleteMany: {} },
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2025"
-      ) {
-        throw new AppError("Invalid or expired reset token", 400);
-      }
-      throw error;
-    }
-  });
+    throw error;
+  }
 };
 
 const changePassword = (userId: string, newPasswordHash: string) =>
