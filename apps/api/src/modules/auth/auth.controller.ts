@@ -167,6 +167,39 @@ const mfaVerifyLogin = asyncHandler(async (req: Request, res: Response) => {
   return ApiResponse.success(res, null, "Login successful", 200);
 });
 
+const mfaDisable = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.auth.userId;
+
+  await authService.mfaDisable(userId, req.body);
+
+  clearAuthCookies(res);
+
+  return ApiResponse.success(
+    res,
+    null,
+    "MFA disabled successfully. All active sessions have been revoked",
+    200,
+  );
+});
+
+const mfaRegenerateRecoveryCodes = asyncHandler(
+  async (req: Request, res: Response) => {
+    const userId = req.auth.userId;
+
+    const result = await authService.mfaRegenerateRecoveryCodes(
+      userId,
+      req.body,
+    );
+
+    return ApiResponse.success(
+      res,
+      result,
+      "New recovery codes generated successfully. Store these codes securely",
+      200,
+    );
+  },
+);
+
 export const authController = {
   signup,
   verifyEmail,
@@ -182,4 +215,6 @@ export const authController = {
   mfaSetup,
   mfaVerifySetup,
   mfaVerifyLogin,
+  mfaDisable,
+  mfaRegenerateRecoveryCodes,
 };

@@ -300,6 +300,38 @@ const deleteMfaChallenge = (mfaToken: string) =>
     where: { id: mfaToken },
   });
 
+const disableMfaAndRevokeSessions = (userId: string) =>
+  prisma.user.update({
+    where: { id: userId },
+    data: {
+      mfaEnabled: false,
+      mfaSecret: null,
+      mfaLastUsedWindow: null,
+      mfaRecoveryCodes: {
+        deleteMany: {},
+      },
+      mfaChallenges: {
+        deleteMany: {},
+      },
+      sessions: {
+        deleteMany: {},
+      },
+    },
+  });
+
+const replaceRecoveryCodes = (userId: string, recoveryCodeHashes: string[]) =>
+  prisma.user.update({
+    where: { id: userId },
+    data: {
+      mfaRecoveryCodes: {
+        deleteMany: {},
+        create: recoveryCodeHashes.map((codeHash) => ({
+          codeHash,
+        })),
+      },
+    },
+  });
+
 export const authRepository = {
   findUserByEmail,
   findRoleByName,
@@ -323,4 +355,6 @@ export const authRepository = {
   updateMfaLastUsedWindow,
   verifyAndConsumeRecoveryCode,
   deleteMfaChallenge,
+  disableMfaAndRevokeSessions,
+  replaceRecoveryCodes,
 };

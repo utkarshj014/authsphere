@@ -50,6 +50,18 @@ router
     "/mfa/verify",
     validate(authSchema.mfaVerifyLogin),
     authController.mfaVerifyLogin,
+  )
+  .post(
+    "/mfa/disable",
+    auth,
+    validate(authSchema.mfaDisable),
+    authController.mfaDisable,
+  )
+  .post(
+    "/mfa/regenerate-recovery-codes",
+    auth,
+    validate(authSchema.mfaRegenerateRecoveryCodes),
+    authController.mfaRegenerateRecoveryCodes,
   );
 
 export default router;

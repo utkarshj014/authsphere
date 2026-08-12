@@ -12,6 +12,8 @@ import type {
   ChangePasswordInput,
   MfaVerifySetupInput,
   MfaVerifyLoginInput,
+  MfaDisableInput,
+  MfaRegenerateRecoveryCodesInput,
 } from "./auth.validation.js";
 import {
   hashPassword,
@@ -19,6 +21,7 @@ import {
   DUMMY_PASSWORD_HASH,
   generateToken,
   hashToken,
+  generateRecoveryCodes,
 } from "../../lib/crypto/index.js";
 import { totp } from "../../lib/totp/index.js";
 import {
@@ -364,16 +367,7 @@ const mfaVerifySetup = async (userId: string, input: MfaVerifySetupInput) => {
     throw new AppError("Invalid MFA code", 400);
   }
 
-  // Generate 10 random recovery codes
-  const recoveryCodes: string[] = [];
-  const recoveryCodeHashes: string[] = [];
-
-  for (let i = 0; i < 10; i++) {
-    const raw = crypto.randomBytes(5).toString("hex").toUpperCase();
-    const formatted = `${raw.slice(0, 5)}-${raw.slice(5)}`;
-    recoveryCodes.push(formatted);
-    recoveryCodeHashes.push(hashToken(formatted));
-  }
+  const { recoveryCodes, recoveryCodeHashes } = generateRecoveryCodes();
 
   await authRepository.enableMfaAndSaveRecoveryCodes(
     userId,
@@ -383,6 +377,44 @@ const mfaVerifySetup = async (userId: string, input: MfaVerifySetupInput) => {
   return {
     recoveryCodes,
   };
+};
+
+const verifyMfaCodeOrRecoveryCode = async (
+  userId: string,
+  userMfaSecret: string | null,
+  userMfaEnabled: boolean,
+  code: string,
+): Promise<void> => {
+  if (!userMfaEnabled) {
+    throw new AppError("MFA is not enabled for this account", 400);
+  }
+
+  let isCodeValid = false;
+
+  if (totp.isTotpCode(code) && userMfaSecret) {
+    const { valid, matchedWindow } = totp.verifyCode(userMfaSecret, code);
+    if (valid && matchedWindow !== undefined) {
+      const windowUpdated = await authRepository.updateMfaLastUsedWindow(
+        userId,
+        matchedWindow,
+      );
+      if (windowUpdated) {
+        isCodeValid = true;
+      }
+    }
+  }
+
+  if (!isCodeValid) {
+    const codeHash = hashToken(code);
+    isCodeValid = await authRepository.verifyAndConsumeRecoveryCode(
+      userId,
+      codeHash,
+    );
+  }
+
+  if (!isCodeValid) {
+    throw new AppError("Invalid or expired MFA code or recovery code", 400);
+  }
 };
 
 const mfaVerifyLogin = async (
@@ -396,33 +428,13 @@ const mfaVerifyLogin = async (
   }
 
   const { user } = challenge;
-  const code = input.code;
-  let isCodeValid = false;
 
-  if (totp.isTotpCode(code) && user.mfaEnabled && user.mfaSecret) {
-    const { valid, matchedWindow } = totp.verifyCode(user.mfaSecret, code);
-    if (valid && matchedWindow !== undefined) {
-      const windowUpdated = await authRepository.updateMfaLastUsedWindow(
-        user.id,
-        matchedWindow,
-      );
-      if (windowUpdated) {
-        isCodeValid = true;
-      }
-    }
-  }
-
-  if (!isCodeValid) {
-    const codeHash = hashToken(code);
-    isCodeValid = await authRepository.verifyAndConsumeRecoveryCode(
-      user.id,
-      codeHash,
-    );
-  }
-
-  if (!isCodeValid) {
-    throw new AppError("Invalid or expired MFA code or recovery code", 400);
-  }
+  await verifyMfaCodeOrRecoveryCode(
+    user.id,
+    user.mfaSecret,
+    user.mfaEnabled,
+    input.code,
+  );
 
   await authRepository.deleteMfaChallenge(input.mfaToken);
 
@@ -453,6 +465,47 @@ const mfaVerifyLogin = async (
   return { accessToken, refreshToken };
 };
 
+const mfaDisable = async (userId: string, input: MfaDisableInput) => {
+  const user = await authRepository.findUserById(userId);
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  await verifyMfaCodeOrRecoveryCode(
+    userId,
+    user.mfaSecret,
+    user.mfaEnabled,
+    input.code,
+  );
+
+  await authRepository.disableMfaAndRevokeSessions(userId);
+};
+
+const mfaRegenerateRecoveryCodes = async (
+  userId: string,
+  input: MfaRegenerateRecoveryCodesInput,
+) => {
+  const user = await authRepository.findUserById(userId);
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  await verifyMfaCodeOrRecoveryCode(
+    userId,
+    user.mfaSecret,
+    user.mfaEnabled,
+    input.code,
+  );
+
+  const { recoveryCodes, recoveryCodeHashes } = generateRecoveryCodes();
+
+  await authRepository.replaceRecoveryCodes(userId, recoveryCodeHashes);
+
+  return {
+    recoveryCodes,
+  };
+};
+
 export const authService = {
   signup,
   verifyEmail,
@@ -468,4 +521,6 @@ export const authService = {
   mfaSetup,
   mfaVerifySetup,
   mfaVerifyLogin,
+  mfaDisable,
+  mfaRegenerateRecoveryCodes,
 };

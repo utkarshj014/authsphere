@@ -57,6 +57,14 @@ export const authSchema = {
     mfaToken: idSchema,
     code: z.union([totpCode, backupCodeSchema]),
   }),
+
+  mfaDisable: z.object({
+    code: z.union([totpCode, backupCodeSchema]),
+  }),
+
+  mfaRegenerateRecoveryCodes: z.object({
+    code: z.union([totpCode, backupCodeSchema]),
+  }),
 };
 
 export type SignupInput = z.infer<typeof authSchema.signup>;
@@ -70,3 +78,7 @@ export type ResetPasswordInput = z.infer<typeof authSchema.resetPassword>;
 export type ChangePasswordInput = z.infer<typeof authSchema.changePassword>;
 export type MfaVerifySetupInput = z.infer<typeof authSchema.mfaVerifySetup>;
 export type MfaVerifyLoginInput = z.infer<typeof authSchema.mfaVerifyLogin>;
+export type MfaDisableInput = z.infer<typeof authSchema.mfaDisable>;
+export type MfaRegenerateRecoveryCodesInput = z.infer<
+  typeof authSchema.mfaRegenerateRecoveryCodes
+>;
