@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
-import { ROLES } from "@authsphere/shared";
+import { uuidv7 } from "uuidv7";
+import { ROLES, type RoleName } from "@authsphere/shared";
 import { AppError, UnauthorizedError } from "../../common/errors/index.js";
 import { authRepository } from "./auth.repository.js";
 import type {
@@ -35,6 +35,101 @@ import {
 } from "../../lib/jwt/index.js";
 import type { AuthTokens } from "./auth.types.js";
 import { env } from "../../config/env.js";
+
+// ==========================================
+// Private Helpers
+// ==========================================
+
+const generateAuthTokensAndSession = async (
+  userId: string,
+  roleName: RoleName,
+  ipAddress?: string,
+  userAgent?: string,
+  existingSessionId?: string,
+): Promise<AuthTokens> => {
+  const sessionId = existingSessionId ?? uuidv7();
+  const sessionExpiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_MS);
+
+  const accessToken = await signAccessToken({
+    sub: userId,
+    sid: sessionId,
+    role: roleName,
+  });
+  const refreshToken = await signRefreshToken({
+    sub: userId,
+    sid: sessionId,
+    role: roleName,
+  });
+
+  const refreshTokenHash = hashToken(refreshToken);
+
+  const sessionPayload = {
+    tokenHash: refreshTokenHash,
+    expiresAt: sessionExpiresAt,
+    ...(ipAddress !== undefined ? { ipAddress } : {}),
+    ...(userAgent !== undefined ? { userAgent } : {}),
+  };
+
+  if (existingSessionId) {
+    await authRepository.rotateSession(sessionId, sessionPayload);
+  } else {
+    await authRepository.createSession(userId, {
+      id: sessionId,
+      ...sessionPayload,
+    });
+  }
+
+  return { accessToken, refreshToken };
+};
+
+const verifyMfaCodeOrRecoveryCode = async (
+  userId: string,
+  userMfaSecret: string | null,
+  userMfaEnabled: boolean,
+  code: string,
+): Promise<{ usedRecoveryCode: boolean }> => {
+  if (!userMfaEnabled) {
+    throw new AppError("MFA is not enabled for this account", 400);
+  }
+
+  let isCodeValid = false;
+  let usedRecoveryCode = false;
+
+  if (totp.isTotpCode(code) && userMfaSecret) {
+    const { valid, matchedWindow } = totp.verifyCode(userMfaSecret, code);
+    if (valid && matchedWindow !== undefined) {
+      const windowUpdated = await authRepository.updateMfaLastUsedWindow(
+        userId,
+        matchedWindow,
+      );
+      if (windowUpdated) {
+        isCodeValid = true;
+      }
+    }
+  }
+
+  if (!isCodeValid) {
+    const codeHash = hashToken(code);
+    const recoveryConsumed = await authRepository.verifyAndConsumeRecoveryCode(
+      userId,
+      codeHash,
+    );
+    if (recoveryConsumed) {
+      isCodeValid = true;
+      usedRecoveryCode = true;
+    }
+  }
+
+  if (!isCodeValid) {
+    throw new AppError("Invalid or expired MFA code or recovery code", 400);
+  }
+
+  return { usedRecoveryCode };
+};
+
+// ==========================================
+// Public Services
+// ==========================================
 
 const signup = async (input: SignupInput) => {
   const existingUser = await authRepository.findUserByEmail(input.email);
@@ -136,33 +231,16 @@ const login = async (
     };
   }
 
-  const sessionId = crypto.randomUUIDv7();
-  const sessionExpiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_MS);
-
-  const accessToken = await signAccessToken({
-    sub: user.id,
-    sid: sessionId,
-    role: user.role.name,
-  });
-  const refreshToken = await signRefreshToken({
-    sub: user.id,
-    sid: sessionId,
-    role: user.role.name,
-  });
-
-  const refreshTokenHash = hashToken(refreshToken);
-
-  await authRepository.createSession(user.id, {
-    id: sessionId,
-    tokenHash: refreshTokenHash,
-    expiresAt: sessionExpiresAt,
-    ...(ipAddress !== undefined ? { ipAddress } : {}),
-    ...(userAgent !== undefined ? { userAgent } : {}),
-  });
+  const tokens = await generateAuthTokensAndSession(
+    user.id,
+    user.role.name,
+    ipAddress,
+    userAgent,
+  );
 
   return {
     mfaRequired: false,
-    tokens: { accessToken, refreshToken },
+    tokens,
   };
 };
 
@@ -199,28 +277,15 @@ const refreshToken = async (
 
   const user = session.user;
 
-  const newAccessToken = await signAccessToken({
-    sub: user.id,
-    sid: session.id,
-    role: user.role.name,
-  });
-  const newRefreshToken = await signRefreshToken({
-    sub: user.id,
-    sid: session.id,
-    role: user.role.name,
-  });
+  const tokens = await generateAuthTokensAndSession(
+    user.id,
+    user.role.name,
+    ipAddress,
+    userAgent,
+    session.id,
+  );
 
-  const newRefreshTokenHash = hashToken(newRefreshToken);
-  const sessionExpiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_MS);
-
-  await authRepository.rotateSession(session.id, {
-    tokenHash: newRefreshTokenHash,
-    expiresAt: sessionExpiresAt,
-    ...(ipAddress !== undefined ? { ipAddress } : {}),
-    ...(userAgent !== undefined ? { userAgent } : {}),
-  });
-
-  return { accessToken: newAccessToken, refreshToken: newRefreshToken };
+  return tokens;
 };
 
 const logout = async (token?: string) => {
@@ -283,15 +348,43 @@ const forgotPassword = async (input: ForgotPasswordInput) => {
   await sendForgotPasswordEmail(token, user.email);
 };
 
-const resetPassword = async (input: ResetPasswordInput) => {
+const resetPassword = async (
+  input: ResetPasswordInput,
+): Promise<{ mfaRequired: false } | { mfaRequired: true }> => {
   const tokenHash = hashToken(input.token);
+
+  const resetToken =
+    await authRepository.findPasswordResetTokenWithUser(tokenHash);
+  if (!resetToken) {
+    throw new AppError("Invalid or expired reset token", 400);
+  }
+
+  const { user } = resetToken;
+
+  if (user.mfaEnabled) {
+    if (!input.code) {
+      return { mfaRequired: true };
+    }
+
+    await verifyMfaCodeOrRecoveryCode(
+      user.id,
+      user.mfaSecret,
+      user.mfaEnabled,
+      input.code,
+    );
+  }
 
   const newPasswordHash = await hashPassword(input.password);
 
-  await authRepository.resetPasswordAndDeleteToken(tokenHash, newPasswordHash);
+  await authRepository.resetPasswordAndDeleteToken(user.id, newPasswordHash);
+
+  return { mfaRequired: false };
 };
 
-const changePassword = async (userId: string, input: ChangePasswordInput) => {
+const changePassword = async (
+  userId: string,
+  input: ChangePasswordInput,
+): Promise<{ mfaRequired: false } | { mfaRequired: true }> => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
     throw new AppError("User not found", 404);
@@ -320,9 +413,24 @@ const changePassword = async (userId: string, input: ChangePasswordInput) => {
     throw new AppError("New password cannot be same as old password", 400);
   }
 
+  if (user.mfaEnabled) {
+    if (!input.code) {
+      return { mfaRequired: true };
+    }
+
+    await verifyMfaCodeOrRecoveryCode(
+      user.id,
+      user.mfaSecret,
+      user.mfaEnabled,
+      input.code,
+    );
+  }
+
   const newPasswordHash = await hashPassword(input.newPassword);
 
   await authRepository.changePassword(userId, newPasswordHash);
+
+  return { mfaRequired: false };
 };
 
 const mfaSetup = async (userId: string) => {
@@ -379,49 +487,15 @@ const mfaVerifySetup = async (userId: string, input: MfaVerifySetupInput) => {
   };
 };
 
-const verifyMfaCodeOrRecoveryCode = async (
-  userId: string,
-  userMfaSecret: string | null,
-  userMfaEnabled: boolean,
-  code: string,
-): Promise<void> => {
-  if (!userMfaEnabled) {
-    throw new AppError("MFA is not enabled for this account", 400);
-  }
-
-  let isCodeValid = false;
-
-  if (totp.isTotpCode(code) && userMfaSecret) {
-    const { valid, matchedWindow } = totp.verifyCode(userMfaSecret, code);
-    if (valid && matchedWindow !== undefined) {
-      const windowUpdated = await authRepository.updateMfaLastUsedWindow(
-        userId,
-        matchedWindow,
-      );
-      if (windowUpdated) {
-        isCodeValid = true;
-      }
-    }
-  }
-
-  if (!isCodeValid) {
-    const codeHash = hashToken(code);
-    isCodeValid = await authRepository.verifyAndConsumeRecoveryCode(
-      userId,
-      codeHash,
-    );
-  }
-
-  if (!isCodeValid) {
-    throw new AppError("Invalid or expired MFA code or recovery code", 400);
-  }
-};
-
 const mfaVerifyLogin = async (
   input: MfaVerifyLoginInput,
   ipAddress?: string,
   userAgent?: string,
-): Promise<AuthTokens> => {
+): Promise<{
+  tokens: AuthTokens;
+  lowRecoveryCodesWarning?: boolean;
+  remainingRecoveryCodes?: number;
+}> => {
   const challenge = await authRepository.findMfaChallengeById(input.mfaToken);
   if (!challenge) {
     throw new AppError("Invalid or expired MFA challenge", 400);
@@ -429,7 +503,7 @@ const mfaVerifyLogin = async (
 
   const { user } = challenge;
 
-  await verifyMfaCodeOrRecoveryCode(
+  const verificationResult = await verifyMfaCodeOrRecoveryCode(
     user.id,
     user.mfaSecret,
     user.mfaEnabled,
@@ -438,31 +512,29 @@ const mfaVerifyLogin = async (
 
   await authRepository.deleteMfaChallenge(input.mfaToken);
 
-  const sessionId = crypto.randomUUIDv7();
-  const sessionExpiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_MS);
+  let remainingRecoveryCodes: number | undefined;
+  if (verificationResult.usedRecoveryCode) {
+    remainingRecoveryCodes = await authRepository.countUnusedRecoveryCodes(
+      user.id,
+    );
+  }
 
-  const accessToken = await signAccessToken({
-    sub: user.id,
-    sid: sessionId,
-    role: user.role.name,
-  });
-  const refreshToken = await signRefreshToken({
-    sub: user.id,
-    sid: sessionId,
-    role: user.role.name,
-  });
+  const lowRecoveryCodesWarning =
+    remainingRecoveryCodes !== undefined && remainingRecoveryCodes <= 2;
 
-  const refreshTokenHash = hashToken(refreshToken);
+  const tokens = await generateAuthTokensAndSession(
+    user.id,
+    user.role.name,
+    ipAddress,
+    userAgent,
+  );
 
-  await authRepository.createSession(user.id, {
-    id: sessionId,
-    tokenHash: refreshTokenHash,
-    expiresAt: sessionExpiresAt,
-    ...(ipAddress !== undefined ? { ipAddress } : {}),
-    ...(userAgent !== undefined ? { userAgent } : {}),
-  });
-
-  return { accessToken, refreshToken };
+  return {
+    tokens,
+    ...(lowRecoveryCodesWarning && remainingRecoveryCodes !== undefined
+      ? { lowRecoveryCodesWarning, remainingRecoveryCodes }
+      : {}),
+  };
 };
 
 const mfaDisable = async (userId: string, input: MfaDisableInput) => {

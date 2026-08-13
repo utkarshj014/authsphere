@@ -143,26 +143,24 @@ const createPasswordResetToken = (
     create: { tokenHash, userId, expiresAt },
   });
 
-const resetPasswordAndDeleteToken = async (
-  tokenHash: string,
-  passwordHash: string,
-) => {
-  const resetToken = await prisma.passwordResetToken.findFirst({
+const findPasswordResetTokenWithUser = (tokenHash: string) =>
+  prisma.passwordResetToken.findFirst({
     where: { tokenHash, expiresAt: { gte: new Date() } },
+    include: { user: true },
   });
 
-  if (!resetToken) {
-    throw new AppError("Invalid or expired reset token", 400);
-  }
-
+const resetPasswordAndDeleteToken = async (
+  userId: string,
+  passwordHash: string,
+) => {
   try {
     await prisma.user.update({
-      where: { id: resetToken.userId },
+      where: { id: userId },
       data: {
         passwordHash,
         passwordChangedAt: new Date(),
-        passwordResetToken: { delete: {} }, // Deletes the token
-        sessions: { deleteMany: {} }, // Revokes all sessions
+        passwordResetToken: { delete: {} },
+        sessions: { deleteMany: {} },
       },
     });
   } catch (error) {
@@ -323,6 +321,11 @@ const replaceRecoveryCodes = (userId: string, recoveryCodeHashes: string[]) =>
     },
   });
 
+const countUnusedRecoveryCodes = (userId: string) =>
+  prisma.mfaRecoveryCode.count({
+    where: { userId, usedAt: null },
+  });
+
 export const authRepository = {
   findUserByEmail,
   findRoleByName,
@@ -337,6 +340,7 @@ export const authRepository = {
   rotateSession,
   findUserById,
   createPasswordResetToken,
+  findPasswordResetTokenWithUser,
   resetPasswordAndDeleteToken,
   changePassword,
   savePendingMfaSecret,
@@ -348,4 +352,5 @@ export const authRepository = {
   deleteMfaChallenge,
   disableMfaAndRevokeSessions,
   replaceRecoveryCodes,
+  countUnusedRecoveryCodes,
 };

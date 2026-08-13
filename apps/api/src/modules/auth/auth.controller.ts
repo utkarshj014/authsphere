@@ -111,7 +111,16 @@ const forgotPassword = asyncHandler(async (req: Request, res: Response) => {
 });
 
 const resetPassword = asyncHandler(async (req: Request, res: Response) => {
-  await authService.resetPassword(req.body);
+  const result = await authService.resetPassword(req.body);
+
+  if (result.mfaRequired) {
+    return ApiResponse.success(
+      res,
+      result,
+      "MFA verification required to reset password",
+      200,
+    );
+  }
 
   return ApiResponse.success(res, null, "Password reset successful", 200);
 });
@@ -119,7 +128,16 @@ const resetPassword = asyncHandler(async (req: Request, res: Response) => {
 const changePassword = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.auth.userId;
 
-  await authService.changePassword(userId, req.body);
+  const result = await authService.changePassword(userId, req.body);
+
+  if (result.mfaRequired) {
+    return ApiResponse.success(
+      res,
+      result,
+      "MFA verification required to change password",
+      200,
+    );
+  }
 
   clearAuthCookies(res);
 
@@ -156,15 +174,23 @@ const mfaVerifyLogin = asyncHandler(async (req: Request, res: Response) => {
   const ipAddress = req.ip;
   const userAgent = req.header("user-agent");
 
-  const authTokens = await authService.mfaVerifyLogin(
+  const result = await authService.mfaVerifyLogin(
     req.body,
     ipAddress,
     userAgent,
   );
 
-  setAuthCookies(res, authTokens);
+  setAuthCookies(res, result.tokens);
 
-  return ApiResponse.success(res, null, "Login successful", 200);
+  const responseData =
+    result.lowRecoveryCodesWarning !== undefined
+      ? {
+          lowRecoveryCodesWarning: result.lowRecoveryCodesWarning,
+          remainingRecoveryCodes: result.remainingRecoveryCodes,
+        }
+      : null;
+
+  return ApiResponse.success(res, responseData, "Login successful", 200);
 });
 
 const mfaDisable = asyncHandler(async (req: Request, res: Response) => {

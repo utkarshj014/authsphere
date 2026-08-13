@@ -42,11 +42,13 @@ export const authSchema = {
   resetPassword: z.object({
     token: z.string().trim().min(1),
     password: password,
+    code: z.union([totpCode, backupCodeSchema]).optional(),
   }),
 
   changePassword: z.object({
     oldPassword: password,
     newPassword: password,
+    code: z.union([totpCode, backupCodeSchema]).optional(),
   }),
 
   mfaVerifySetup: z.object({
