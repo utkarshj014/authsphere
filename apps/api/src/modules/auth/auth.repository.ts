@@ -9,7 +9,7 @@ const findUserByEmail = (email: string) =>
 const findRoleByName = (name: RoleName) =>
   prisma.role.findUnique({ where: { name } });
 
-const createUserWithVerificationToken = (
+const createUserWithVerificationToken = async (
   data: {
     email: string;
     passwordHash: string | null;
@@ -19,18 +19,29 @@ const createUserWithVerificationToken = (
   },
   tokenHash: string,
   expiresAt: Date,
-) =>
-  prisma.user.create({
-    data: {
-      ...data,
-      emailVerificationToken: {
-        create: {
-          tokenHash,
-          expiresAt,
+) => {
+  try {
+    return await prisma.user.create({
+      data: {
+        ...data,
+        emailVerificationToken: {
+          create: {
+            tokenHash,
+            expiresAt,
+          },
         },
       },
-    },
-  });
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new AppError("Email already in use", 409);
+    }
+    throw error;
+  }
+};
 
 const verifyEmailAndDeleteToken = async (tokenHash: string) => {
   const verificationToken = await prisma.emailVerificationToken.findFirst({

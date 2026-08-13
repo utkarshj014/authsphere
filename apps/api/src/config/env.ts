@@ -18,6 +18,7 @@ const envSchema = z
     JWT_ACCESS_EXPIRES_IN: z.string().min(1),
     JWT_REFRESH_EXPIRES_IN: z.string().min(1),
     AUTH_REUSE_DELETION_MODE: z.enum(["SESSION", "GLOBAL"]).default("SESSION"),
+    MFA_ENCRYPTION_KEY: z.string().min(16),
   })
   .transform((config) => ({
     ...config,

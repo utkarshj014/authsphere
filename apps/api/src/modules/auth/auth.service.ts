@@ -22,6 +22,8 @@ import {
   generateToken,
   hashToken,
   generateRecoveryCodes,
+  encryptMfaSecret,
+  decryptMfaSecret,
 } from "../../lib/crypto/index.js";
 import { totp } from "../../lib/totp/index.js";
 import {
@@ -96,7 +98,8 @@ const verifyMfaCodeOrRecoveryCode = async (
   let usedRecoveryCode = false;
 
   if (totp.isTotpCode(code) && userMfaSecret) {
-    const { valid, matchedWindow } = totp.verifyCode(userMfaSecret, code);
+    const rawSecret = decryptMfaSecret(userMfaSecret);
+    const { valid, matchedWindow } = totp.verifyCode(rawSecret, code);
     if (valid && matchedWindow !== undefined) {
       const windowUpdated = await authRepository.updateMfaLastUsedWindow(
         userId,
@@ -444,7 +447,8 @@ const mfaSetup = async (userId: string) => {
   }
 
   const secret = totp.generateSecret();
-  await authRepository.savePendingMfaSecret(userId, secret);
+  const encryptedSecret = encryptMfaSecret(secret);
+  await authRepository.savePendingMfaSecret(userId, encryptedSecret);
 
   const otpauthUri = totp.generateOtpUri(secret, user.email);
 
@@ -470,7 +474,8 @@ const mfaVerifySetup = async (userId: string, input: MfaVerifySetupInput) => {
     );
   }
 
-  const { valid } = totp.verifyCode(user.mfaSecret, input.code);
+  const rawSecret = decryptMfaSecret(user.mfaSecret);
+  const { valid } = totp.verifyCode(rawSecret, input.code);
   if (!valid) {
     throw new AppError("Invalid MFA code", 400);
   }
@@ -519,9 +524,6 @@ const mfaVerifyLogin = async (
     );
   }
 
-  const lowRecoveryCodesWarning =
-    remainingRecoveryCodes !== undefined && remainingRecoveryCodes <= 2;
-
   const tokens = await generateAuthTokensAndSession(
     user.id,
     user.role.name,
@@ -529,12 +531,15 @@ const mfaVerifyLogin = async (
     userAgent,
   );
 
-  return {
-    tokens,
-    ...(lowRecoveryCodesWarning && remainingRecoveryCodes !== undefined
-      ? { lowRecoveryCodesWarning, remainingRecoveryCodes }
-      : {}),
-  };
+  if (remainingRecoveryCodes !== undefined && remainingRecoveryCodes <= 2) {
+    return {
+      tokens,
+      lowRecoveryCodesWarning: true,
+      remainingRecoveryCodes,
+    };
+  }
+
+  return { tokens };
 };
 
 const mfaDisable = async (userId: string, input: MfaDisableInput) => {

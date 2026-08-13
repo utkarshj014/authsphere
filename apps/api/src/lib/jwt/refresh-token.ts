@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import type { TokenPayload } from "./jwt.types.js";
 import { env } from "../../config/env.js";

@@ -12,7 +12,7 @@ const backupCodeSchema = z
   .string()
   .trim()
   .length(11)
-  .regex(/^[a-zA-Z0-9]{11}$/);
+  .regex(/^[a-zA-Z0-9]{5}-[a-zA-Z0-9]{5}$/);
 
 export const authSchema = {
   signup: z.object({
