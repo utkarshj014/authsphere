@@ -5,3 +5,4 @@ export * from "./validation-error.js";
 export * from "./format-zod-error.js";
 export * from "./unauthorized-error.js";
 export * from "./forbidden-error.js";
+export * from "./too-many-requests-error.js";
