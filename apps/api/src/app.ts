@@ -16,6 +16,9 @@ import { rolesRouter } from "./modules/roles/index.js";
 
 const app = express();
 
+// Configure proxy trust (handles boolean, hop count number, or subnet/IP arrays)
+app.set("trust proxy", env.TRUST_PROXY);
+
 app.use(helmet());
 
 app.use(

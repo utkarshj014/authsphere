@@ -19,6 +19,28 @@ const envSchema = z
     JWT_REFRESH_EXPIRES_IN: z.string().min(1),
     AUTH_REUSE_DELETION_MODE: z.enum(["SESSION", "GLOBAL"]).default("SESSION"),
     MFA_ENCRYPTION_KEY: z.string().min(16),
+    TRUST_PROXY: z
+      .string()
+      .optional()
+      .transform((val): boolean | number | string | string[] => {
+        if (!val || val === "false") return false;
+        if (val === "true") return true;
+
+        const trimmed = val.trim();
+        if (/^\d+$/.test(trimmed)) {
+          return parseInt(trimmed, 10);
+        }
+
+        if (trimmed.includes(",")) {
+          return trimmed
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+        }
+
+        return trimmed;
+      })
+      .default("false"),
   })
   .transform((config) => ({
     ...config,
