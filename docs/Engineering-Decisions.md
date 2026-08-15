@@ -72,6 +72,11 @@ This document records the architectural and engineering decisions made during th
 - [ADR-035: Redis Permission Caching with Fail-Safe Bypass](#adr-035--redis-permission-caching-with-fail-safe-bypass)
 - [ADR-036: Middleware-Based Authorization Guards](#adr-036--middleware-based-authorization-guards)
 - [ADR-038: Validation-Layer Input Normalization via Zod Transforms](#adr-038--validation-layer-input-normalization-via-zod-transforms)
+- [ADR-050: Redis-Backed Fixed-Window Rate Limiting with Lua Scripting](#adr-050--redis-backed-fixed-window-rate-limiting-with-lua-scripting)
+- [ADR-051: Centralized Rate Limit Policy Dictionary](#adr-051--centralized-rate-limit-policy-dictionary)
+- [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
+- [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
+- [ADR-054: Secure Client IP Resolution via Express `req.ip`](#adr-054--secure-client-ip-resolution-via-express-reqip)
 
 </details>
 
@@ -104,7 +109,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-049)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-054)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -155,6 +160,11 @@ This document records the architectural and engineering decisions made during th
 - [ADR-047: SHA-256 Hashed Recovery Codes with Atomic Single-Use Consumption](#adr-047--sha-256-hashed-recovery-codes-with-atomic-single-use-consumption)
 - [ADR-048: Dual-Factor Enforcement on Sensitive Credential Mutations](#adr-048--dual-factor-enforcement-on-sensitive-credential-mutations)
 - [ADR-049: Proactive Low Recovery Code Warning Threshold](#adr-049--proactive-low-recovery-code-warning-threshold)
+- [ADR-050: Redis-Backed Fixed-Window Rate Limiting with Lua Scripting](#adr-050--redis-backed-fixed-window-rate-limiting-with-lua-scripting)
+- [ADR-051: Centralized Rate Limit Policy Dictionary](#adr-051--centralized-rate-limit-policy-dictionary)
+- [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
+- [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
+- [ADR-054: Secure Client IP Resolution via Express `req.ip`](#adr-054--secure-client-ip-resolution-via-express-reqip)
 
 </details>
 
@@ -1355,3 +1365,135 @@ When an authentication request (`mfaVerifyLogin`) succeeds via a recovery code, 
 
 - **Proactive UX:** Alerts the client application to prompt the user to regenerate backup codes before running out.
 - **Zero Overhead:** Count query is executed only when a recovery code is actually consumed, adding zero latency to standard TOTP logins.
+
+---
+
+## ADR-050 — Redis-Backed Fixed-Window Rate Limiting with Lua Scripting
+
+**Status:** Accepted
+
+### Context
+
+HTTP-level rate limiting requires atomic counter management in a shared store. Performing `INCR`, `EXPIRE`, and `TTL` as separate Redis commands introduces race conditions where a key could be incremented without an expiration being set, causing permanent counter leaks.
+
+### Decision
+
+Implement a server-side Lua script registered via `defineScript()` in `src/lib/redis.ts` that atomically executes `INCR`, conditional `EXPIRE` (only on first increment), and `TTL` in a single Redis roundtrip. The script is registered on the Redis client via the `scripts` option, enabling automatic `EVALSHA` execution with transparent `NOSCRIPT` fallback to `EVAL`.
+
+```lua
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+return { count, redis.call('TTL', KEYS[1]) }
+```
+
+### Rationale
+
+- **Atomicity:** Single Lua execution guarantees `INCR` + `EXPIRE` are never partially applied.
+- **Performance:** `EVALSHA` sends only the SHA1 digest after initial script caching, reducing network payload on repeated calls.
+- **Fail-Safe:** `defineScript` handles `NOSCRIPT` errors transparently, re-uploading the script on Redis restarts.
+
+---
+
+## ADR-051 — Centralized Rate Limit Policy Dictionary
+
+**Status:** Accepted
+
+### Context
+
+Rate limit parameters (window duration, request quota, key strategy) scattered across individual route files creates inconsistency and complicates tuning.
+
+### Decision
+
+Define all rate limit policies as a single typed constant `RATE_LIMIT_POLICIES` in `src/middlewares/rate-limit.ts`, typed via `as const satisfies Record<string, RateLimitPolicy>`. The `rateLimiter(policy)` middleware factory consumes any policy from the dictionary.
+
+| Policy                    | Limit | Window | Key Type | Scope                                       |
+| ------------------------- | ----- | ------ | -------- | ------------------------------------------- |
+| `GLOBAL`                  | 100   | 1 min  | IP       | All routes via `app.use`                    |
+| `HEALTH`                  | 60    | 1 min  | IP       | `GET /health`                               |
+| `SIGNUP`                  | 5     | 15 min | IP       | `POST /auth/signup`                         |
+| `LOGIN`                   | 10    | 1 min  | IP       | `POST /auth/login`                          |
+| `FORGOT_PASSWORD`         | 5     | 15 min | IP       | `POST /auth/forgot-password`                |
+| `CHANGE_PASSWORD`         | 5     | 15 min | User     | `POST /auth/change-password`                |
+| `MFA_VERIFY`              | 10    | 1 min  | IP       | `POST /auth/mfa/verify`                     |
+| `MFA_VERIFY_SETUP`        | 5     | 5 min  | User     | `POST /auth/mfa/setup`, `/mfa/verify-setup` |
+| `ROLE_UPDATE_PERMISSIONS` | 10    | 1 min  | User     | `PUT /roles/:roleName/permissions`          |
+
+### Rationale
+
+- **Single Source of Truth:** All rate limit parameters are visible and auditable in one location.
+- **Type Safety:** `as const satisfies Record<string, RateLimitPolicy>` enables IDE autocompletion while preserving literal types.
+- **Tunable:** Adjusting quotas requires editing one dictionary entry — no route file changes.
+
+---
+
+## ADR-052 — Dual-Key Rate Limiting (IP vs Authenticated User)
+
+**Status:** Accepted
+
+### Context
+
+IP-based rate limiting alone is insufficient for authenticated endpoints. Behind shared networks (NAT, corporate proxies, VPNs), many legitimate users share a single IP address, causing false-positive throttling. Conversely, unauthenticated endpoints have no user identity to key on.
+
+### Decision
+
+Each `RateLimitPolicy` declares a `keyType` (`"ip"` or `"user"`). The middleware resolves the rate limit key as follows:
+
+1. `keyType: "ip"` → Uses `getClientIp(req)` (Express `req.ip`) for unauthenticated public endpoints.
+2. `keyType: "user"` → Uses `req.auth.userId` (populated by `auth` middleware) for authenticated endpoints. Falls back to IP if `req.auth` is unavailable.
+
+Authenticated routes wire `auth` middleware _before_ `rateLimiter` in the Express chain to ensure `req.auth.userId` is resolved.
+
+### Rationale
+
+- **Precision:** Authenticated user-based keys prevent shared-IP false positives in corporate/VPN environments.
+- **Graceful Degradation:** User-keyed policies fall back to IP-based limiting if `req.auth` is unexpectedly absent.
+- **Declarative:** `keyType` is part of the policy definition, not embedded in route wiring logic.
+
+---
+
+## ADR-053 — Zod-Validated Proxy Trust Configuration
+
+**Status:** Accepted
+
+### Context
+
+Express `trust proxy` accepts multiple value types (boolean, integer hop count, CSV subnet strings, or arrays). Passing an invalid or unchecked raw string from `process.env` to `app.set("trust proxy", ...)` causes silent misconfiguration, leading to either IP spoofing vulnerabilities (over-trusting) or incorrect client IP resolution (under-trusting).
+
+### Decision
+
+Validate and transform `TRUST_PROXY` at startup in `src/config/env.ts` using Zod `.transform()`. The transformer coerces the raw string into the correct Express-compatible type:
+
+| Input Value        | Output Type   | Example                            |
+| ------------------ | ------------- | ---------------------------------- |
+| `"false"` / empty  | `false`       | Direct client connections          |
+| `"true"`           | `true`        | Single reverse proxy (e.g., Nginx) |
+| `"2"`              | `2` (integer) | Two proxy hops                     |
+| `"10.0.0.0/8,..."` | `string[]`    | Trusted subnet allowlist           |
+
+Defaults to `"false"` when omitted.
+
+### Rationale
+
+- **Fail-Fast:** Invalid proxy configuration is caught at boot, not during the first user request.
+- **Type-Safe:** `env.TRUST_PROXY` is strongly typed as `boolean | number | string | string[]`, matching the Express `trust proxy` API.
+- **Centralized:** Follows the single-source environment configuration pattern `[ADR-003, ADR-004]`.
+
+---
+
+## ADR-054 — Secure Client IP Resolution via Express `req.ip`
+
+**Status:** Accepted
+
+### Context
+
+Manually parsing `X-Forwarded-For` headers (`req.headers["x-forwarded-for"].split(",")[0]`) is a well-known IP spoofing vulnerability. An attacker can inject a crafted `X-Forwarded-For: 1.2.3.4, attacker-ip` header to bypass IP-based rate limiting or impersonate a different client IP in session metadata.
+
+### Decision
+
+Replace all manual `X-Forwarded-For` parsing with `getClientIp(req)` in `src/common/utils/ip.ts`, which returns `req.ip || "127.0.0.1"`. Express `req.ip` uses the `proxy-addr` module, which walks the proxy chain from right-to-left and only trusts hops explicitly configured via `app.set("trust proxy", ...)` `[ADR-053]`.
+
+### Rationale
+
+- **Spoofing Prevention:** `proxy-addr` validates proxy chain trust boundaries, rejecting untrusted left-most entries that attackers inject.
+- **Consistency:** All IP consumers (rate limiter, session metadata, audit logs) share the same verified IP via a single utility function.
+- **Defense in Depth:** Combined with `TRUST_PROXY` Zod validation `[ADR-053]`, the system rejects both misconfigured trust settings and spoofed headers.

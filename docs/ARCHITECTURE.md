@@ -40,9 +40,11 @@ graph TD
         Express --> Helmet["Helmet & CORS"]
         Helmet --> BodyParser["JSON (16kb Limit) & Cookie Parser"]
         BodyParser --> ReqID["Request ID (Sanitized) & Pino Logger"]
-        ReqID --> Validate["Zod Validation Middleware"]
+        ReqID --> RateLimiter["Global Rate Limiter"]
+        RateLimiter --> Validate["Zod Validation Middleware"]
         Validate --> AuthGuard["Auth Middleware"]
-        AuthGuard --> PermissionGuard["RequireRole / RequirePermission Guard"]
+        AuthGuard --> RouteRL["Route-Level Rate Limiter"]
+        RouteRL --> PermissionGuard["RequireRole / RequirePermission Guard"]
     end
 
     subgraph Feature Module Layer
@@ -52,7 +54,8 @@ graph TD
     end
 
     subgraph Infrastructure Layer
-        Service -->|Permission Lookups / Cache| Redis[("Redis Cache")]
+        RateLimiter -->|Lua EVALSHA Atomic Counters| Redis[("Redis Cache")]
+        Service -->|Permission Lookups / Cache| Redis
         Service -->|AES-256-GCM / Argon2id / SHA-256| CryptoLib["Crypto Library"]
         Repository -->|Prisma 7 ORM| Postgres[("PostgreSQL DB")]
     end
@@ -60,13 +63,13 @@ graph TD
 
 ### Layer Responsibilities
 
-| Layer                   | Primary Responsibility                                                                                                      | Architectural Rule                                                                                    |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| **Middleware Pipeline** | Input parsing (16kb body limit), request tracing/sanitization, schema validation, token verification, RBAC/ABAC guards      | Rejects malformed, oversized, or unauthorized requests before reaching domain controllers.            |
-| **Controller**          | HTTP orchestration, extracting pre-validated input, setting/clearing cookies, returning standard JSON DTOs                  | Must contain zero business logic or SQL queries. Calls services.                                      |
-| **Service**             | Core domain logic, cross-module orchestration, security decisions, MFA verification, session generation, cache invalidation | Independent of Express `req`/`res`. Throws `AppError` subclasses.                                     |
-| **Repository**          | Data access layer using Prisma 7 ORM and database transactions                                                              | Encapsulates all SQL/Prisma operations. Handles `P2002` duplicate errors and executes atomic queries. |
-| **Infrastructure**      | Singletons for Database (Prisma + `pg`), Cache (`node-redis`), Logging (Pino), Crypto (Argon2id, AES-256-GCM)               | Instantiated inside `src/lib/` and shared across modules.                                             |
+| Layer                   | Primary Responsibility                                                                                                                                       | Architectural Rule                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| **Middleware Pipeline** | Input parsing (16kb body limit), request tracing/sanitization, global and route-level rate limiting, schema validation, token verification, RBAC/ABAC guards | Rejects malformed, oversized, rate-limited, or unauthorized requests before reaching domain controllers. |
+| **Controller**          | HTTP orchestration, extracting pre-validated input, setting/clearing cookies, returning standard JSON DTOs                                                   | Must contain zero business logic or SQL queries. Calls services.                                         |
+| **Service**             | Core domain logic, cross-module orchestration, security decisions, MFA verification, session generation, cache invalidation                                  | Independent of Express `req`/`res`. Throws `AppError` subclasses.                                        |
+| **Repository**          | Data access layer using Prisma 7 ORM and database transactions                                                                                               | Encapsulates all SQL/Prisma operations. Handles `P2002` duplicate errors and executes atomic queries.    |
+| **Infrastructure**      | Singletons for Database (Prisma + `pg`), Cache (`node-redis`), Logging (Pino), Crypto (Argon2id, AES-256-GCM)                                                | Instantiated inside `src/lib/` and shared across modules.                                                |
 
 ---
 
@@ -290,6 +293,15 @@ sequenceDiagram
    - Multi-target Zod validation (`ValidationTarget.BODY`, `PARAMS`, `QUERY`) strips undeclared parameters to prevent mass assignment `[ADR-026]`. Array deduplication via Zod `.transform()` normalizes inputs `[ADR-038]`.
    - Explicit `16kb` body size limit on `express.json()` protects against payload memory consumption `[ADR-044]`.
    - `X-Request-Id` header sanitization strips control/newline characters (`\r\n`) and caps length at 128 chars while preserving distributed trace context `[ADR-043]`.
+6. **Rate Limiting & Anti-Abuse**:
+   - Multi-tiered Redis-backed rate limiting using atomic Lua scripting (`INCR` + conditional `EXPIRE` + `TTL` in a single `EVALSHA` roundtrip) `[ADR-050]`.
+   - Centralized `RATE_LIMIT_POLICIES` dictionary defines per-endpoint quotas and windows. Global layer (100 req/min per IP) protects all routes; route-level policies protect sensitive endpoints individually `[ADR-051]`.
+   - Dual-key strategy: IP-based keys for unauthenticated endpoints, authenticated `userId`-based keys for protected endpoints to prevent shared-network false positives `[ADR-052]`.
+   - IETF-compliant `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` headers on all responses.
+   - Fail-open resilience: Redis outages bypass the rate limiter transparently, preventing legitimate traffic from being blocked by infrastructure failures.
+7. **Proxy Trust & IP Security**:
+   - `TRUST_PROXY` environment variable validated and type-coerced at startup via Zod `.transform()` (supports `boolean`, integer hop count, or subnet arrays) `[ADR-053]`.
+   - All client IP resolution uses `req.ip` (Express `proxy-addr` module) instead of manual `X-Forwarded-For` parsing, preventing IP spoofing attacks `[ADR-054]`.
 
 ### Infrastructure Resilience & Observability
 
