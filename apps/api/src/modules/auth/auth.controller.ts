@@ -2,7 +2,11 @@ import type { Request, Response } from "express";
 import { asyncHandler } from "../../common/errors/index.js";
 import { authService } from "./auth.service.js";
 import { ApiResponse } from "../../common/responses/index.js";
-import { setAuthCookies, clearAuthCookies } from "../../common/utils/index.js";
+import {
+  setAuthCookies,
+  clearAuthCookies,
+  getClientIp,
+} from "../../common/utils/index.js";
 
 const signup = asyncHandler(async (req: Request, res: Response) => {
   await authService.signup(req.body);
@@ -35,7 +39,7 @@ const resendVerificationToken = asyncHandler(
 );
 
 const login = asyncHandler(async (req: Request, res: Response) => {
-  const ipAddress = req.ip;
+  const ipAddress = getClientIp(req);
   const userAgent = req.header("user-agent");
 
   const result = await authService.login(req.body, ipAddress, userAgent);
@@ -57,13 +61,15 @@ const login = asyncHandler(async (req: Request, res: Response) => {
 const refreshToken = asyncHandler(async (req: Request, res: Response) => {
   const refreshToken = req.cookies.refreshToken;
 
-  const ipAddress = req.ip;
+  const ipAddress = getClientIp(req);
   const userAgent = req.header("user-agent");
 
+  // Cannot pass the required parameter (ipAddress) after the optional parameters
+  // So, passing ipAddress first then userAgent and refreshToken
   const authTokens = await authService.refreshToken(
-    refreshToken,
     ipAddress,
     userAgent,
+    refreshToken,
   );
 
   setAuthCookies(res, authTokens);
@@ -171,7 +177,7 @@ const mfaVerifySetup = asyncHandler(async (req: Request, res: Response) => {
 });
 
 const mfaVerifyLogin = asyncHandler(async (req: Request, res: Response) => {
-  const ipAddress = req.ip;
+  const ipAddress = getClientIp(req);
   const userAgent = req.header("user-agent");
 
   const result = await authService.mfaVerifyLogin(

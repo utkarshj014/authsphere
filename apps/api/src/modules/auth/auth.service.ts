@@ -45,7 +45,7 @@ import { env } from "../../config/env.js";
 const generateAuthTokensAndSession = async (
   userId: string,
   roleName: RoleName,
-  ipAddress?: string,
+  ipAddress: string,
   userAgent?: string,
   existingSessionId?: string,
 ): Promise<AuthTokens> => {
@@ -68,8 +68,8 @@ const generateAuthTokensAndSession = async (
   const sessionPayload = {
     tokenHash: refreshTokenHash,
     expiresAt: sessionExpiresAt,
-    ...(ipAddress !== undefined ? { ipAddress } : {}),
-    ...(userAgent !== undefined ? { userAgent } : {}),
+    ipAddress,
+    ...(userAgent ? { userAgent } : {}),
   };
 
   if (existingSessionId) {
@@ -192,7 +192,7 @@ const resendVerificationToken = async (input: ResendVerificationTokenInput) => {
 
 const login = async (
   input: LoginInput,
-  ipAddress?: string,
+  ipAddress: string,
   userAgent?: string,
 ): Promise<
   | { mfaRequired: false; tokens: AuthTokens }
@@ -248,9 +248,9 @@ const login = async (
 };
 
 const refreshToken = async (
-  token?: string,
-  ipAddress?: string,
+  ipAddress: string,
   userAgent?: string,
+  token?: string,
 ): Promise<AuthTokens> => {
   if (!token) {
     throw new UnauthorizedError("No refresh token provided");
@@ -494,7 +494,7 @@ const mfaVerifySetup = async (userId: string, input: MfaVerifySetupInput) => {
 
 const mfaVerifyLogin = async (
   input: MfaVerifyLoginInput,
-  ipAddress?: string,
+  ipAddress: string,
   userAgent?: string,
 ): Promise<{
   tokens: AuthTokens;
