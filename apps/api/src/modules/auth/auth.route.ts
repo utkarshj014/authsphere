@@ -11,9 +11,15 @@ import {
 const router = Router();
 
 router
-  .post("/signup", validate(authSchema.signup), authController.signup)
+  .post(
+    "/signup",
+    rateLimiter(RATE_LIMIT_POLICIES.SIGNUP),
+    validate(authSchema.signup),
+    authController.signup,
+  )
   .post(
     "/verify-email",
+    rateLimiter(RATE_LIMIT_POLICIES.VERIFY_EMAIL),
     validate(authSchema.verifyEmail),
     authController.verifyEmail,
   )
@@ -35,7 +41,11 @@ router
     validate(authSchema.login),
     authController.login,
   )
-  .post("/refresh-token", authController.refreshToken)
+  .post(
+    "/refresh-token",
+    rateLimiter(RATE_LIMIT_POLICIES.REFRESH_TOKEN),
+    authController.refreshToken,
+  )
   .post("/logout", authController.logout)
   .post("/logout-all", auth, authController.logoutAll)
   .get("/me", auth, authController.getMe)
@@ -54,10 +64,16 @@ router
   .post(
     "/change-password",
     auth,
+    rateLimiter(RATE_LIMIT_POLICIES.CHANGE_PASSWORD),
     validate(authSchema.changePassword),
     authController.changePassword,
   )
-  .post("/mfa/setup", auth, authController.mfaSetup)
+  .post(
+    "/mfa/setup",
+    auth,
+    rateLimiter(RATE_LIMIT_POLICIES.MFA_VERIFY_SETUP),
+    authController.mfaSetup,
+  )
   .post(
     "/mfa/verify-setup",
     auth,
@@ -74,12 +90,14 @@ router
   .post(
     "/mfa/disable",
     auth,
+    rateLimiter(RATE_LIMIT_POLICIES.MFA_DISABLE),
     validate(authSchema.mfaDisable),
     authController.mfaDisable,
   )
   .post(
     "/mfa/regenerate-recovery-codes",
     auth,
+    rateLimiter(RATE_LIMIT_POLICIES.MFA_REGENERATE_RECOVERY_CODES),
     validate(authSchema.mfaRegenerateRecoveryCodes),
     authController.mfaRegenerateRecoveryCodes,
   );

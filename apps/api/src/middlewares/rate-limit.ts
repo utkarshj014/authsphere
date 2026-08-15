@@ -15,12 +15,47 @@ export interface RateLimitPolicy {
   message?: string;
 }
 
-/** Predefined rate-limiting policy profiles for sensitive auth endpoints */
+/** Predefined rate-limiting policy profiles for application endpoints */
 export const RATE_LIMIT_POLICIES = {
-  LOGIN: { name: "auth-login", limit: 10, windowMs: 60 * 1000, keyType: "ip" },
-  MFA_VERIFY: {
-    name: "auth-mfa-verify",
+  GLOBAL: {
+    name: "global-api",
+    limit: 100,
+    windowMs: 60 * 1000,
+    keyType: "ip",
+  },
+  HEALTH: {
+    name: "health-check",
+    limit: 60,
+    windowMs: 60 * 1000,
+    keyType: "ip",
+  },
+  SIGNUP: {
+    name: "auth-signup",
+    limit: 5,
+    windowMs: 15 * 60 * 1000,
+    keyType: "ip",
+  },
+  VERIFY_EMAIL: {
+    name: "auth-verify-email",
     limit: 10,
+    windowMs: 5 * 60 * 1000,
+    keyType: "ip",
+  },
+  RESEND_VERIFICATION: {
+    name: "auth-resend-verification",
+    limit: 5,
+    windowMs: 15 * 60 * 1000,
+    keyType: "ip",
+  },
+  LOGIN: {
+    name: "auth-login",
+    limit: 10,
+    windowMs: 60 * 1000,
+    keyType: "ip",
+  },
+  REFRESH_TOKEN: {
+    name: "auth-refresh-token",
+    limit: 30,
     windowMs: 60 * 1000,
     keyType: "ip",
   },
@@ -36,16 +71,52 @@ export const RATE_LIMIT_POLICIES = {
     windowMs: 15 * 60 * 1000,
     keyType: "ip",
   },
-  RESEND_VERIFICATION: {
-    name: "auth-resend-verification",
+  CHANGE_PASSWORD: {
+    name: "auth-change-password",
     limit: 5,
     windowMs: 15 * 60 * 1000,
+    keyType: "user",
+  },
+  MFA_VERIFY: {
+    name: "auth-mfa-verify",
+    limit: 10,
+    windowMs: 60 * 1000,
     keyType: "ip",
   },
   MFA_VERIFY_SETUP: {
     name: "auth-mfa-verify-setup",
     limit: 5,
     windowMs: 5 * 60 * 1000,
+    keyType: "user",
+  },
+  MFA_DISABLE: {
+    name: "auth-mfa-disable",
+    limit: 5,
+    windowMs: 15 * 60 * 1000,
+    keyType: "user",
+  },
+  MFA_REGENERATE_RECOVERY_CODES: {
+    name: "auth-mfa-regenerate-codes",
+    limit: 5,
+    windowMs: 15 * 60 * 1000,
+    keyType: "user",
+  },
+  USER_READ: {
+    name: "users-read",
+    limit: 60,
+    windowMs: 60 * 1000,
+    keyType: "user",
+  },
+  USER_CHANGE_ROLE: {
+    name: "users-change-role",
+    limit: 10,
+    windowMs: 60 * 1000,
+    keyType: "user",
+  },
+  ROLE_UPDATE_PERMISSIONS: {
+    name: "roles-update-permissions",
+    limit: 10,
+    windowMs: 60 * 1000,
     keyType: "user",
   },
 } as const satisfies Record<string, RateLimitPolicy>;

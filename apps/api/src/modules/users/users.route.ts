@@ -9,12 +9,18 @@ import { validate, ValidationTarget } from "../../middlewares/validate.js";
 import { usersSchema } from "./users.validation.js";
 import { usersController } from "./users.controller.js";
 
+import {
+  rateLimiter,
+  RATE_LIMIT_POLICIES,
+} from "../../middlewares/rate-limit.js";
+
 const router = Router();
 
 router
   .get(
     "/:id",
     auth,
+    rateLimiter(RATE_LIMIT_POLICIES.USER_READ),
     validate(usersSchema.getUser, ValidationTarget.PARAMS),
     requireSelfOrPermission(PERMISSIONS.USER_READ),
     usersController.getUser,
@@ -22,6 +28,7 @@ router
   .patch(
     "/:id/role",
     auth,
+    rateLimiter(RATE_LIMIT_POLICIES.USER_CHANGE_ROLE),
     validate(usersSchema.getUser, ValidationTarget.PARAMS),
     validate(usersSchema.role, ValidationTarget.BODY),
     requireRole(ROLES.ADMIN),

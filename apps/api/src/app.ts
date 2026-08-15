@@ -14,6 +14,8 @@ import { authRouter } from "./modules/auth/index.js";
 import { usersRouter } from "./modules/users/index.js";
 import { rolesRouter } from "./modules/roles/index.js";
 
+import { rateLimiter, RATE_LIMIT_POLICIES } from "./middlewares/rate-limit.js";
+
 const app = express();
 
 // Configure proxy trust (handles boolean, hop count number, or subnet/IP arrays)
@@ -37,7 +39,10 @@ app.use(requestId);
 // Request Logger Middleware
 app.use(requestLogger);
 
-// Routes
+// Global Rate Limiter Middleware (Defends against API-wide flooding)
+app.use(rateLimiter(RATE_LIMIT_POLICIES.GLOBAL));
+
+// Application Routes
 app.use("/health", healthRouter);
 app.use("/auth", authRouter);
 app.use("/users", usersRouter);
