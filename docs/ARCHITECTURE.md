@@ -40,7 +40,8 @@ graph TD
         Express --> Helmet["Helmet & CORS"]
         Helmet --> BodyParser["JSON (16kb Limit) & Cookie Parser"]
         BodyParser --> ReqID["Request ID (Sanitized) & Pino Logger"]
-        ReqID --> RateLimiter["Global Rate Limiter"]
+        ReqID --> OriginGuard["Origin Validation (State Mutations)"]
+        OriginGuard --> RateLimiter["Global Rate Limiter"]
         RateLimiter --> Validate["Zod Validation Middleware"]
         Validate --> AuthGuard["Auth Middleware"]
         AuthGuard --> RouteRL["Route-Level Rate Limiter"]
@@ -63,13 +64,13 @@ graph TD
 
 ### Layer Responsibilities
 
-| Layer                   | Primary Responsibility                                                                                                                                       | Architectural Rule                                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| **Middleware Pipeline** | Input parsing (16kb body limit), request tracing/sanitization, global and route-level rate limiting, schema validation, token verification, RBAC/ABAC guards | Rejects malformed, oversized, rate-limited, or unauthorized requests before reaching domain controllers. |
-| **Controller**          | HTTP orchestration, extracting pre-validated input, setting/clearing cookies, returning standard JSON DTOs                                                   | Must contain zero business logic or SQL queries. Calls services.                                         |
-| **Service**             | Core domain logic, cross-module orchestration, security decisions, MFA verification, session generation, cache invalidation                                  | Independent of Express `req`/`res`. Throws `AppError` subclasses.                                        |
-| **Repository**          | Data access layer using Prisma 7 ORM and database transactions                                                                                               | Encapsulates all SQL/Prisma operations. Handles `P2002` duplicate errors and executes atomic queries.    |
-| **Infrastructure**      | Singletons for Database (Prisma + `pg`), Cache (`node-redis`), Logging (Pino), Crypto (Argon2id, AES-256-GCM)                                                | Instantiated inside `src/lib/` and shared across modules.                                                |
+| Layer                   | Primary Responsibility                                                                                                                                                                       | Architectural Rule                                                                                                         |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Middleware Pipeline** | Input parsing (16kb body limit), request tracing/sanitization, origin validation on mutations, global and route-level rate limiting, schema validation, token verification, RBAC/ABAC guards | Rejects malformed, oversized, untrusted-origin, rate-limited, or unauthorized requests before reaching domain controllers. |
+| **Controller**          | HTTP orchestration, extracting pre-validated input, setting/clearing cookies, returning standard JSON DTOs                                                                                   | Must contain zero business logic or SQL queries. Calls services.                                                           |
+| **Service**             | Core domain logic, cross-module orchestration, security decisions, MFA verification, session generation, cache invalidation                                                                  | Independent of Express `req`/`res`. Throws `AppError` subclasses.                                                          |
+| **Repository**          | Data access layer using Prisma 7 ORM and database transactions                                                                                                                               | Encapsulates all SQL/Prisma operations. Handles `P2002` duplicate errors and executes atomic queries.                      |
+| **Infrastructure**      | Singletons for Database (Prisma + `pg`), Cache (`node-redis`), Logging (Pino), Crypto (Argon2id, AES-256-GCM)                                                                                | Instantiated inside `src/lib/` and shared across modules.                                                                  |
 
 ---
 
@@ -302,6 +303,10 @@ sequenceDiagram
 7. **Proxy Trust & IP Security**:
    - `TRUST_PROXY` environment variable validated and type-coerced at startup via Zod `.transform()` (supports `boolean`, integer hop count, or subnet arrays) `[ADR-053]`.
    - All client IP resolution uses `req.ip` (Express `proxy-addr` module) instead of manual `X-Forwarded-For` parsing, preventing IP spoofing attacks `[ADR-054]`.
+8. **Resource Isolation & Origin Validation**:
+   - Evaluates all state-changing HTTP requests (`POST`, `PUT`, `PATCH`, `DELETE`) using a hybrid strategy of unforgeable browser `Sec-Fetch-Site` metadata and normalized `Origin`/`Referer` header checking against `env.FRONTEND_URL` `[ADR-055]`.
+   - Fast-paths `same-origin`/`same-site` requests, blocks explicit `cross-site` mutations from untrusted origins, and rejects opaque `Origin: "null"` headers from sandboxed iframe attacks.
+   - Deferred body/cookie parsing pipeline placement drops untrusted requests (403) and rate-limited bursts (429) before JSON parsing or memory allocation.
 
 ### Infrastructure Resilience & Observability
 

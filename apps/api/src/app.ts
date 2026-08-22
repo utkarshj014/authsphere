@@ -15,6 +15,7 @@ import { usersRouter } from "./modules/users/index.js";
 import { rolesRouter } from "./modules/roles/index.js";
 
 import { rateLimiter, RATE_LIMIT_POLICIES } from "./middlewares/rate-limit.js";
+import { originValidation } from "./middlewares/origin-validation.js";
 
 const app = express();
 
@@ -30,17 +31,24 @@ app.use(
   }),
 );
 
-app.use(express.json({ limit: "16kb" }));
-app.use(cookieParser());
-
 // Request ID Middleware
 app.use(requestId);
 
 // Request Logger Middleware
 app.use(requestLogger);
 
-// Global Rate Limiter Middleware (Defends against API-wide flooding)
+// Origin Validation Middleware
+// Guards state-changing requests against untrusted browser origins
+app.use(originValidation);
+
+// Global Rate Limiter Middleware
+// Defends against API-wide flooding
 app.use(rateLimiter(RATE_LIMIT_POLICIES.GLOBAL));
+
+// Body & Cookie Parsers
+// Deferred until after rate-limiting & origin validation to save CPU & memory
+app.use(express.json({ limit: "16kb" }));
+app.use(cookieParser());
 
 // Application Routes
 app.use("/health", healthRouter);

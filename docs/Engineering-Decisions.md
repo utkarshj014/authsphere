@@ -77,6 +77,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
 - [ADR-054: Secure Client IP Resolution via Express `req.ip`](#adr-054--secure-client-ip-resolution-via-express-reqip)
+- [ADR-055: Origin Validation for State-Changing Requests](#adr-055--origin-validation-for-state-changing-requests)
 
 </details>
 
@@ -109,7 +110,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-054)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-055)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -165,6 +166,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
 - [ADR-054: Secure Client IP Resolution via Express `req.ip`](#adr-054--secure-client-ip-resolution-via-express-reqip)
+- [ADR-055: Origin Validation for State-Changing Requests](#adr-055--origin-validation-for-state-changing-requests)
 
 </details>
 
@@ -1497,3 +1499,30 @@ Replace all manual `X-Forwarded-For` parsing with `getClientIp(req)` in `src/com
 - **Spoofing Prevention:** `proxy-addr` validates proxy chain trust boundaries, rejecting untrusted left-most entries that attackers inject.
 - **Consistency:** All IP consumers (rate limiter, session metadata, audit logs) share the same verified IP via a single utility function.
 - **Defense in Depth:** Combined with `TRUST_PROXY` Zod validation `[ADR-053]`, the system rejects both misconfigured trust settings and spoofed headers.
+
+---
+
+## ADR-055 — Resource Isolation & Origin Validation for State-Changing Requests
+
+**Status:** Accepted
+
+### Context
+
+Cross-Site Request Forgery (CSRF) and cross-origin state mutations exploit ambient browser credentials (cookies) to execute actions (`POST`, `PUT`, `PATCH`, `DELETE`). While CORS policies restrict cross-origin response reading, simple HTTP requests (`<form>` POST, body-less `POST`) bypass CORS preflights (`OPTIONS`) entirely, executing state mutations on the server before CORS headers are evaluated. Furthermore, deployment architectures hosting frontends separately from backend APIs require cross-domain cookie transport (`SameSite=None`), making server-side request origin verification mandatory.
+
+### Decision
+
+Implement global `originValidation` middleware (`src/middlewares/origin-validation.ts`) mounted after CORS and logging, but before global rate-limiting and body/cookie parsing:
+
+1. **State-Changing Scope**: Evaluates mutating methods (`POST`, `PUT`, `PATCH`, `DELETE`). Idempotent read methods (`GET`, `HEAD`, `OPTIONS`) pass through immediately.
+2. **Fetch Metadata Fast-Path**: Leverages unforgeable browser `Sec-Fetch-Site` headers — `same-origin` and `same-site` requests pass with 0ms overhead.
+3. **Cross-Site & Opaque Guard**: Explicit `Sec-Fetch-Site: cross-site` requests or opaque/null origins (`Origin: "null"` from sandboxed iframes) are blocked unless the origin explicitly matches `TRUSTED_ORIGIN` (`new URL(env.FRONTEND_URL).origin`).
+4. **Non-Browser Passthrough**: Requests without origin metadata (cURL, Postman, mobile apps) proceed unhindered.
+
+### Rationale
+
+- **Primary CSRF Defense**: Protects state-changing endpoints (e.g. `/auth/logout-all`, `/auth/change-password`) against preflight-bypassing simple POST requests.
+- **Resource Optimization**: Mounted before `express.json()` and `cookieParser()` to drop untrusted requests (403) and floods (429) before memory allocation or JSON/cookie parsing.
+- **Unforgeable Browser Metadata**: Utilizes `Sec-Fetch-Site` headers that JavaScript execution environments cannot manipulate.
+- **Sandboxed Attack Mitigation**: Blocks opaque `Origin: "null"` headers originating from untrusted iframe embeds.
+
