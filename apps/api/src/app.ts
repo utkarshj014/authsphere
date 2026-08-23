@@ -19,10 +19,17 @@ import { originValidation } from "./middlewares/origin-validation.js";
 
 const app = express();
 
-// Configure proxy trust (handles boolean, hop count number, or subnet/IP arrays)
+// Configure proxy trust
+// Handles boolean, hop count number, or subnet/IP arrays
 app.set("trust proxy", env.TRUST_PROXY);
 
-app.use(helmet());
+// Set security headers
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    xFrameOptions: { action: "deny" },
+  }),
+);
 
 app.use(
   cors({

@@ -32,6 +32,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-040: AES-256-GCM Symmetric Encryption for MFA Secrets at Rest](#adr-040--aes-256-gcm-symmetric-encryption-for-mfa-secrets-at-rest)
 - [ADR-042: Refresh Token Cookie Path Scoped to `/auth`](#adr-042--refresh-token-cookie-path-scoped-to-auth)
 - [ADR-044: Explicit JSON Body Size Limit](#adr-044--explicit-json-body-size-limit)
+- [ADR-056: API-Tuned Security Headers via Helmet Configuration](#adr-056--api-tuned-security-headers-via-helmet-configuration)
 
 </details>
 
@@ -110,7 +111,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-055)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-056)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -167,6 +168,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
 - [ADR-054: Secure Client IP Resolution via Express `req.ip`](#adr-054--secure-client-ip-resolution-via-express-reqip)
 - [ADR-055: Origin Validation for State-Changing Requests](#adr-055--origin-validation-for-state-changing-requests)
+- [ADR-056: API-Tuned Security Headers via Helmet Configuration](#adr-056--api-tuned-security-headers-via-helmet-configuration)
 
 </details>
 
@@ -1526,3 +1528,31 @@ Implement global `originValidation` middleware (`src/middlewares/origin-validati
 - **Unforgeable Browser Metadata**: Utilizes `Sec-Fetch-Site` headers that JavaScript execution environments cannot manipulate.
 - **Sandboxed Attack Mitigation**: Blocks opaque `Origin: "null"` headers originating from untrusted iframe embeds.
 
+---
+
+## ADR-056 — API-Tuned Security Headers via Helmet Configuration
+
+**Status:** Accepted
+
+### Context
+
+Default Helmet settings are designed for monolithic server-rendered applications. The default `Cross-Origin-Resource-Policy` (`same-origin`) blocks cross-domain frontends from reading API resources under strict browser COEP/CORP rules. Conversely, default `X-Frame-Options` (`SAMEORIGIN`) is overly permissive for a pure REST API service that never renders HTML frames.
+
+### Decision
+
+Configure `helmet()` in `app.ts` with explicit API-oriented options:
+
+```typescript
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    xFrameOptions: { action: "deny" },
+  }),
+);
+```
+
+### Rationale
+
+- **Cross-Domain API Compatibility:** Setting `crossOriginResourcePolicy: "cross-origin"` allows CORS-whitelisted frontend applications on distinct hostnames/ports to load API resources without browser CORP policy conflicts.
+- **Strict Clickjacking Defense:** Setting `xFrameOptions: "deny"` completely prohibits embedding any API endpoint within an `<iframe>`, providing maximum clickjacking protection for a non-HTML JSON API.
+- **Defensive Defaults:** Preserves all standard Helmet security defaults (`nosniff`, `HSTS`, `no-referrer`, `CSP`) while fine-tuning rules for API boundaries.
