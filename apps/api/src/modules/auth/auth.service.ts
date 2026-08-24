@@ -90,14 +90,14 @@ const verifyMfaCodeOrRecoveryCode = async (
   userMfaEnabled: boolean,
   code: string,
 ): Promise<{ usedRecoveryCode: boolean }> => {
-  if (!userMfaEnabled) {
+  if (!userMfaEnabled || !userMfaSecret) {
     throw new AppError("MFA is not enabled for this account", 400);
   }
 
   let isCodeValid = false;
   let usedRecoveryCode = false;
 
-  if (totp.isTotpCode(code) && userMfaSecret) {
+  if (totp.isTotpCode(code)) {
     const rawSecret = decryptMfaSecret(userMfaSecret);
     const { valid, matchedWindow } = totp.verifyCode(rawSecret, code);
     if (valid && matchedWindow !== undefined) {
