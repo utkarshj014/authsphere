@@ -80,11 +80,13 @@ The database schema is designed around user identity, active sessions, multi-fac
 
 ```mermaid
 erDiagram
-    User ||--o{ Session : "owns active"
+    User ||--o{ Session : "holds active"
     User ||--o| EmailVerificationToken : "has active"
     User ||--o| PasswordResetToken : "has active"
     User ||--o{ MfaRecoveryCode : "owns"
     User ||--o{ MfaChallenge : "has pending"
+    User ||--o{ OAuthAccount : "linked with"
+    User ||--o{ MagicLinkToken : "has pending"
     User }|--|| Role : "assigned"
     Role ||--o{ RolePermission : "has"
     Permission ||--o{ RolePermission : "has"
@@ -100,18 +102,23 @@ erDiagram
         string mfaSecret "AES-256-GCM Encrypted"
         int mfaLastUsedWindow "Monotonic Window Index"
         datetime createdAt
+        datetime updatedAt
     }
 
     Role {
         string id PK "UUIDv7"
         enum name UK "USER | ADMIN"
         string description
+        datetime createdAt
+        datetime updatedAt
     }
 
     Permission {
         string id PK "UUIDv7"
         string name UK "e.g. user.read"
         string description
+        datetime createdAt
+        datetime updatedAt
     }
 
     RolePermission {
@@ -126,6 +133,7 @@ erDiagram
         string ipAddress
         string userAgent
         datetime expiresAt
+        datetime createdAt
     }
 
     EmailVerificationToken {
@@ -133,6 +141,7 @@ erDiagram
         string userId UK,FK
         string tokenHash UK "SHA-256"
         datetime expiresAt
+        datetime createdAt
     }
 
     PasswordResetToken {
@@ -140,6 +149,7 @@ erDiagram
         string userId UK,FK
         string tokenHash UK "SHA-256"
         datetime expiresAt
+        datetime createdAt
     }
 
     MfaRecoveryCode {
@@ -147,12 +157,31 @@ erDiagram
         string userId FK
         string codeHash UK "SHA-256"
         datetime usedAt
+        datetime createdAt
     }
 
     MfaChallenge {
         string id PK "UUIDv7"
         string userId FK
         datetime expiresAt
+        datetime createdAt
+    }
+
+    OAuthAccount {
+        string id PK "UUIDv7"
+        string userId FK
+        enum provider "GOOGLE | GITHUB"
+        string providerId
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    MagicLinkToken {
+        string id PK "UUIDv7"
+        string userId FK
+        string tokenHash UK "SHA-256"
+        datetime expiresAt
+        datetime createdAt
     }
 ```
 
@@ -281,7 +310,7 @@ sequenceDiagram
 1. **Password Security**: Argon2id hashing configured with OWASP parameters (64MB memory, 3 iterations, 4 parallelism). Pre-computed dummy password verification prevents timing attacks on missing accounts `[ADR-022, ADR-031]`.
 2. **MFA Secret Protection**: TOTP secrets are encrypted at rest using **AES-256-GCM** authenticated encryption (`ivHex:authTagHex:ciphertextHex`). The 32-byte key is derived from `env.MFA_ENCRYPTION_KEY` using SHA-256 `[ADR-040]`.
 3. **MFA Replay & Brute-Force Prevention**:
-   - **Ephemeral Challenges**: Login with MFA issues a 5-minute single-use `mfaToken` (`MfaChallenge`), preventing direct TOTP brute-forcing against user IDs `[ADR-045]`.
+   - **Ephemeral Multi-Challenge Architecture**: Login with MFA issues a 5-minute single-use `mfaToken` (`MfaChallenge`), preventing direct TOTP brute-forcing against user IDs while preserving concurrent multi-device/multi-tab login UX `[ADR-045, ADR-057]`.
    - **Monotonic Window Tracking**: `mfaLastUsedWindow` integer tracking in DB prevents TOTP code reuse within 30-second windows and locks out preceding windows `[ADR-046]`.
    - **Single-Use Recovery Codes**: Backup codes (`XXXXX-XXXXX`) stored strictly as SHA-256 digests (`codeHash`), consumed via atomic conditional updates (`usedAt: null`) `[ADR-047]`.
    - **Dual-Factor Credential Protection**: Password reset and password change mandate MFA code verification when `mfaEnabled = true` `[ADR-048]`.

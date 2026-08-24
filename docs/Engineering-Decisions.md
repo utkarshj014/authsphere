@@ -59,6 +59,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-047: SHA-256 Hashed Recovery Codes with Atomic Single-Use Consumption](#adr-047--sha-256-hashed-recovery-codes-with-atomic-single-use-consumption)
 - [ADR-048: Dual-Factor Enforcement on Sensitive Credential Mutations](#adr-048--dual-factor-enforcement-on-sensitive-credential-mutations)
 - [ADR-049: Proactive Low Recovery Code Warning Threshold](#adr-049--proactive-low-recovery-code-warning-threshold)
+- [ADR-057: Ephemeral Multi-Challenge MFA Architecture with Single-Use Invalidation](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation)
 
 </details>
 
@@ -78,7 +79,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
 - [ADR-054: Secure Client IP Resolution via Express `req.ip`](#adr-054--secure-client-ip-resolution-via-express-reqip)
-- [ADR-055: Origin Validation for State-Changing Requests](#adr-055--origin-validation-for-state-changing-requests)
+- [ADR-055: Resource Isolation & Origin Validation for State-Changing Requests](#adr-055--resource-isolation--origin-validation-for-state-changing-requests)
 
 </details>
 
@@ -92,6 +93,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-030: `passwordChangedAt` Audit Timestamp](#adr-030--passwordchangedat-audit-timestamp)
 - [ADR-037: Atomic Role-Permission Replacement via Nested Prisma Mutations](#adr-037--atomic-role-permission-replacement-via-nested-prisma-mutations)
 - [ADR-041: Repository-Level Unique Constraint Error Handling](#adr-041--repository-level-unique-constraint-error-handling)
+- [ADR-058: Entity-Based Timestamp Strategy Across Database Schemas](#adr-058--entity-based-timestamp-strategy-across-database-schemas)
 
 </details>
 
@@ -111,7 +113,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-056)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-058)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -167,8 +169,10 @@ This document records the architectural and engineering decisions made during th
 - [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
 - [ADR-054: Secure Client IP Resolution via Express `req.ip`](#adr-054--secure-client-ip-resolution-via-express-reqip)
-- [ADR-055: Origin Validation for State-Changing Requests](#adr-055--origin-validation-for-state-changing-requests)
+- [ADR-055: Resource Isolation & Origin Validation for State-Changing Requests](#adr-055--resource-isolation--origin-validation-for-state-changing-requests)
 - [ADR-056: API-Tuned Security Headers via Helmet Configuration](#adr-056--api-tuned-security-headers-via-helmet-configuration)
+- [ADR-057: Ephemeral Multi-Challenge MFA Architecture with Single-Use Invalidation](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation)
+- [ADR-058: Entity-Based Timestamp Strategy Across Database Schemas](#adr-058--entity-based-timestamp-strategy-across-database-schemas)
 
 </details>
 
@@ -1556,3 +1560,47 @@ app.use(
 - **Cross-Domain API Compatibility:** Setting `crossOriginResourcePolicy: "cross-origin"` allows CORS-whitelisted frontend applications on distinct hostnames/ports to load API resources without browser CORP policy conflicts.
 - **Strict Clickjacking Defense:** Setting `xFrameOptions: "deny"` completely prohibits embedding any API endpoint within an `<iframe>`, providing maximum clickjacking protection for a non-HTML JSON API.
 - **Defensive Defaults:** Preserves all standard Helmet security defaults (`nosniff`, `HSTS`, `no-referrer`, `CSP`) while fine-tuning rules for API boundaries.
+
+---
+
+## ADR-057 — Ephemeral Multi-Challenge MFA Architecture with Single-Use Invalidation
+
+**Status:** Accepted
+
+### Context
+
+Enforcing a strict 1-to-1 relationship (`userId @unique`) on MFA challenges causes race conditions and UI glitches when users attempt concurrent logins across multiple tabs or devices, as subsequent login attempts overwrite earlier pending challenge tokens. Conversely, unconstrained token records introduce table bloat and orphaned record risks.
+
+### Decision
+
+Maintain `MfaChallenge` as a 1-to-Many entity on `User` in `schema.prisma` with a 5-minute time-to-live (`expiresAt`). Each login attempt issues a unique, cryptographically random `mfaToken` (`id`). Verification (`POST /auth/mfa/verify`) atomically consumes and deletes the specific challenge (`deleteMfaChallenge`). Rate limiting on `/auth/login` (`RATE_LIMIT_POLICIES.LOGIN`) and short expiration windows prevent table flooding.
+
+### Rationale
+
+- **Multi-Device & Multi-Tab Resilience:** Prevents concurrent logins across tabs or devices from invalidating earlier active challenges.
+- **Atomic Single-Use Invalidation:** Deletes the specific `mfaToken` immediately upon successful verification, preventing challenge replay.
+- **DoS & Inflation Mitigation:** Combines short 5-minute expiration windows with IP-based login rate limiting to cap active database challenges per account.
+- **Domain Model Differentiation:** Differentiates multi-session ephemeral challenges (`MfaChallenge`, `Session`) from single-instance identity state flows (`EmailVerificationToken`, `PasswordResetToken`).
+
+---
+
+## ADR-058 — Entity-Based Timestamp Strategy Across Database Schemas
+
+**Status:** Accepted
+
+### Context
+
+Inconsistent timestamp fields across database models (e.g. `EmailVerificationToken` tracking `updatedAt` while `PasswordResetToken` omitted it) create schema noise and unnecessary write overhead. Clear rules are required to standardize timestamp fields based on entity lifecycle semantics.
+
+### Decision
+
+Enforce entity-based timestamp conventions across `schema.prisma`:
+
+1. **Persistent Domain Entities** (`User`, `OAuthAccount`, `Role`, `Permission`): Maintain both `createdAt` and `updatedAt` for full audit traceability.
+2. **Ephemeral Token & Challenge Models** (`EmailVerificationToken`, `PasswordResetToken`, `MagicLinkToken`, `Session`, `MfaChallenge`): Maintain strictly `createdAt` and `expiresAt`, omitting `updatedAt`.
+
+### Rationale
+
+- **Schema Consistency:** Standardizes timestamp conventions across all identity and authentication models.
+- **Write Optimization:** Eliminates redundant `@updatedAt` trigger overhead on short-lived single-use token tables.
+- **Audit Traceability:** Ensures long-lived domain models (`Role`, `Permission`) maintain mutation timestamps for RBAC auditing.
