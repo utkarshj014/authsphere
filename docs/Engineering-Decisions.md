@@ -18,6 +18,8 @@ This document records the architectural and engineering decisions made during th
 - [ADR-019: Standalone Function Export Pattern](#adr-019--standalone-function-export-pattern)
 - [ADR-020: Barrel Index Re-Exports with Explicit ESM Extensions](#adr-020--barrel-index-re-exports-with-explicit-esm-extensions)
 - [ADR-034: Shared Domain Constants via `@authsphere/shared`](#adr-034--shared-domain-constants-via-authsphereshared)
+- [ADR-059: Provider-Agnostic OAuth 2.0 Strategy Pattern](#adr-059--provider-agnostic-oauth-20-strategy-pattern)
+- [ADR-063: Higher-Order Controller Factories for Provider-Agnostic OAuth Handlers](#adr-063--higher-order-controller-factories-for-provider-agnostic-oauth-handlers)
 
 </details>
 
@@ -33,6 +35,9 @@ This document records the architectural and engineering decisions made during th
 - [ADR-042: Refresh Token Cookie Path Scoped to `/auth`](#adr-042--refresh-token-cookie-path-scoped-to-auth)
 - [ADR-044: Explicit JSON Body Size Limit](#adr-044--explicit-json-body-size-limit)
 - [ADR-056: API-Tuned Security Headers via Helmet Configuration](#adr-056--api-tuned-security-headers-via-helmet-configuration)
+- [ADR-060: Redis-Backed Ephemeral OAuth State with Atomic Single-Use Invalidation](#adr-060--redis-backed-ephemeral-oauth-state-with-atomic-single-use-invalidation)
+- [ADR-062: Verified Email Enforcement for Social Identity Providers](#adr-062--verified-email-enforcement-for-social-identity-providers)
+- [ADR-065: Single-Query Atomic Magic Link Token Consumption via `DELETE ... RETURNING`](#adr-065--single-query-atomic-magic-link-token-consumption-via-delete--returning)
 
 </details>
 
@@ -48,6 +53,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-028: Password Change Distinctness Enforcement](#adr-028--password-change-distinctness-enforcement)
 - [ADR-029: `deleteMany` for Idempotent Session Deletion](#adr-029--deletemany-for-idempotent-session-deletion)
 - [ADR-039: Centralized Auth Token and Session Generation](#adr-039--centralized-auth-token-and-session-generation)
+- [ADR-061: Strict Conflict-Guarded OAuth Identity Resolution Workflow](#adr-061--strict-conflict-guarded-oauth-identity-resolution-workflow)
 
 </details>
 
@@ -60,6 +66,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-048: Dual-Factor Enforcement on Sensitive Credential Mutations](#adr-048--dual-factor-enforcement-on-sensitive-credential-mutations)
 - [ADR-049: Proactive Low Recovery Code Warning Threshold](#adr-049--proactive-low-recovery-code-warning-threshold)
 - [ADR-057: Ephemeral Multi-Challenge MFA Architecture with Single-Use Invalidation](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation)
+- [ADR-066: Multi-Tier Rate Limiting for OAuth Callbacks and Passwordless Magic Links](#adr-066--multi-tier-rate-limiting-for-oauth-callbacks-and-passwordless-magic-links)
 
 </details>
 
@@ -94,6 +101,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-037: Atomic Role-Permission Replacement via Nested Prisma Mutations](#adr-037--atomic-role-permission-replacement-via-nested-prisma-mutations)
 - [ADR-041: Repository-Level Unique Constraint Error Handling](#adr-041--repository-level-unique-constraint-error-handling)
 - [ADR-058: Entity-Based Timestamp Strategy Across Database Schemas](#adr-058--entity-based-timestamp-strategy-across-database-schemas)
+- [ADR-064: 1-to-1 Database Relation and Upsert Invalidation for Magic Link Tokens](#adr-064--1-to-1-database-relation-and-upsert-invalidation-for-magic-link-tokens)
 
 </details>
 
@@ -113,7 +121,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-058)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-066)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -173,6 +181,14 @@ This document records the architectural and engineering decisions made during th
 - [ADR-056: API-Tuned Security Headers via Helmet Configuration](#adr-056--api-tuned-security-headers-via-helmet-configuration)
 - [ADR-057: Ephemeral Multi-Challenge MFA Architecture with Single-Use Invalidation](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation)
 - [ADR-058: Entity-Based Timestamp Strategy Across Database Schemas](#adr-058--entity-based-timestamp-strategy-across-database-schemas)
+- [ADR-059: Provider-Agnostic OAuth 2.0 Strategy Pattern](#adr-059--provider-agnostic-oauth-20-strategy-pattern)
+- [ADR-060: Redis-Backed Ephemeral OAuth State with Atomic Single-Use Invalidation](#adr-060--redis-backed-ephemeral-oauth-state-with-atomic-single-use-invalidation)
+- [ADR-061: Strict Conflict-Guarded OAuth Identity Resolution Workflow](#adr-061--strict-conflict-guarded-oauth-identity-resolution-workflow)
+- [ADR-062: Verified Email Enforcement for Social Identity Providers](#adr-062--verified-email-enforcement-for-social-identity-providers)
+- [ADR-063: Higher-Order Controller Factories for Provider-Agnostic OAuth Handlers](#adr-063--higher-order-controller-factories-for-provider-agnostic-oauth-handlers)
+- [ADR-064: 1-to-1 Database Relation and Upsert Invalidation for Magic Link Tokens](#adr-064--1-to-1-database-relation-and-upsert-invalidation-for-magic-link-tokens)
+- [ADR-065: Single-Query Atomic Magic Link Token Consumption via `DELETE ... RETURNING`](#adr-065--single-query-atomic-magic-link-token-consumption-via-delete--returning)
+- [ADR-066: Multi-Tier Rate Limiting for OAuth Callbacks and Passwordless Magic Links](#adr-066--multi-tier-rate-limiting-for-oauth-callbacks-and-passwordless-magic-links)
 
 </details>
 
@@ -1604,3 +1620,270 @@ Enforce entity-based timestamp conventions across `schema.prisma`:
 - **Schema Consistency:** Standardizes timestamp conventions across all identity and authentication models.
 - **Write Optimization:** Eliminates redundant `@updatedAt` trigger overhead on short-lived single-use token tables.
 - **Audit Traceability:** Ensures long-lived domain models (`Role`, `Permission`) maintain mutation timestamps for RBAC auditing.
+
+---
+
+## ADR-059 — Provider-Agnostic OAuth 2.0 Strategy Pattern
+
+**Status:** Accepted
+
+### Context
+
+Integrating diverse third-party identity providers (Google, GitHub, and future social platforms) requires managing differing authorization endpoints, token exchange formats, and user profile schemas. Embedding provider-specific HTTP logic directly within service workflows creates tight coupling and makes introducing new identity providers error-prone.
+
+### Decision
+
+Define a unified `OAuthProviderStrategy` interface in `oauth.types.ts` implemented by isolated provider singletons (`googleOAuthProvider`, `githubOAuthProvider`). Each strategy encapsulates provider-specific endpoints and normalizes external user identity into a standard `OAuthProfile` DTO:
+
+```typescript
+export interface OAuthProviderStrategy {
+  getAuthorizationUrl(state: string): Promise<URL>;
+  getUserProfile(code: string): Promise<OAuthProfile>;
+}
+```
+
+The core service (`oauth.service.ts`) dispatches requests dynamically via a provider strategy dictionary (`getOAuthStrategy(provider)`).
+
+### Rationale
+
+- **Extensibility & Decoupling:** New OAuth providers require only implementing `OAuthProviderStrategy` without modifying core session, token, or controller layers.
+- **Normalized Domain Contract:** Standardizes divergent provider payloads (e.g., Google OpenID `sub` vs GitHub numeric `id`) into a consistent `OAuthProfile`.
+- **Isolated Error Boundaries:** Provider-specific HTTP failure modes and API errors remain encapsulated within their respective strategy classes.
+
+---
+
+## ADR-060 — Redis-Backed Ephemeral OAuth State with Atomic Single-Use Invalidation
+
+**Status:** Accepted
+
+### Context
+
+OAuth 2.0 authorization flows require cryptographic state parameters to prevent Cross-Site Request Forgery (CSRF). Persisting state in browser cookies introduces cross-domain edge cases, while database storage causes unnecessary I/O overhead. Furthermore, authorization codes and state parameters must be consumed exactly once to prevent replay attacks.
+
+### Decision
+
+Store 32-byte cryptographically random state strings in Redis under `oauth:state:<state>` with a strict 10-minute TTL. The state value encapsulates flow metadata (`OAuthStateData`: `provider` and optional `userId`). During authorization callback processing, state is atomically fetched and deleted via Redis `GETDEL` (`redis.getDel`) before verifying provider matching:
+
+```typescript
+export const consumeOAuthState = async (
+  state: string,
+  expectedProvider: OAuthProviderName,
+): Promise<OAuthStateData> => {
+  const rawData = await redis.getDel(`oauth:state:${state}`);
+  if (!rawData)
+    throw new AppError(
+      "Invalid, expired, or already consumed OAuth state",
+      400,
+    );
+  const data = JSON.parse(rawData) as OAuthStateData;
+  if (data.provider !== expectedProvider)
+    throw new AppError("OAuth state provider mismatch", 400);
+  return data;
+};
+```
+
+### Rationale
+
+- **Zero-Window Replay Protection:** Atomic `GETDEL` retrieval and deletion guarantees state can never be reused across concurrent callback attempts.
+- **Cross-Provider Mismatch Prevention:** Enforces that state issued for one provider cannot be used to authenticate against another.
+- **In-Memory Performance:** Eliminates database writes for ephemeral authentication flows, automatically expiring stale or abandoned attempts.
+
+---
+
+## ADR-061 — Strict Conflict-Guarded OAuth Identity Resolution Workflow
+
+**Status:** Accepted
+
+### Context
+
+Social login authentication flows interact with existing local credentials. Automatically linking third-party OAuth identities to existing user accounts solely by email address exposes users to pre-account takeover and identity collision vulnerabilities if an attacker registers an unverified third-party account with a victim's email address.
+
+### Decision
+
+Enforce a strict four-case identity resolution matrix in `oauth.service.ts` (`handleOAuthCallback`):
+
+| Flow Case                                  | Conditions                                         | Resolution Action                                                                                                           |
+| :----------------------------------------- | :------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------- |
+| **Case 1: Existing Link**                  | `OAuthAccount` exists for `(provider, providerId)` | Authenticate linked user (triggers `MfaChallenge` if `user.mfaEnabled`); reject (`409 Conflict`) if `state.userId` differs. |
+| **Case 2: Account Linking**                | `state.userId` present & account not linked        | Link `OAuthAccount` to authenticated user.                                                                                  |
+| **Case 3: Unauthenticated Email Conflict** | Email exists in DB without `OAuthAccount` link     | Reject (`409 Conflict`), requiring user to log in with password and link in settings.                                       |
+| **Case 4: New User Registration**          | Email does not exist in DB                         | Atomically create `User` (`isEmailVerified: true`) and `OAuthAccount` in a single transaction.                              |
+
+### Rationale
+
+- **Anti-Account Takeover (ATO):** Prohibits implicit auto-linking on unauthenticated flows, requiring explicit credential validation before associating social accounts.
+- **Unified MFA Enforcement:** Guarantees that users with MFA enabled (`user.mfaEnabled === true`) cannot bypass secondary authentication via social login.
+- **Explicit User Consent:** Account linking requires an active session (`state.userId`), preventing unauthorized account associations.
+- **Transactional Atomicity:** User and OAuth account creation execute in a single Prisma write, eliminating orphaned records.
+
+---
+
+## ADR-062 — Verified Email Enforcement for Social Identity Providers
+
+**Status:** Accepted
+
+### Context
+
+Third-party OAuth providers handle email privacy and verification differently. GitHub allows users to keep their email private (returning `null` in public user profiles) or configure unverified email addresses. Trusting unverified emails or failing when public profile email is absent introduces security vulnerabilities and broken authentication flows.
+
+### Decision
+
+Enforce email verification guarantees across all OAuth provider implementations:
+
+1. **Google (`google.provider.ts`):** Validates `email_verified: true` from Google OpenID userinfo, rejecting unverified accounts with `400 Bad Request`.
+2. **GitHub (`github.provider.ts`):** Always queries `https://api.github.com/user/emails` using the OAuth access token. Filters strictly for `verified: true`, prioritizing the primary verified email, and falls back to any verified email. If no verified email exists, the callback is rejected with `400 Bad Request`.
+
+### Rationale
+
+- **Impersonation Defense:** Guarantees accounts created via social providers have cryptographically verified ownership of the claimed email address.
+- **Seamless GitHub Integration:** Resolves private GitHub email addresses without requiring users to make their primary email publicly visible.
+- **Uniform Identity Invariant:** Enforces `isEmailVerified: true` consistency across all social authentication channels.
+
+---
+
+## ADR-063 — Higher-Order Controller Factories for Provider-Agnostic OAuth Handlers
+
+**Status:** Accepted
+
+### Context
+
+OAuth initiation and callback handlers perform identical HTTP-layer responsibilities across providers: extracting IP and user-agent metadata, reading query parameters, setting auth cookies, and sending standard JSON responses. Writing separate controller functions for each provider duplicates routing and cookie handling boilerplate.
+
+### Decision
+
+Implement higher-order controller factories `initiateOAuthHandler` and `oauthCallbackHandler` in `oauth.controller.ts` parameterised by `OAuthProviderName`:
+
+```typescript
+export const initiateOAuthHandler = (provider: OAuthProviderName) =>
+  asyncHandler(async (req: Request, res: Response) => {
+    const redirectUrl = await initiateOAuth(provider, req.auth?.userId);
+    return res.redirect(redirectUrl);
+  });
+
+export const oauthCallbackHandler = (provider: OAuthProviderName) =>
+  asyncHandler(async (req: Request, res: Response) => {
+    const { tokens } = await handleOAuthCallback(
+      provider,
+      req.query.code as string,
+      req.query.state as string,
+      getClientIp(req),
+      req.header("user-agent"),
+    );
+    setAuthCookies(res, tokens);
+    return ApiResponse.success(
+      res,
+      null,
+      `Authenticated successfully via ${provider} OAuth`,
+      200,
+    );
+  });
+```
+
+Specific provider controllers (`googleInitiate`, `googleCallback`, `githubInitiate`, `githubCallback`) are instantiated and exported for explicit route binding.
+
+### Rationale
+
+- **DRY Controller Layer:** Eliminates duplicated request parsing, cookie assignment, and response formatting across OAuth routes.
+- **Explicit Route Mounting:** Retains named controller exports for declarative and transparent route definitions in `auth.route.ts`.
+- **Consistent Response Schema:** Ensures all OAuth provider flows return identical cookie structures and response DTOs.
+
+---
+
+## ADR-064 — 1-to-1 Database Relation and Upsert Invalidation for Magic Link Tokens
+
+**Status:** Accepted
+
+### Context
+
+Passwordless magic link authentication allows users to request login links via email. A 1-to-many relationship allows multiple valid tokens to accumulate per user, increasing attack surface and causing database bloat. Furthermore, requesting a new link should invalidate previously issued links sent to the user's inbox.
+
+### Decision
+
+Model `MagicLinkToken` as a strict 1-to-1 relationship on `User` in `schema.prisma` with a `userId @unique` constraint:
+
+```prisma
+model MagicLinkToken {
+  id        String   @id @default(uuid(7))
+  tokenHash String   @unique @map("token_hash")
+  userId    String   @unique @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([expiresAt])
+  @@map("magic_link_tokens")
+}
+```
+
+Token creation (`createMagicLinkToken`) uses Prisma `upsert`, atomically replacing the existing token hash and updating `expiresAt` (15-minute TTL).
+
+### Rationale
+
+- **Automatic Prior Link Revocation:** Requesting a fresh magic link immediately invalidates any prior link sent to the user's inbox.
+- **Zero Orphan Accumulation:** Limits active tokens to at most one per user, preventing table bloat without requiring cron cleanup for superseded tokens.
+- **Model Uniformity:** Aligns `MagicLinkToken` with `EmailVerificationToken` and `PasswordResetToken` in schema structure and lifecycle semantics.
+
+---
+
+## ADR-065 — Single-Query Atomic Magic Link Token Consumption via `DELETE ... RETURNING`
+
+**Status:** Accepted
+
+### Context
+
+Consuming single-use authentication tokens via separate `findFirst` and `delete` operations introduces a race condition where concurrent requests using the same token can both read the record as valid before either request deletes it. Wrapping queries in interactive transactions adds multi-step database roundtrips.
+
+### Decision
+
+Consume and delete magic link tokens in a single atomic SQL statement in `auth.repository.ts` via `prisma.magicLinkToken.delete`:
+
+```typescript
+const findAndConsumeMagicLinkToken = async (tokenHash: string) => {
+  try {
+    const token = await prisma.magicLinkToken.delete({
+      where: { tokenHash },
+      include: { user: { include: { role: true } } },
+    });
+    return token.expiresAt < new Date() ? null : token;
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2025"
+    )
+      return null;
+    throw error;
+  }
+};
+```
+
+### Rationale
+
+- **Strict Atomic Single-Use:** PostgreSQL row-level locking during `DELETE` guarantees exactly one request can ever retrieve and consume a token.
+- **Minimized Database Roundtrips:** Reduces verification latency from two queries down to one atomic roundtrip (`DELETE ... WHERE token_hash = $1 RETURNING ...`).
+- **Self-Cleaning Expired Records:** Expired tokens are purged from the database upon consumption attempt.
+
+---
+
+## ADR-066 — Multi-Tier Rate Limiting for OAuth Callbacks and Passwordless Magic Links
+
+**Status:** Accepted
+
+### Context
+
+OAuth initiation, OAuth callback redirection, magic link request, and magic link verification endpoints present distinct attack surfaces. Without specialized rate limiting, attackers can exhaust third-party OAuth provider API quotas, spam user inboxes with magic links, or attempt brute-force token verification.
+
+### Decision
+
+Add specialized rate limit policies to `RATE_LIMIT_POLICIES` in `src/middlewares/rate-limit.ts`:
+
+| Policy               | Quota | Window | Key Type | Target Endpoints                     |
+| :------------------- | :---- | :----- | :------- | :----------------------------------- |
+| `OAUTH_INITIATE`     | 20    | 1 min  | IP       | `GET /auth/oauth/:provider`          |
+| `OAUTH_CALLBACK`     | 20    | 1 min  | IP       | `GET /auth/oauth/:provider/callback` |
+| `MAGIC_LINK_REQUEST` | 5     | 15 min | IP       | `POST /auth/magic-link`              |
+| `MAGIC_LINK_VERIFY`  | 10    | 5 min  | IP       | `POST /auth/magic-link/verify`       |
+
+### Rationale
+
+- **Abuse Prevention:** Throttles outbound email dispatch to protect SMTP quotas and prevent inbox flooding.
+- **Provider API Quota Protection:** Prevents rapid authorization code exchanges from triggering third-party OAuth rate limits.
+- **Brute-Force Mitigation:** Restricts magic link token submission attempts to 10 per 5 minutes per IP address.

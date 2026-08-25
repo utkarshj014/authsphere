@@ -86,7 +86,7 @@ erDiagram
     User ||--o{ MfaRecoveryCode : "owns"
     User ||--o{ MfaChallenge : "has pending"
     User ||--o{ OAuthAccount : "linked with"
-    User ||--o{ MagicLinkToken : "has pending"
+    User ||--o| MagicLinkToken : "has active"
     User }|--|| Role : "assigned"
     Role ||--o{ RolePermission : "has"
     Permission ||--o{ RolePermission : "has"
@@ -178,7 +178,7 @@ erDiagram
 
     MagicLinkToken {
         string id PK "UUIDv7"
-        string userId FK
+        string userId UK,FK
         string tokenHash UK "SHA-256"
         datetime expiresAt
         datetime createdAt
@@ -301,6 +301,89 @@ sequenceDiagram
     Controller-->>Admin: 200 OK { success: true, data }
 ```
 
+### 4.4 OAuth 2.0 Authentication & Identity Resolution Flow
+
+Social login authentication and account linking utilize provider strategies, Redis state validation, and strict conflict guards:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Client Browser
+    participant API as AuthSphere API
+    participant Redis as Redis Cache
+    participant Provider as Google / GitHub
+    participant DB as PostgreSQL
+
+    Note over User, Provider: Phase 1 — Flow Initiation
+    User->>API: GET /auth/oauth/:provider (optional accessToken cookie)
+    API->>API: optionalAuth: resolve userId if authenticated
+    API->>Redis: SET oauth:state:<token> { provider, userId? } EX 600
+    API-->>User: 302 Redirect to Provider Authorization URL
+
+    Note over User, Provider: Phase 2 — External Consent & Redirect
+    User->>Provider: User authenticates & grants scopes
+    Provider-->>User: 302 Redirect to /auth/oauth/:provider/callback?code=...&state=...
+
+    Note over User, DB: Phase 3 — Callback, Verification & Identity Resolution
+    User->>API: GET /auth/oauth/:provider/callback?code=...&state=...
+    API->>Redis: GETDEL oauth:state:<token> (Atomic Single-Use)
+    API->>Provider: Exchange authorization code for access token & profile
+    Provider-->>API: Normalized OAuthProfile (verified email, providerId)
+    API->>DB: Query OAuthAccount(provider, providerId) & User by email
+    alt Returning Linked User
+        API->>DB: Create Session via generateAuthTokensAndSession()
+    else Authenticated Account Link (state.userId present)
+        API->>DB: Create OAuthAccount linked to current user
+        API->>DB: Create Session via generateAuthTokensAndSession()
+    else Unauthenticated Existing Email Conflict
+        API-->>User: 409 Conflict ("Account exists. Log in with password to link")
+    else New User Registration
+        API->>DB: Atomic Transaction: Create User (isEmailVerified: true) + OAuthAccount
+        API->>DB: Create Session via generateAuthTokensAndSession()
+    end
+    API-->>User: Set-Cookie: accessToken, refreshToken + 200 OK
+```
+
+### 4.5 Passwordless Magic Link Authentication Flow
+
+Passwordless authentication provides enumeration-safe token issuance and atomic single-query consumption:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Client Browser
+    participant API as AuthSphere API
+    participant DB as PostgreSQL
+    participant Email as Email Service
+
+    Note over User, Email: Step 1: Magic Link Request Flow
+    User->>API: POST /auth/magic-link { email }
+    API->>API: Rate Limiter (5/15m) & Input Validation
+    API->>DB: Find User by Email
+    alt User Found
+        API->>API: Generate 32-byte crypto token & SHA-256 hash
+        API->>DB: UPSERT MagicLinkToken (userId @unique, 15m TTL)
+        API->>Email: sendMagicLinkEmail(rawToken, user.email)
+    else User Not Found
+        Note over API: Early Return (Silent Enumeration Guard)
+    end
+    API-->>User: 200 OK "If an account exists with this email, a magic link has been sent"
+
+    Note over User, DB: Step 2: Magic Link Verification & Session Issuance
+    User->>API: POST /auth/magic-link/verify { token }
+    API->>API: Rate Limiter (10/5m) & hashToken(input.token)
+    API->>DB: DELETE FROM magic_link_tokens WHERE token_hash = $1 RETURNING user, role
+    alt Token Invalid / Expired / Already Consumed
+        API-->>User: 400 Bad Request ("Invalid or expired magic link token")
+    else Token Valid & MFA Enabled (user.mfaEnabled === true)
+        API->>DB: Create MfaChallenge (UUIDv7 mfaToken, 5m TTL)
+        API-->>User: 200 OK { mfaRequired: true, mfaToken }
+    else Token Valid & MFA Disabled
+        API->>DB: Create Session via generateAuthTokensAndSession()
+        API-->>User: Set-Cookie: accessToken, refreshToken + 200 OK "Login successful via Magic Link"
+    end
+```
+
 ---
 
 ## 5. Security & Infrastructure Architecture
@@ -319,25 +402,34 @@ sequenceDiagram
    - Long-lived Refresh Tokens (30d) tied to database sessions. Store only `SHA-256` token hashes `[ADR-012]`.
    - **Refresh Token Rotation (RTR)** with reuse detection revokes sessions immediately upon detecting token replay `[ADR-014]`.
    - Delivered via `httpOnly`, `secure`, `sameSite: "lax"` cookies. Refresh token cookie scoped to path `/auth` (covering `/auth/refresh-token` and `/auth/logout`) `[ADR-033, ADR-042]`.
-5. **Input Sanitization & Request Hardening**:
+5. **OAuth 2.0 & Social Identity Security**:
+   - **Provider-Agnostic Strategy**: Strategy interfaces (`OAuthProviderStrategy`) isolate provider APIs and normalize profile payloads `[ADR-059]`. Higher-order controller factories eliminate route boilerplate `[ADR-063]`.
+   - **Redis Ephemeral State**: Cryptographic 32-byte state tokens in Redis (10m TTL) consumed atomically via `GETDEL` (`redis.getDel`) prevent CSRF and replay attacks `[ADR-060]`.
+   - **Anti-Account Takeover Identity Resolution**: Prohibits unauthenticated auto-linking by email alone; requires explicit credentials to link third-party accounts (`409 Conflict`) `[ADR-061]`.
+   - **Mandatory Email Verification**: Enforces `email_verified: true` across providers, resolving private verified GitHub emails via `/user/emails` `[ADR-062]`.
+6. **Passwordless Magic Link Security**:
+   - **1-1 Token Relation & Prior Link Revocation**: Enforces `userId @unique` on `MagicLinkToken`, automatically invalidating superseded links on re-request `[ADR-064]`.
+   - **Single-Query Atomic Deletion**: Consumes and deletes tokens in a single SQL statement (`DELETE FROM magic_link_tokens WHERE token_hash = $1 RETURNING ...`), eliminating concurrent race conditions `[ADR-065]`.
+   - **Enumeration-Safe Policy**: Requests return identical generic responses regardless of account existence `[ADR-023]`.
+7. **Input Sanitization & Request Hardening**:
    - Multi-target Zod validation (`ValidationTarget.BODY`, `PARAMS`, `QUERY`) strips undeclared parameters to prevent mass assignment `[ADR-026]`. Array deduplication via Zod `.transform()` normalizes inputs `[ADR-038]`.
    - Explicit `16kb` body size limit on `express.json()` protects against payload memory consumption `[ADR-044]`.
    - `X-Request-Id` header sanitization strips control/newline characters (`\r\n`) and caps length at 128 chars while preserving distributed trace context `[ADR-043]`.
-6. **Rate Limiting & Anti-Abuse**:
+8. **Rate Limiting & Anti-Abuse**:
    - Multi-tiered Redis-backed rate limiting using atomic Lua scripting (`INCR` + conditional `EXPIRE` + `TTL` in a single `EVALSHA` roundtrip) `[ADR-050]`.
-   - Centralized `RATE_LIMIT_POLICIES` dictionary defines per-endpoint quotas and windows. Global layer (100 req/min per IP) protects all routes; route-level policies protect sensitive endpoints individually `[ADR-051]`.
+   - Centralized `RATE_LIMIT_POLICIES` dictionary defines per-endpoint quotas and windows. Global layer (100 req/min per IP) protects all routes; route-level policies protect sensitive endpoints (`LOGIN`, `MFA_VERIFY`, `OAUTH_INITIATE`, `OAUTH_CALLBACK`, `MAGIC_LINK_REQUEST`, `MAGIC_LINK_VERIFY`) individually `[ADR-051, ADR-066]`.
    - Dual-key strategy: IP-based keys for unauthenticated endpoints, authenticated `userId`-based keys for protected endpoints to prevent shared-network false positives `[ADR-052]`.
    - IETF-compliant `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` headers on all responses.
    - Fail-open resilience: Redis outages bypass the rate limiter transparently, preventing legitimate traffic from being blocked by infrastructure failures.
-7. **Proxy Trust & IP Security**:
+9. **Proxy Trust & IP Security**:
    - `TRUST_PROXY` environment variable validated and type-coerced at startup via Zod `.transform()` (supports `boolean`, integer hop count, or subnet arrays) `[ADR-053]`.
    - All client IP resolution uses `req.ip` (Express `proxy-addr` module) instead of manual `X-Forwarded-For` parsing, preventing IP spoofing attacks `[ADR-054]`.
-8. **Resource Isolation & Origin Validation**:
-   - Evaluates all state-changing HTTP requests (`POST`, `PUT`, `PATCH`, `DELETE`) using a hybrid strategy of unforgeable browser `Sec-Fetch-Site` metadata and normalized `Origin`/`Referer` header checking against `env.FRONTEND_URL` `[ADR-055]`.
-   - Fast-paths `same-origin`/`same-site` requests, blocks explicit `cross-site` mutations from untrusted origins, and rejects opaque `Origin: "null"` headers from sandboxed iframe attacks.
-   - Deferred body/cookie parsing pipeline placement drops untrusted requests (403) and rate-limited bursts (429) before JSON parsing or memory allocation.
-9. **API-Tuned Security Headers**:
-   - `helmet()` configured with `crossOriginResourcePolicy: { policy: "cross-origin" }` for cross-domain API accessibility and `xFrameOptions: { action: "deny" }` for strict clickjacking defense `[ADR-056]`.
+10. **Resource Isolation & Origin Validation**:
+    - Evaluates all state-changing HTTP requests (`POST`, `PUT`, `PATCH`, `DELETE`) using a hybrid strategy of unforgeable browser `Sec-Fetch-Site` metadata and normalized `Origin`/`Referer` header checking against `env.FRONTEND_URL` `[ADR-055]`.
+    - Fast-paths `same-origin`/`same-site` requests, blocks explicit `cross-site` mutations from untrusted origins, and rejects opaque `Origin: "null"` headers from sandboxed iframe attacks.
+    - Deferred body/cookie parsing pipeline placement drops untrusted requests (403) and rate-limited bursts (429) before JSON parsing or memory allocation.
+11. **API-Tuned Security Headers**:
+    - `helmet()` configured with `crossOriginResourcePolicy: { policy: "cross-origin" }` for cross-domain API accessibility and `xFrameOptions: { action: "deny" }` for strict clickjacking defense `[ADR-056]`.
 
 ### Infrastructure Resilience & Observability
 

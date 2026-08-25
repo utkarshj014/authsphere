@@ -70,12 +70,12 @@ sequenceDiagram
     API->>Provider: POST token endpoint (exchange code for access_token)
     Provider-->>API: access_token
     API->>Provider: GET userinfo / user + emails endpoint
-    Provider-->>API: Profile data (sub/id, email, name, avatar)
+    Provider-->>API: Profile data
 
     Note over API, DB: Phase 4 — Identity Resolution
     API->>DB: SELECT OAuthAccount WHERE (provider, providerId)
     alt Existing OAuthAccount
-        API->>API: Authenticate linked user
+        API->>API: Resolve linked user
     else No OAuthAccount + userId in state
         API->>DB: INSERT OAuthAccount (link to existing user)
     else No OAuthAccount + no userId + email matches existing user
@@ -84,9 +84,14 @@ sequenceDiagram
         API->>DB: INSERT User + OAuthAccount (atomic)
     end
 
-    Note over API, Client: Phase 5 — Session Issuance
-    API->>DB: INSERT Session (UUIDv7, tokenHash, ip, userAgent, expiresAt)
-    API-->>Client: Set-Cookie: accessToken, refreshToken (httpOnly) + 200 OK
+    Note over API, Client: Phase 5 — MFA Challenge or Session Issuance
+    alt User has MFA enabled (user.mfaEnabled === true)
+        API->>DB: INSERT MfaChallenge (UUIDv7 mfaToken, 5m TTL)
+        API-->>Client: 200 OK { mfaRequired: true, mfaToken } (Client completes via /auth/mfa/verify)
+    else User has MFA disabled
+        API->>DB: INSERT Session (UUIDv7, tokenHash, ip, userAgent, expiresAt)
+        API-->>Client: Set-Cookie: accessToken, refreshToken (httpOnly) + 200 OK
+    end
 ```
 
 ---
@@ -268,11 +273,23 @@ The service layer (`handleOAuthCallback` in `oauth.service.ts`) processes the no
 
 ---
 
-## 7. Phase 5 — Session Issuance
+## 7. Phase 5 — MFA Challenge or Session Issuance
 
-After identity resolution, `generateAuthTokensAndSession()` (`auth.service.ts`) issues the standard AuthSphere session:
+After identity resolution, AuthSphere determines whether secondary authentication is required:
 
-1. **Session Record**: Creates a `Session` row in PostgreSQL with UUIDv7 id, hashed refresh token, IP address, user agent, and 30-day expiration.
+### 7.1 MFA-Enabled Users (`user.mfaEnabled === true`)
+
+If the user has multi-factor authentication enabled on their account (and this is not an in-session account linking flow):
+
+1. **MFA Challenge Token**: Creates an ephemeral `MfaChallenge` record (`mfaToken` UUIDv7) with a 5-minute TTL via `authRepository.createMfaChallenge`.
+2. **Challenge Response**: Returns HTTP `200 OK` with `{ mfaRequired: true, mfaToken: challenge.id }` and message `"MFA verification required to complete login"`.
+3. **Completion**: The client prompts for the second factor and posts to `POST /auth/mfa/verify` using `mfaToken` and the 6-digit TOTP code or backup recovery code to receive final session cookies.
+
+### 7.2 Standard Users (MFA Disabled or In-Session Linking)
+
+If MFA is not enabled (or during in-session account linking):
+
+1. **Session Record**: Creates a `Session` row in PostgreSQL with UUIDv7 id, hashed refresh token, IP address, user agent, and 30-day expiration via `generateAuthTokensAndSession()`.
 2. **Access Token**: Signs a 15-minute JWT containing `{ sub: userId, sid: sessionId, role: roleName }`.
 3. **Refresh Token**: Signs a 30-day JWT with the same claims.
 4. **HTTP-Only Cookies**: `setAuthCookies()` sets:
@@ -334,15 +351,18 @@ apps/api/src/
 
 ---
 
-## 10. Security Properties
+## 10. Security Properties & ADR Cross-References
 
-| Property                                 | Mechanism                                                                                       |
-| :--------------------------------------- | :---------------------------------------------------------------------------------------------- |
-| **CSRF prevention**                      | 32-byte cryptographic state token bound to Redis with 10-minute TTL                             |
-| **Replay prevention**                    | `redis.getDel()` atomic single-use state consumption                                            |
-| **Provider identity stability**          | Google `sub` and GitHub numeric `id` used as `providerId`; never email or username              |
-| **Email verification enforcement**       | Google: `email_verified === true`. GitHub: always queries `/user/emails` for verified status    |
-| **Account takeover prevention**          | Email-matching existing users are never auto-linked during unauthenticated flows (409 Conflict) |
-| **Error information leakage prevention** | Provider HTTP errors logged via Pino internally; clients receive generic messages               |
-| **Session binding**                      | Standard AuthSphere session with HTTP-only, secure, SameSite=Lax cookies                        |
-| **Provider credential isolation**        | OAuth client secrets validated via Zod schema at startup; never sent to clients                 |
+| Property                           | Mechanism                                                                                       | Authoritative Decision |
+| :--------------------------------- | :---------------------------------------------------------------------------------------------- | :--------------------- |
+| **Provider-Agnostic Architecture** | Unified `OAuthProviderStrategy` interface with normalized `OAuthProfile` DTO                    | `[ADR-059]`            |
+| **CSRF Prevention**                | 32-byte cryptographic state token bound to Redis with 10-minute TTL                             | `[ADR-060]`            |
+| **State Replay Prevention**        | `redis.getDel()` atomic single-use state consumption with provider validation                   | `[ADR-060]`            |
+| **Account Takeover Prevention**    | Email-matching existing users are never auto-linked during unauthenticated flows (409 Conflict) | `[ADR-061]`            |
+| **Identity Stability**             | Google `sub` (OIDC) and GitHub numeric `id` used as immutable `providerId`                      | `[ADR-059, ADR-061]`   |
+| **Email Verification Enforcement** | Google: `email_verified === true`. GitHub: always queries `/user/emails` for verified status    | `[ADR-062]`            |
+| **Controller Decoupling**          | Higher-order controller factories eliminate route boilerplate while retaining explicit exports  | `[ADR-063]`            |
+| **Rate Limiting Protection**       | Dedicated `OAUTH_INITIATE` (20/1m) and `OAUTH_CALLBACK` (20/1m) IP-based rate limiting          | `[ADR-051, ADR-066]`   |
+| **Information Leakage Prevention** | Provider HTTP errors logged via Pino internally; clients receive generic status codes           | `[ADR-008, ADR-009]`   |
+| **Session & Cookie Transport**     | Standard AuthSphere session with HTTP-only, secure, SameSite=Lax cookies                        | `[ADR-033, ADR-042]`   |
+| **Provider Credential Isolation**  | Client secrets validated via Zod schema at startup; never exposed to browser clients            | `[ADR-003, ADR-004]`   |
