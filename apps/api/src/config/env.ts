@@ -19,6 +19,11 @@ const envSchema = z
     JWT_REFRESH_EXPIRES_IN: z.string().min(1),
     AUTH_REUSE_DELETION_MODE: z.enum(["SESSION", "GLOBAL"]).default("SESSION"),
     MFA_ENCRYPTION_KEY: z.string().min(16),
+    GOOGLE_CLIENT_ID: z.string().min(1),
+    GOOGLE_CLIENT_SECRET: z.string().min(1),
+    GITHUB_CLIENT_ID: z.string().min(1),
+    GITHUB_CLIENT_SECRET: z.string().min(1),
+    OAUTH_CALLBACK_BASE_URL: z.url(),
     TRUST_PROXY: z
       .string()
       .optional()
