@@ -119,7 +119,10 @@ export const handleOAuthCallback = async (
   state: string,
   ipAddress?: string,
   userAgent?: string,
-): Promise<{ tokens: AuthTokens }> => {
+): Promise<
+  | { mfaRequired: false; tokens: AuthTokens }
+  | { mfaRequired: true; mfaToken: string }
+> => {
   if (!code || typeof code !== "string" || code.trim().length === 0) {
     throw new AppError("Missing or invalid authorization code", 400);
   }
@@ -139,8 +142,11 @@ export const handleOAuthCallback = async (
     profile.providerId,
   );
 
-  let userIdToAuthenticate: string;
-  let userRoleName: RoleName;
+  let userToAuthenticate: {
+    id: string;
+    role: { name: RoleName };
+    mfaEnabled: boolean;
+  };
 
   if (existingOAuthAccount) {
     // Case A: Existing OAuthAccount found
@@ -151,8 +157,7 @@ export const handleOAuthCallback = async (
       );
     }
 
-    userIdToAuthenticate = existingOAuthAccount.user.id;
-    userRoleName = existingOAuthAccount.user.role.name;
+    userToAuthenticate = existingOAuthAccount.user;
   } else if (stateData.userId) {
     // Case B1: Explicit Account-Linking for authenticated user
     const user = await authRepository.findUserById(stateData.userId);
@@ -166,8 +171,7 @@ export const handleOAuthCallback = async (
       profile.providerId,
     );
 
-    userIdToAuthenticate = user.id;
-    userRoleName = user.role.name;
+    userToAuthenticate = user;
   } else {
     // Case B2: Unauthenticated OAuth Login / Signup Flow
     const existingUserByEmail = await authRepository.findUserByEmailWithRole(
@@ -199,17 +203,33 @@ export const handleOAuthCallback = async (
       profile.providerId,
     );
 
-    userIdToAuthenticate = newUser.id;
-    userRoleName = newUser.role.name;
+    userToAuthenticate = newUser;
   }
 
-  // 4. Issue AuthSphere session & return tokens
+  // 4. If user has MFA enabled (and not an in-session account linking flow)
+  if (userToAuthenticate.mfaEnabled && !stateData.userId) {
+    const challengeExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    const challenge = await authRepository.createMfaChallenge(
+      userToAuthenticate.id,
+      challengeExpiresAt,
+    );
+
+    return {
+      mfaRequired: true,
+      mfaToken: challenge.id,
+    };
+  }
+
+  // 5. Issue AuthSphere session & return tokens
   const tokens = await generateAuthTokensAndSession(
-    userIdToAuthenticate,
-    userRoleName,
+    userToAuthenticate.id,
+    userToAuthenticate.role.name,
     ipAddress ?? "",
     userAgent,
   );
 
-  return { tokens };
+  return {
+    mfaRequired: false,
+    tokens,
+  };
 };

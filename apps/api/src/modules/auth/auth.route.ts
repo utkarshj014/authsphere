@@ -17,10 +17,28 @@ import {
 const router = Router();
 
 router
-  .get("/oauth/google", optionalAuth, googleInitiate)
-  .get("/oauth/google/callback", googleCallback)
-  .get("/oauth/github", optionalAuth, githubInitiate)
-  .get("/oauth/github/callback", githubCallback)
+  .get(
+    "/oauth/google",
+    rateLimiter(RATE_LIMIT_POLICIES.OAUTH_INITIATE),
+    optionalAuth,
+    googleInitiate,
+  )
+  .get(
+    "/oauth/google/callback",
+    rateLimiter(RATE_LIMIT_POLICIES.OAUTH_CALLBACK),
+    googleCallback,
+  )
+  .get(
+    "/oauth/github",
+    rateLimiter(RATE_LIMIT_POLICIES.OAUTH_INITIATE),
+    optionalAuth,
+    githubInitiate,
+  )
+  .get(
+    "/oauth/github/callback",
+    rateLimiter(RATE_LIMIT_POLICIES.OAUTH_CALLBACK),
+    githubCallback,
+  )
   .post(
     "/signup",
     rateLimiter(RATE_LIMIT_POLICIES.SIGNUP),

@@ -26,7 +26,7 @@ export const oauthCallbackHandler = (provider: OAuthProviderName) =>
     const ipAddress = getClientIp(req);
     const userAgent = req.header("user-agent");
 
-    const { tokens } = await handleOAuthCallback(
+    const result = await handleOAuthCallback(
       provider,
       code,
       state,
@@ -34,7 +34,16 @@ export const oauthCallbackHandler = (provider: OAuthProviderName) =>
       userAgent,
     );
 
-    setAuthCookies(res, tokens);
+    if (result.mfaRequired) {
+      return ApiResponse.success(
+        res,
+        result,
+        "MFA verification required to complete login",
+        200,
+      );
+    }
+
+    setAuthCookies(res, result.tokens);
 
     const providerLabel = provider.charAt(0) + provider.slice(1).toLowerCase();
 

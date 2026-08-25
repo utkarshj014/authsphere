@@ -113,6 +113,18 @@ export const RATE_LIMIT_POLICIES = {
     windowMs: 5 * 60 * 1000,
     keyType: "ip",
   },
+  OAUTH_INITIATE: {
+    name: "auth-oauth-initiate",
+    limit: 20,
+    windowMs: 60 * 1000,
+    keyType: "ip",
+  },
+  OAUTH_CALLBACK: {
+    name: "auth-oauth-callback",
+    limit: 20,
+    windowMs: 60 * 1000,
+    keyType: "ip",
+  },
   USER_READ: {
     name: "users-read",
     limit: 60,
