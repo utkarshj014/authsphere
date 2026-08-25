@@ -42,7 +42,7 @@ import { env } from "../../config/env.js";
 // Private Helpers
 // ==========================================
 
-const generateAuthTokensAndSession = async (
+export const generateAuthTokensAndSession = async (
   userId: string,
   roleName: RoleName,
   ipAddress: string,

@@ -5,7 +5,7 @@ import { authorizationService } from "../modules/authorization/index.js";
 
 export const auth = asyncHandler(
   async (req: Request, _res: Response, next: NextFunction) => {
-    const accessToken = req.cookies.accessToken;
+    const accessToken = req.cookies?.accessToken;
     if (!accessToken) {
       throw new UnauthorizedError("No access token provided");
     }
@@ -21,6 +21,33 @@ export const auth = asyncHandler(
       sessionId: payload.sid,
       permissions,
     };
+
+    next();
+  },
+);
+
+export const optionalAuth = asyncHandler(
+  async (req: Request, _res: Response, next: NextFunction) => {
+    const accessToken = req.cookies?.accessToken;
+    if (!accessToken) {
+      return next();
+    }
+
+    try {
+      const payload = await verifyAccessToken(accessToken);
+      const permissions = await authorizationService.getPermissionsByRole(
+        payload.role,
+      );
+
+      req.auth = {
+        userId: payload.sub,
+        role: payload.role,
+        sessionId: payload.sid,
+        permissions,
+      };
+    } catch {
+      // Ignored: Treat invalid/expired token as unauthenticated flow
+    }
 
     next();
   },

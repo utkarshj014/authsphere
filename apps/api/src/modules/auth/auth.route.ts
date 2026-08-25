@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { authSchema } from "./auth.validation.js";
 import { authController } from "./auth.controller.js";
+import { googleInitiate, googleCallback } from "./oauth/oauth.controller.js";
 import { validate } from "../../middlewares/validate.js";
-import { auth } from "../../middlewares/auth.js";
+import { auth, optionalAuth } from "../../middlewares/auth.js";
 import {
   rateLimiter,
   RATE_LIMIT_POLICIES,
@@ -11,6 +12,8 @@ import {
 const router = Router();
 
 router
+  .get("/oauth/google", optionalAuth, googleInitiate)
+  .get("/oauth/google/callback", googleCallback)
   .post(
     "/signup",
     rateLimiter(RATE_LIMIT_POLICIES.SIGNUP),

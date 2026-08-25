@@ -1,11 +1,35 @@
 import crypto from "node:crypto";
-import type { OAuthProviderName } from "@authsphere/shared";
+import {
+  ROLES,
+  OAUTH_PROVIDERS,
+  type OAuthProviderName,
+  type RoleName,
+} from "@authsphere/shared";
+import type { OAuthProvider } from "../../../generated/prisma/client.js";
 import { redis } from "../../../lib/redis.js";
 import { AppError } from "../../../common/errors/index.js";
-import type { OAuthStateData } from "./oauth.types.js";
+import { authRepository } from "../auth.repository.js";
+import { generateAuthTokensAndSession } from "../auth.service.js";
+import { googleOAuthProvider } from "./google.provider.js";
+import type { AuthTokens } from "../auth.types.js";
+import type { OAuthProviderStrategy, OAuthStateData } from "./oauth.types.js";
 
 const OAUTH_STATE_PREFIX = "oauth:state:";
 const OAUTH_STATE_TTL_SECONDS = 600; // 10 minutes
+
+/**
+ * Helper to select the appropriate OAuth provider strategy based on provider name.
+ */
+const getOAuthStrategy = (
+  provider: OAuthProviderName,
+): OAuthProviderStrategy => {
+  switch (provider) {
+    case OAUTH_PROVIDERS.GOOGLE:
+      return googleOAuthProvider;
+    default:
+      throw new AppError(`OAuth provider ${provider} is not supported`, 400);
+  }
+};
 
 /**
  * Generates a cryptographically random OAuth state parameter, stores flow metadata in Redis with a 10m TTL,
@@ -66,4 +90,123 @@ export const consumeOAuthState = async (
   }
 
   return data;
+};
+
+/**
+ * Initiates an OAuth 2.0 authorization flow by generating a state parameter and building the provider's authorization URL.
+ */
+export const initiateOAuth = async (
+  provider: OAuthProviderName,
+  userId?: string,
+): Promise<string> => {
+  const state = await createOAuthState(provider, userId);
+  const strategy = getOAuthStrategy(provider);
+  const authUrl = await strategy.getAuthorizationUrl(state);
+
+  return authUrl.toString();
+};
+
+/**
+ * Handles the OAuth 2.0 callback: verifies state, exchanges authorization code for provider profile,
+ * resolves identity (linking vs signup vs login), and issues AuthSphere session tokens.
+ */
+export const handleOAuthCallback = async (
+  provider: OAuthProviderName,
+  code: string,
+  state: string,
+  ipAddress?: string,
+  userAgent?: string,
+): Promise<{ tokens: AuthTokens }> => {
+  if (!code || typeof code !== "string" || code.trim().length === 0) {
+    throw new AppError("Missing or invalid authorization code", 400);
+  }
+
+  // 1. Atomically consume & verify state parameter from Redis
+  const stateData = await consumeOAuthState(state, provider);
+
+  // 2. Fetch normalized profile from provider strategy
+  const strategy = getOAuthStrategy(provider);
+  const profile = await strategy.getUserProfile(code);
+
+  const prismaProvider = provider as OAuthProvider;
+
+  // 3. Query existing OAuthAccount
+  const existingOAuthAccount = await authRepository.findOAuthAccount(
+    prismaProvider,
+    profile.providerId,
+  );
+
+  let userIdToAuthenticate: string;
+  let userRoleName: RoleName;
+
+  if (existingOAuthAccount) {
+    // Case A: Existing OAuthAccount found
+    if (stateData.userId && existingOAuthAccount.userId !== stateData.userId) {
+      throw new AppError(
+        "This OAuth account is already linked to another user",
+        409,
+      );
+    }
+
+    userIdToAuthenticate = existingOAuthAccount.user.id;
+    userRoleName = existingOAuthAccount.user.role.name;
+  } else if (stateData.userId) {
+    // Case B1: Explicit Account-Linking for authenticated user
+    const user = await authRepository.findUserById(stateData.userId);
+    if (!user) {
+      throw new AppError("User account not found for linking", 404);
+    }
+
+    await authRepository.createOAuthAccount(
+      user.id,
+      prismaProvider,
+      profile.providerId,
+    );
+
+    userIdToAuthenticate = user.id;
+    userRoleName = user.role.name;
+  } else {
+    // Case B2: Unauthenticated OAuth Login / Signup Flow
+    const existingUserByEmail = await authRepository.findUserByEmailWithRole(
+      profile.email,
+    );
+
+    if (existingUserByEmail) {
+      // SECURITY BOUNDARY: Do NOT auto-link accounts by email alone!
+      throw new AppError(
+        "An account with this email already exists. Please log in with your password and link your account in settings.",
+        409,
+      );
+    }
+
+    // Create new User + OAuthAccount atomically
+    const defaultRole = await authRepository.findRoleByName(ROLES.USER);
+    if (!defaultRole) {
+      throw new AppError("Default user role is not configured", 500);
+    }
+
+    const newUser = await authRepository.createUserWithOAuthAccount(
+      {
+        email: profile.email,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        roleId: defaultRole.id,
+      },
+      prismaProvider,
+      profile.providerId,
+    );
+
+    userIdToAuthenticate = newUser.id;
+    userRoleName = newUser.role.name;
+  }
+
+  // 4. Issue AuthSphere session & return tokens
+  const tokens = await generateAuthTokensAndSession(
+    userIdToAuthenticate,
+    userRoleName,
+    ipAddress ?? "",
+    userAgent,
+  );
+
+  return { tokens };
 };

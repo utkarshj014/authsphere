@@ -1,5 +1,5 @@
 import { prisma } from "../../lib/prisma.js";
-import { Prisma } from "../../generated/prisma/client.js";
+import { Prisma, type OAuthProvider } from "../../generated/prisma/client.js";
 import { AppError } from "../../common/errors/index.js";
 import type { RoleName } from "@authsphere/shared";
 
@@ -337,6 +337,100 @@ const countUnusedRecoveryCodes = (userId: string) =>
     where: { userId, usedAt: null },
   });
 
+const findOAuthAccount = (provider: OAuthProvider, providerId: string) =>
+  prisma.oAuthAccount.findUnique({
+    where: {
+      provider_providerId: {
+        provider,
+        providerId,
+      },
+    },
+    include: {
+      user: {
+        include: {
+          role: {
+            select: {
+              name: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+const createUserWithOAuthAccount = async (
+  data: {
+    email: string;
+    firstName?: string | null;
+    lastName?: string | null;
+    roleId: string;
+  },
+  provider: OAuthProvider,
+  providerId: string,
+) => {
+  try {
+    return await prisma.user.create({
+      data: {
+        email: data.email,
+        passwordHash: null,
+        isEmailVerified: true,
+        verifiedAt: new Date(),
+        firstName: data.firstName ?? null,
+        lastName: data.lastName ?? null,
+        roleId: data.roleId,
+        oauthAccounts: {
+          create: {
+            provider,
+            providerId,
+          },
+        },
+      },
+      include: {
+        role: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new AppError(
+        "An account with this email or OAuth provider ID already exists",
+        409,
+      );
+    }
+    throw error;
+  }
+};
+
+const createOAuthAccount = async (
+  userId: string,
+  provider: OAuthProvider,
+  providerId: string,
+) => {
+  try {
+    return await prisma.oAuthAccount.create({
+      data: {
+        userId,
+        provider,
+        providerId,
+      },
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new AppError("This OAuth account is already linked to a user", 409);
+    }
+    throw error;
+  }
+};
+
 export const authRepository = {
   findUserByEmail,
   findRoleByName,
@@ -364,4 +458,7 @@ export const authRepository = {
   disableMfaAndRevokeSessions,
   replaceRecoveryCodes,
   countUnusedRecoveryCodes,
+  findOAuthAccount,
+  createUserWithOAuthAccount,
+  createOAuthAccount,
 };
