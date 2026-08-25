@@ -37,7 +37,7 @@ CREATE UNIQUE INDEX "oauth_accounts_user_id_provider_key" ON "oauth_accounts"("u
 CREATE UNIQUE INDEX "magic_link_tokens_token_hash_key" ON "magic_link_tokens"("token_hash");
 
 -- CreateIndex
-CREATE INDEX "magic_link_tokens_user_id_idx" ON "magic_link_tokens"("user_id");
+CREATE UNIQUE INDEX "magic_link_tokens_user_id_key" ON "magic_link_tokens"("user_id");
 
 -- CreateIndex
 CREATE INDEX "magic_link_tokens_expires_at_idx" ON "magic_link_tokens"("expires_at");

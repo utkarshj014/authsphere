@@ -47,11 +47,12 @@ model User {
 
   emailVerificationToken EmailVerificationToken?
   passwordResetToken     PasswordResetToken?
-  sessions               Session[]
-  mfaRecoveryCodes       MfaRecoveryCode[]
-  mfaChallenges          MfaChallenge[]
-  oauthAccounts          OAuthAccount[]
-  magicLinkTokens        MagicLinkToken[]
+  magicLinkToken         MagicLinkToken?
+
+  mfaChallenges    MfaChallenge[]
+  mfaRecoveryCodes MfaRecoveryCode[]
+  oauthAccounts    OAuthAccount[]
+  sessions         Session[]
 
   @@map("users")
 }
@@ -201,16 +202,14 @@ model OAuthAccount {
 model MagicLinkToken {
   id String @id @default(uuid(7))
 
-  tokenHash String @unique @map("token_hash")
-
-  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash")
+  userId    String   @unique @map("user_id")
   expiresAt DateTime @map("expires_at")
 
   createdAt DateTime @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
   @@index([expiresAt])
   @@map("magic_link_tokens")
 }

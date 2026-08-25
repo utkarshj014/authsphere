@@ -47,8 +47,8 @@ const login = asyncHandler(async (req: Request, res: Response) => {
   if (result.mfaRequired) {
     return ApiResponse.success(
       res,
-      { mfaRequired: true, mfaToken: result.mfaToken },
-      "MFA verification required",
+      result,
+      "MFA verification required to complete login",
       200,
     );
   }
@@ -59,7 +59,7 @@ const login = asyncHandler(async (req: Request, res: Response) => {
 });
 
 const refreshToken = asyncHandler(async (req: Request, res: Response) => {
-  const refreshToken = req.cookies.refreshToken;
+  const refreshToken = req.cookies?.refreshToken;
 
   const ipAddress = getClientIp(req);
   const userAgent = req.header("user-agent");
@@ -78,7 +78,7 @@ const refreshToken = asyncHandler(async (req: Request, res: Response) => {
 });
 
 const logout = asyncHandler(async (req: Request, res: Response) => {
-  const refreshToken = req.cookies.refreshToken;
+  const refreshToken = req.cookies?.refreshToken;
 
   await authService.logout(refreshToken);
 
@@ -232,6 +232,41 @@ const mfaRegenerateRecoveryCodes = asyncHandler(
   },
 );
 
+const sendMagicLink = asyncHandler(async (req: Request, res: Response) => {
+  await authService.sendMagicLink(req.body);
+
+  return ApiResponse.success(
+    res,
+    null,
+    "If an account exists with this email, a magic link has been sent",
+    200,
+  );
+});
+
+const verifyMagicLink = asyncHandler(async (req: Request, res: Response) => {
+  const ipAddress = getClientIp(req);
+  const userAgent = req.header("user-agent");
+
+  const result = await authService.verifyMagicLink(
+    req.body,
+    ipAddress,
+    userAgent,
+  );
+
+  if (result.mfaRequired) {
+    return ApiResponse.success(
+      res,
+      result,
+      "MFA verification required to complete login",
+      200,
+    );
+  }
+
+  setAuthCookies(res, result.tokens);
+
+  return ApiResponse.success(res, null, "Login successful via Magic Link", 200);
+});
+
 export const authController = {
   signup,
   verifyEmail,
@@ -249,4 +284,6 @@ export const authController = {
   mfaVerifyLogin,
   mfaDisable,
   mfaRegenerateRecoveryCodes,
+  sendMagicLink,
+  verifyMagicLink,
 };

@@ -14,6 +14,8 @@ import type {
   MfaVerifyLoginInput,
   MfaDisableInput,
   MfaRegenerateRecoveryCodesInput,
+  SendMagicLinkInput,
+  VerifyMagicLinkInput,
 } from "./auth.validation.js";
 import {
   hashPassword,
@@ -29,6 +31,7 @@ import { totp } from "../../lib/totp/index.js";
 import {
   sendForgotPasswordEmail,
   sendVerificationEmail,
+  sendMagicLinkEmail,
 } from "../email/demo.js";
 import {
   signAccessToken,
@@ -583,6 +586,65 @@ const mfaRegenerateRecoveryCodes = async (
   };
 };
 
+const sendMagicLink = async (input: SendMagicLinkInput) => {
+  const user = await authRepository.findUserByEmail(input.email);
+  if (!user) {
+    return;
+  }
+
+  const token = generateToken();
+  const tokenHash = hashToken(token);
+  const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+  await authRepository.createMagicLinkToken(tokenHash, user.id, tokenExpiresAt);
+
+  await sendMagicLinkEmail(token, user.email);
+};
+
+const verifyMagicLink = async (
+  input: VerifyMagicLinkInput,
+  ipAddress: string,
+  userAgent?: string,
+): Promise<
+  | { mfaRequired: false; tokens: AuthTokens }
+  | { mfaRequired: true; mfaToken: string }
+> => {
+  const tokenHash = hashToken(input.token);
+
+  const magicLinkToken =
+    await authRepository.findAndConsumeMagicLinkToken(tokenHash);
+  if (!magicLinkToken) {
+    throw new AppError("Invalid or expired magic link token", 400);
+  }
+
+  const { user } = magicLinkToken;
+
+  if (user.mfaEnabled) {
+    const challengeExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    const challenge = await authRepository.createMfaChallenge(
+      user.id,
+      challengeExpiresAt,
+    );
+
+    return {
+      mfaRequired: true,
+      mfaToken: challenge.id,
+    };
+  }
+
+  const tokens = await generateAuthTokensAndSession(
+    user.id,
+    user.role.name,
+    ipAddress,
+    userAgent,
+  );
+
+  return {
+    mfaRequired: false,
+    tokens,
+  };
+};
+
 export const authService = {
   signup,
   verifyEmail,
@@ -600,4 +662,6 @@ export const authService = {
   mfaVerifyLogin,
   mfaDisable,
   mfaRegenerateRecoveryCodes,
+  sendMagicLink,
+  verifyMagicLink,
 };

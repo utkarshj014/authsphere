@@ -110,6 +110,18 @@ router
     rateLimiter(RATE_LIMIT_POLICIES.MFA_REGENERATE_RECOVERY_CODES),
     validate(authSchema.mfaRegenerateRecoveryCodes),
     authController.mfaRegenerateRecoveryCodes,
+  )
+  .post(
+    "/magic-link",
+    rateLimiter(RATE_LIMIT_POLICIES.MAGIC_LINK_REQUEST),
+    validate(authSchema.sendMagicLink),
+    authController.sendMagicLink,
+  )
+  .post(
+    "/magic-link/verify",
+    rateLimiter(RATE_LIMIT_POLICIES.MAGIC_LINK_VERIFY),
+    validate(authSchema.verifyMagicLink),
+    authController.verifyMagicLink,
   );
 
 export default router;

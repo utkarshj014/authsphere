@@ -11,3 +11,10 @@ export const sendForgotPasswordEmail = async (
 ) => {
   return "email sent";
 };
+
+export const sendMagicLinkEmail = async (
+  magicLinkToken: string,
+  userEmail: string,
+) => {
+  return "email sent";
+};

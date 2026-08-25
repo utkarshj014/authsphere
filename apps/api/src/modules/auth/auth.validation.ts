@@ -67,6 +67,14 @@ export const authSchema = {
   mfaRegenerateRecoveryCodes: z.object({
     code: z.union([totpCode, backupCodeSchema]),
   }),
+
+  sendMagicLink: z.object({
+    email: z.email(),
+  }),
+
+  verifyMagicLink: z.object({
+    token: z.string().trim().min(1),
+  }),
 };
 
 export type SignupInput = z.infer<typeof authSchema.signup>;
@@ -84,3 +92,5 @@ export type MfaDisableInput = z.infer<typeof authSchema.mfaDisable>;
 export type MfaRegenerateRecoveryCodesInput = z.infer<
   typeof authSchema.mfaRegenerateRecoveryCodes
 >;
+export type SendMagicLinkInput = z.infer<typeof authSchema.sendMagicLink>;
+export type VerifyMagicLinkInput = z.infer<typeof authSchema.verifyMagicLink>;

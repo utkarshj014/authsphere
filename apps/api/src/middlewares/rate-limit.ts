@@ -101,6 +101,18 @@ export const RATE_LIMIT_POLICIES = {
     windowMs: 15 * 60 * 1000,
     keyType: "user",
   },
+  MAGIC_LINK_REQUEST: {
+    name: "auth-magic-link-request",
+    limit: 5,
+    windowMs: 15 * 60 * 1000,
+    keyType: "ip",
+  },
+  MAGIC_LINK_VERIFY: {
+    name: "auth-magic-link-verify",
+    limit: 10,
+    windowMs: 5 * 60 * 1000,
+    keyType: "ip",
+  },
   USER_READ: {
     name: "users-read",
     limit: 60,

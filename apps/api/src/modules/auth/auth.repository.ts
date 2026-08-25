@@ -430,6 +430,45 @@ const createOAuthAccount = async (
     throw error;
   }
 };
+const createMagicLinkToken = (
+  tokenHash: string,
+  userId: string,
+  expiresAt: Date,
+) =>
+  prisma.magicLinkToken.upsert({
+    where: { userId },
+    update: { tokenHash, expiresAt, createdAt: new Date() },
+    create: { tokenHash, userId, expiresAt },
+  });
+
+const findAndConsumeMagicLinkToken = async (tokenHash: string) => {
+  try {
+    const magicLinkToken = await prisma.magicLinkToken.delete({
+      where: { tokenHash },
+      include: {
+        user: {
+          include: {
+            role: true,
+          },
+        },
+      },
+    });
+
+    if (magicLinkToken.expiresAt < new Date()) {
+      return null;
+    }
+
+    return magicLinkToken;
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2025"
+    ) {
+      return null;
+    }
+    throw error;
+  }
+};
 
 export const authRepository = {
   findUserByEmail,
@@ -461,4 +500,6 @@ export const authRepository = {
   findOAuthAccount,
   createUserWithOAuthAccount,
   createOAuthAccount,
+  createMagicLinkToken,
+  findAndConsumeMagicLinkToken,
 };
