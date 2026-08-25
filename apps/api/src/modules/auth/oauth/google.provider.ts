@@ -28,7 +28,7 @@ interface GoogleUserInfo {
 
 export class GoogleOAuthProvider implements OAuthProviderStrategy {
   private getRedirectUri(): string {
-    return `${env.OAUTH_CALLBACK_BASE_URL.replace(/\/$/, "")}/google`;
+    return `${env.OAUTH_CALLBACK_BASE_URL.replace(/\/$/, "")}/google/callback`;
   }
 
   private validateConfig(): void {

@@ -11,6 +11,7 @@ import { AppError } from "../../../common/errors/index.js";
 import { authRepository } from "../auth.repository.js";
 import { generateAuthTokensAndSession } from "../auth.service.js";
 import { googleOAuthProvider } from "./google.provider.js";
+import { githubOAuthProvider } from "./github.provider.js";
 import type { AuthTokens } from "../auth.types.js";
 import type { OAuthProviderStrategy, OAuthStateData } from "./oauth.types.js";
 
@@ -26,6 +27,8 @@ const getOAuthStrategy = (
   switch (provider) {
     case OAUTH_PROVIDERS.GOOGLE:
       return googleOAuthProvider;
+    case OAUTH_PROVIDERS.GITHUB:
+      return githubOAuthProvider;
     default:
       throw new AppError(`OAuth provider ${provider} is not supported`, 400);
   }
