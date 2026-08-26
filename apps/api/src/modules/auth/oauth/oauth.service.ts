@@ -117,7 +117,7 @@ export const handleOAuthCallback = async (
   provider: OAuthProviderName,
   code: string,
   state: string,
-  ipAddress?: string,
+  ipAddress: string,
   userAgent?: string,
 ): Promise<
   | { mfaRequired: false; tokens: AuthTokens }
@@ -224,7 +224,7 @@ export const handleOAuthCallback = async (
   const tokens = await generateAuthTokensAndSession(
     userToAuthenticate.id,
     userToAuthenticate.role.name,
-    ipAddress ?? "",
+    ipAddress,
     userAgent,
   );
 

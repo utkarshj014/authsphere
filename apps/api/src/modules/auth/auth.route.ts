@@ -52,12 +52,6 @@ router
     authController.verifyEmail,
   )
   .post(
-    "/resend-verification-token",
-    rateLimiter(RATE_LIMIT_POLICIES.RESEND_VERIFICATION),
-    validate(authSchema.resendVerificationToken),
-    authController.resendVerificationToken,
-  )
-  .post(
     "/resend-verification",
     rateLimiter(RATE_LIMIT_POLICIES.RESEND_VERIFICATION),
     validate(authSchema.resendVerificationToken),

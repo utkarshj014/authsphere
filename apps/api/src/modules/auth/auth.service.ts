@@ -210,7 +210,7 @@ const login = async (
 
   if (!user.passwordHash) {
     throw new AppError(
-      "This account is created using social login. Please login using your social account",
+      "This account uses social login. Please login using your social account",
       403,
     );
   }
@@ -397,7 +397,7 @@ const changePassword = async (
   }
   if (!user.passwordHash) {
     throw new AppError(
-      "This account is created using social login. You cannot change your password.",
+      "This account uses social login. You cannot change your password.",
       403,
     );
   }
@@ -612,12 +612,15 @@ const verifyMagicLink = async (
   const tokenHash = hashToken(input.token);
 
   const magicLinkToken =
-    await authRepository.findAndConsumeMagicLinkToken(tokenHash);
+    await authRepository.findMagicLinkTokenWithUser(tokenHash);
   if (!magicLinkToken) {
     throw new AppError("Invalid or expired magic link token", 400);
   }
 
   const { user } = magicLinkToken;
+
+  // Atomically consume token and mark email as verified if not already verified
+  await authRepository.consumeMagicLinkToken(user.id, user.isEmailVerified);
 
   if (user.mfaEnabled) {
     const challengeExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes

@@ -55,6 +55,7 @@ export class GoogleOAuthProvider implements OAuthProviderStrategy {
   public async getUserProfile(code: string): Promise<OAuthProfile> {
     this.validateConfig();
 
+    // Defense-in-depth: Validate authorization code independently of caller
     if (!code || typeof code !== "string" || code.trim().length === 0) {
       throw new AppError("Missing or invalid Google authorization code", 400);
     }

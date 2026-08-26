@@ -1,6 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { Prisma, type OAuthProvider } from "../../generated/prisma/client.js";
-import { AppError } from "../../common/errors/index.js";
+import { AppError, UnauthorizedError } from "../../common/errors/index.js";
 import type { RoleName } from "@authsphere/shared";
 
 const findUserByEmail = (email: string) =>
@@ -86,7 +86,13 @@ const reCreateVerificationToken = (
 const findUserByEmailWithRole = (email: string) =>
   prisma.user.findUnique({
     where: { email },
-    include: { role: true },
+    include: {
+      role: {
+        select: {
+          name: true,
+        },
+      },
+    },
   });
 
 const createSession = (
@@ -114,7 +120,17 @@ const createSession = (
 const findSessionById = (sessionId: string) =>
   prisma.session.findFirst({
     where: { id: sessionId, expiresAt: { gt: new Date() } },
-    include: { user: { include: { role: true } } },
+    include: {
+      user: {
+        include: {
+          role: {
+            select: {
+              name: true,
+            },
+          },
+        },
+      },
+    },
   });
 
 const deleteSessionById = (sessionId: string) =>
@@ -123,7 +139,7 @@ const deleteSessionById = (sessionId: string) =>
 const deleteAllSessionsByUserId = (userId: string) =>
   prisma.session.deleteMany({ where: { userId } });
 
-const rotateSession = (
+const rotateSession = async (
   sessionId: string,
   sessionUpdateData: {
     tokenHash: string;
@@ -131,16 +147,33 @@ const rotateSession = (
     ipAddress?: string;
     userAgent?: string;
   },
-) =>
-  prisma.session.update({
-    where: { id: sessionId },
-    data: { ...sessionUpdateData },
-  });
+) => {
+  try {
+    return await prisma.session.update({
+      where: { id: sessionId },
+      data: { ...sessionUpdateData },
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2025"
+    ) {
+      throw new UnauthorizedError("Session invalidated");
+    }
+    throw error;
+  }
+};
 
 const findUserById = (userId: string) =>
   prisma.user.findUnique({
     where: { id: userId },
-    include: { role: true },
+    include: {
+      role: {
+        select: {
+          name: true,
+        },
+      },
+    },
   });
 
 const createPasswordResetToken = (
@@ -430,6 +463,7 @@ const createOAuthAccount = async (
     throw error;
   }
 };
+
 const createMagicLinkToken = (
   tokenHash: string,
   userId: string,
@@ -441,30 +475,45 @@ const createMagicLinkToken = (
     create: { tokenHash, userId, expiresAt },
   });
 
-const findAndConsumeMagicLinkToken = async (tokenHash: string) => {
-  try {
-    const magicLinkToken = await prisma.magicLinkToken.delete({
-      where: { tokenHash },
-      include: {
-        user: {
-          include: {
-            role: true,
+const findMagicLinkTokenWithUser = (tokenHash: string) =>
+  prisma.magicLinkToken.findFirst({
+    where: {
+      tokenHash,
+      expiresAt: { gte: new Date() },
+    },
+    include: {
+      user: {
+        include: {
+          role: {
+            select: {
+              name: true,
+            },
           },
         },
       },
+    },
+  });
+
+const consumeMagicLinkToken = async (
+  userId: string,
+  isEmailVerified: boolean,
+) => {
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(isEmailVerified
+          ? {}
+          : { isEmailVerified: true, verifiedAt: new Date() }),
+        magicLinkToken: { delete: {} },
+      },
     });
-
-    if (magicLinkToken.expiresAt < new Date()) {
-      return null;
-    }
-
-    return magicLinkToken;
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === "P2025"
     ) {
-      return null;
+      throw new AppError("Invalid or expired magic link token", 400);
     }
     throw error;
   }
@@ -501,5 +550,6 @@ export const authRepository = {
   createUserWithOAuthAccount,
   createOAuthAccount,
   createMagicLinkToken,
-  findAndConsumeMagicLinkToken,
+  findMagicLinkTokenWithUser,
+  consumeMagicLinkToken,
 };
