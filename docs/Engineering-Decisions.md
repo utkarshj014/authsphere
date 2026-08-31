@@ -37,7 +37,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-056: API-Tuned Security Headers via Helmet Configuration](#adr-056--api-tuned-security-headers-via-helmet-configuration)
 - [ADR-060: Redis-Backed Ephemeral OAuth State with Atomic Single-Use Invalidation](#adr-060--redis-backed-ephemeral-oauth-state-with-atomic-single-use-invalidation)
 - [ADR-062: Verified Email Enforcement for Social Identity Providers](#adr-062--verified-email-enforcement-for-social-identity-providers)
-- [ADR-065: Single-Query Atomic Magic Link Token Consumption via `DELETE ... RETURNING`](#adr-065--single-query-atomic-magic-link-token-consumption-via-delete--returning)
+- [ADR-065: Magic Link Token Lifecycle, Dual-Purpose Email Verification, and Atomic Consumption](#adr-065--magic-link-token-lifecycle-dual-purpose-email-verification-and-atomic-consumption)
 
 </details>
 
@@ -66,7 +66,6 @@ This document records the architectural and engineering decisions made during th
 - [ADR-048: Dual-Factor Enforcement on Sensitive Credential Mutations](#adr-048--dual-factor-enforcement-on-sensitive-credential-mutations)
 - [ADR-049: Proactive Low Recovery Code Warning Threshold](#adr-049--proactive-low-recovery-code-warning-threshold)
 - [ADR-057: Ephemeral Multi-Challenge MFA Architecture with Single-Use Invalidation](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation)
-- [ADR-066: Multi-Tier Rate Limiting for OAuth Callbacks and Passwordless Magic Links](#adr-066--multi-tier-rate-limiting-for-oauth-callbacks-and-passwordless-magic-links)
 
 </details>
 
@@ -87,6 +86,8 @@ This document records the architectural and engineering decisions made during th
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
 - [ADR-054: Secure Client IP Resolution via Express `req.ip`](#adr-054--secure-client-ip-resolution-via-express-reqip)
 - [ADR-055: Resource Isolation & Origin Validation for State-Changing Requests](#adr-055--resource-isolation--origin-validation-for-state-changing-requests)
+- [ADR-066: Multi-Tier Rate Limiting for OAuth Callbacks and Passwordless Magic Links](#adr-066--multi-tier-rate-limiting-for-oauth-callbacks-and-passwordless-magic-links)
+- [ADR-067: Atomic Last-Admin Demotion Guard via Exclusive Role Row-Locking](#adr-067--atomic-last-admin-demotion-guard-via-exclusive-role-row-locking)
 
 </details>
 
@@ -121,7 +122,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-066)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-067)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -187,8 +188,9 @@ This document records the architectural and engineering decisions made during th
 - [ADR-062: Verified Email Enforcement for Social Identity Providers](#adr-062--verified-email-enforcement-for-social-identity-providers)
 - [ADR-063: Higher-Order Controller Factories for Provider-Agnostic OAuth Handlers](#adr-063--higher-order-controller-factories-for-provider-agnostic-oauth-handlers)
 - [ADR-064: 1-to-1 Database Relation and Upsert Invalidation for Magic Link Tokens](#adr-064--1-to-1-database-relation-and-upsert-invalidation-for-magic-link-tokens)
-- [ADR-065: Single-Query Atomic Magic Link Token Consumption via `DELETE ... RETURNING`](#adr-065--single-query-atomic-magic-link-token-consumption-via-delete--returning)
+- [ADR-065: Magic Link Token Lifecycle, Dual-Purpose Email Verification, and Atomic Consumption](#adr-065--magic-link-token-lifecycle-dual-purpose-email-verification-and-atomic-consumption)
 - [ADR-066: Multi-Tier Rate Limiting for OAuth Callbacks and Passwordless Magic Links](#adr-066--multi-tier-rate-limiting-for-oauth-callbacks-and-passwordless-magic-links)
+- [ADR-067: Atomic Last-Admin Demotion Guard via Exclusive Role Row-Locking](#adr-067--atomic-last-admin-demotion-guard-via-exclusive-role-row-locking)
 
 </details>
 
@@ -228,14 +230,14 @@ Organize backend code inside `apps/api/src/modules/` by feature domain. Each mod
 
 ### Current Modules
 
-| Module           | Domain                               | Key Endpoints                                                             |
-| ---------------- | ------------------------------------ | ------------------------------------------------------------------------- |
-| `auth/`          | Authentication & session management  | `POST /auth/signup`, `POST /auth/login`, `POST /auth/refresh-token`, etc. |
-| `authorization/` | Permission resolution & caching      | Internal service (consumed by `auth` middleware)                          |
-| `users/`         | User profile & role assignment       | `GET /users/:id`, `PATCH /users/:id/role`                                 |
-| `roles/`         | Role-permission management           | `PUT /roles/:roleName/permissions`                                        |
-| `health/`        | Operational health monitoring        | `GET /health`                                                             |
-| `email/`         | Email dispatch (verification, reset) | Internal service                                                          |
+| Module           | Domain                               | Key Endpoints                                                                                       |
+| ---------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `auth/`          | Authentication & session management  | `POST /auth/signup`, `POST /auth/login`, `GET /auth/oauth/:provider`, `POST /auth/magic-link`, etc. |
+| `authorization/` | Permission resolution & caching      | Internal service (consumed by `auth` middleware)                                                    |
+| `users/`         | User profile & role assignment       | `GET /users/:id`, `PATCH /users/:id/role`                                                           |
+| `roles/`         | Role-permission management           | `PUT /roles/:roleName/permissions`                                                                  |
+| `health/`        | Operational health monitoring        | `GET /health`                                                                                       |
+| `email/`         | Email dispatch (verification, reset) | Internal service                                                                                    |
 
 ### Module File Convention
 
@@ -367,7 +369,8 @@ Custom error hierarchy extending `AppError`, coupled with `asyncHandler` HOF and
 AppError (base — carries statusCode)
 ├── ValidationError (400 — carries errors[] array)
 ├── UnauthorizedError (401 — triggers cookie cleanup)
-└── ForbiddenError (403)
+├── ForbiddenError (403)
+└── TooManyRequestsError (429)
 ```
 
 ### Rationale
@@ -1430,17 +1433,29 @@ Rate limit parameters (window duration, request quota, key strategy) scattered a
 
 Define all rate limit policies as a single typed constant `RATE_LIMIT_POLICIES` in `src/middlewares/rate-limit.ts`, typed via `as const satisfies Record<string, RateLimitPolicy>`. The `rateLimiter(policy)` middleware factory consumes any policy from the dictionary.
 
-| Policy                    | Limit | Window | Key Type | Scope                                       |
-| ------------------------- | ----- | ------ | -------- | ------------------------------------------- |
-| `GLOBAL`                  | 100   | 1 min  | IP       | All routes via `app.use`                    |
-| `HEALTH`                  | 60    | 1 min  | IP       | `GET /health`                               |
-| `SIGNUP`                  | 5     | 15 min | IP       | `POST /auth/signup`                         |
-| `LOGIN`                   | 10    | 1 min  | IP       | `POST /auth/login`                          |
-| `FORGOT_PASSWORD`         | 5     | 15 min | IP       | `POST /auth/forgot-password`                |
-| `CHANGE_PASSWORD`         | 5     | 15 min | User     | `POST /auth/change-password`                |
-| `MFA_VERIFY`              | 10    | 1 min  | IP       | `POST /auth/mfa/verify`                     |
-| `MFA_VERIFY_SETUP`        | 5     | 5 min  | User     | `POST /auth/mfa/setup`, `/mfa/verify-setup` |
-| `ROLE_UPDATE_PERMISSIONS` | 10    | 1 min  | User     | `PUT /roles/:roleName/permissions`          |
+| Policy                          | Limit | Window | Key Type | Scope                                       |
+| ------------------------------- | ----- | ------ | -------- | ------------------------------------------- |
+| `GLOBAL`                        | 100   | 1 min  | IP       | All routes via `app.use`                    |
+| `HEALTH`                        | 60    | 1 min  | IP       | `GET /health`                               |
+| `SIGNUP`                        | 5     | 15 min | IP       | `POST /auth/signup`                         |
+| `VERIFY_EMAIL`                  | 10    | 5 min  | IP       | `POST /auth/verify-email`                   |
+| `RESEND_VERIFICATION`           | 5     | 15 min | IP       | `POST /auth/resend-verification`            |
+| `LOGIN`                         | 10    | 1 min  | IP       | `POST /auth/login`                          |
+| `REFRESH_TOKEN`                 | 30    | 1 min  | IP       | `POST /auth/refresh-token`                  |
+| `FORGOT_PASSWORD`               | 5     | 15 min | IP       | `POST /auth/forgot-password`                |
+| `RESET_PASSWORD`                | 5     | 15 min | IP       | `POST /auth/reset-password`                 |
+| `CHANGE_PASSWORD`               | 5     | 15 min | User     | `POST /auth/change-password`                |
+| `MFA_VERIFY`                    | 10    | 1 min  | IP       | `POST /auth/mfa/verify`                     |
+| `MFA_VERIFY_SETUP`              | 5     | 5 min  | User     | `POST /auth/mfa/setup`, `/mfa/verify-setup` |
+| `MFA_DISABLE`                   | 5     | 15 min | User     | `POST /auth/mfa/disable`                    |
+| `MFA_REGENERATE_RECOVERY_CODES` | 5     | 15 min | User     | `POST /auth/mfa/regenerate-recovery-codes`  |
+| `MAGIC_LINK_REQUEST`            | 5     | 15 min | IP       | `POST /auth/magic-link`                     |
+| `MAGIC_LINK_VERIFY`             | 10    | 5 min  | IP       | `POST /auth/magic-link/verify`              |
+| `OAUTH_INITIATE`                | 20    | 1 min  | IP       | `GET /auth/oauth/:provider`                 |
+| `OAUTH_CALLBACK`                | 20    | 1 min  | IP       | `GET /auth/oauth/:provider/callback`        |
+| `USER_READ`                     | 60    | 1 min  | User     | `GET /users/:id`                            |
+| `USER_CHANGE_ROLE`              | 10    | 1 min  | User     | `PATCH /users/:id/role`                     |
+| `ROLE_UPDATE_PERMISSIONS`       | 10    | 1 min  | User     | `PUT /roles/:roleName/permissions`          |
 
 ### Rationale
 
@@ -1762,14 +1777,24 @@ export const initiateOAuthHandler = (provider: OAuthProviderName) =>
 
 export const oauthCallbackHandler = (provider: OAuthProviderName) =>
   asyncHandler(async (req: Request, res: Response) => {
-    const { tokens } = await handleOAuthCallback(
+    const code = req.query.code as string;
+    const state = req.query.state as string;
+    const result = await handleOAuthCallback(
       provider,
-      req.query.code as string,
-      req.query.state as string,
+      code,
+      state,
       getClientIp(req),
       req.header("user-agent"),
     );
-    setAuthCookies(res, tokens);
+    if (result.mfaRequired) {
+      return ApiResponse.success(
+        res,
+        result,
+        "MFA verification required to complete login",
+        200,
+      );
+    }
+    setAuthCookies(res, result.tokens);
     return ApiResponse.success(
       res,
       null,
@@ -1824,32 +1849,68 @@ Token creation (`createMagicLinkToken`) uses Prisma `upsert`, atomically replaci
 
 ---
 
-## ADR-065 — Single-Query Atomic Magic Link Token Consumption via `DELETE ... RETURNING`
+## ADR-065 — Magic Link Token Lifecycle, Dual-Purpose Email Verification, and Atomic Consumption
 
 **Status:** Accepted
 
 ### Context
 
-Consuming single-use authentication tokens via separate `findFirst` and `delete` operations introduces a race condition where concurrent requests using the same token can both read the record as valid before either request deletes it. Wrapping queries in interactive transactions adds multi-step database roundtrips.
+Magic link authentication provides a passwordless entry mechanism that must handle concurrent replay attacks, token expiration without unnecessary write churn, dual-purpose email verification for unverified users, and seamless support across both password and social-login-created accounts.
 
 ### Decision
 
-Consume and delete magic link tokens in a single atomic SQL statement in `auth.repository.ts` via `prisma.magicLinkToken.delete`:
+Implement a clean two-phase lookup and consumption workflow in `auth.repository.ts` and `auth.service.ts`:
+
+1. **Non-Mutating Validity & Expiration Check:**
+   Query `findMagicLinkTokenWithUser` checking `tokenHash` and `expiresAt: { gte: new Date() }`. Expired or non-existent tokens return `null` without throwing or executing database writes. Expired records are retained for scheduled batch cleanup.
+
+2. **Atomic Consumption with Dual-Purpose Email Verification:**
+   Upon valid token resolution, `consumeMagicLinkToken` executes an atomic `prisma.user.update` with `magicLinkToken: { delete: {} }` and conditional email verification (`isEmailVerified: true`, `verifiedAt: new Date()` if unverified). Concurrent consumption attempts encounter Prisma `P2025` and are rejected with a 400 Bad Request error.
+
+3. **Universal Account Support:**
+   Magic links are available to any existing account, enabling users created via OAuth or password to log in passwordlessly.
 
 ```typescript
-const findAndConsumeMagicLinkToken = async (tokenHash: string) => {
+const findMagicLinkTokenWithUser = (tokenHash: string) =>
+  prisma.magicLinkToken.findFirst({
+    where: {
+      tokenHash,
+      expiresAt: { gte: new Date() },
+    },
+    include: {
+      user: {
+        include: {
+          role: {
+            select: {
+              name: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+const consumeMagicLinkToken = async (
+  userId: string,
+  shouldMarkEmailVerified: boolean,
+) => {
   try {
-    const token = await prisma.magicLinkToken.delete({
-      where: { tokenHash },
-      include: { user: { include: { role: true } } },
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(shouldMarkEmailVerified
+          ? { isEmailVerified: true, verifiedAt: new Date() }
+          : {}),
+        magicLinkToken: { delete: {} },
+      },
     });
-    return token.expiresAt < new Date() ? null : token;
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === "P2025"
-    )
-      return null;
+    ) {
+      throw new AppError("Invalid or expired magic link token", 400);
+    }
     throw error;
   }
 };
@@ -1857,9 +1918,10 @@ const findAndConsumeMagicLinkToken = async (tokenHash: string) => {
 
 ### Rationale
 
-- **Strict Atomic Single-Use:** PostgreSQL row-level locking during `DELETE` guarantees exactly one request can ever retrieve and consume a token.
-- **Minimized Database Roundtrips:** Reduces verification latency from two queries down to one atomic roundtrip (`DELETE ... WHERE token_hash = $1 RETURNING ...`).
-- **Self-Cleaning Expired Records:** Expired tokens are purged from the database upon consumption attempt.
+- **No Delete-on-Read Race Conditions:** Reading expired tokens produces zero database mutations, preserving records for centralized lifecycle cleanup without spurious write locks.
+- **Atomic Concurrency Defense:** Utilizing 1-to-1 nested deletion (`magicLinkToken: { delete: {} }`) guarantees that concurrent requests using the same token fail with an optimistic lock error (`P2025`).
+- **Implicit Proof of Ownership:** Receiving and opening a link sent to an email inbox conclusively proves email ownership, eliminating redundant secondary verification steps for unverified accounts.
+- **Universal Passwordless Access:** Extends magic link flexibility to all registered users regardless of authentication credential origin (password vs OAuth).
 
 ---
 
@@ -1887,3 +1949,50 @@ Add specialized rate limit policies to `RATE_LIMIT_POLICIES` in `src/middlewares
 - **Abuse Prevention:** Throttles outbound email dispatch to protect SMTP quotas and prevent inbox flooding.
 - **Provider API Quota Protection:** Prevents rapid authorization code exchanges from triggering third-party OAuth rate limits.
 - **Brute-Force Mitigation:** Restricts magic link token submission attempts to 10 per 5 minutes per IP address.
+
+---
+
+## ADR-067 — Atomic Last-Admin Demotion Guard via Exclusive Role Row-Locking
+
+**Status:** Accepted
+
+### Context
+
+Demoting an administrator role requires ensuring at least one active administrator remains in the system. Under PostgreSQL's default `READ COMMITTED` transaction isolation, evaluating an aggregate count across user rows without locking creates a write-skew race condition: two administrators demoting each other simultaneously each read a count of two, pass the guard, and update different rows without lock contention, leaving the system with zero administrators.
+
+### Decision
+
+Enforce the last-admin demotion guard inside an interactive database transaction in `users.repository.ts`. When demoting away from `ADMIN`, the transaction touches the single `ADMIN` record in the `roles` table (`tx.role.update`), acquiring an exclusive row-level lock that serializes all concurrent demotion attempts before evaluating `tx.user.count`:
+
+```typescript
+const updateUserRole = async (userId: string, roleName: RoleName) =>
+  prisma.$transaction(async (tx) => {
+    if (roleName !== ROLES.ADMIN) {
+      await tx.role.update({
+        where: { name: ROLES.ADMIN },
+        data: { updatedAt: new Date() },
+      });
+    }
+    const user = await tx.user.findUnique({
+      where: { id: userId },
+      include: { role: { select: { name: true } } },
+    });
+    if (!user) throw new AppError("User not found", 404);
+    if (user.role.name === ROLES.ADMIN && roleName !== ROLES.ADMIN) {
+      const count = await tx.user.count({
+        where: { role: { name: ROLES.ADMIN } },
+      });
+      if (count <= 1) throw new ForbiddenError("Cannot demote the last admin");
+    }
+    return tx.user.update({
+      where: { id: userId },
+      data: { role: { connect: { name: roleName } } },
+    });
+  });
+```
+
+### Rationale
+
+- **Write-Skew Elimination:** Mutexing on the unique `ADMIN` role record serializes concurrent demotions without table-wide locks or complex advisory lock SQL.
+- **Strict Invariant Guarantee:** Guarantees mathematically that active administrator count cannot drop below one under any concurrency load.
+- **Pure ORM Portability:** Relies entirely on standard Prisma client transactional constructs without dialect-specific raw queries.

@@ -9,7 +9,7 @@ const updateRolePermissions = async (
   input: UpdatePermissionsBody,
 ) => {
   if (roleName === ROLES.ADMIN) {
-    throw new ForbiddenError("Cannot update permissions for admin role.");
+    throw new ForbiddenError("Cannot update permissions for the admin role.");
   }
 
   const result = await rolesRepository.updateRolePermissions(
@@ -18,8 +18,8 @@ const updateRolePermissions = async (
   );
 
   // Invalidate Redis role-permission cache immediately upon DB update.
-  // Note: Active sessions reflect updated permissions upon their next access token
-  // refresh (bounded by 15m JWT_ACCESS_EXPIRES_IN_MS), avoiding disruptive mass session revocations.
+  // Because the auth middleware resolves permissions dynamically via authorizationService
+  // on every request, all active sessions pick up updated permissions immediately on their next request.
   await authorizationService.invalidateRolePermissionsCache(roleName);
 
   return result;

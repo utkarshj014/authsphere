@@ -11,19 +11,20 @@ AuthSphere is built as a production-grade, multi-package monorepo managed via np
 ```text
 authsphere/ (Monorepo Root)
 ├── apps/
-│   └── api/                  # Express.js REST API service (Node.js >22)
-│       ├── prisma/           # Database schema & migrations
-│       └── src/
-│           ├── common/       # Global errors, utilities, responses
-│           ├── config/       # Single-source env parsing & validation
-│           ├── generated/    # Generated Prisma client
-│           ├── lib/          # Singleton infrastructure clients (DB, Redis, Logger, Crypto)
-│           ├── middlewares/  # Global & request-level middlewares
-│           ├── modules/      # Domain feature modules
-│           └── types/        # Global Express ambient declarations
+│   ├── api/                  # Express.js REST API service (Node.js >22)
+│   │   ├── prisma/           # Database schema, migrations, and seed script
+│   │   └── src/
+│   │       ├── common/       # Global errors, utilities, responses
+│   │       ├── config/       # Single-source env parsing & validation
+│   │       ├── generated/    # Generated Prisma client
+│   │       ├── lib/          # Singleton infrastructure clients (DB, Redis, Logger, Crypto)
+│   │       ├── middlewares/  # Global & request-level middlewares
+│   │       ├── modules/      # Domain feature modules (auth, roles, users, health, email)
+│   │       └── types/        # Global Express ambient declarations
+│   └── web/                  # React & Vite frontend application
 ├── packages/
-│   └── shared/               # Shared domain constants (ROLES, PERMISSIONS) & types
-└── docker/                   # Development infrastructure (PostgreSQL, Redis)
+│   └── shared/               # Shared domain constants (ROLES, PERMISSIONS, OAUTH_PROVIDERS) & types
+└── docker/                   # Development infrastructure (PostgreSQL, Redis Compose configurations)
 ```
 
 ---
@@ -38,14 +39,14 @@ graph TD
 
     subgraph Middleware Pipeline
         Express --> Helmet["Helmet & CORS"]
-        Helmet --> BodyParser["JSON (16kb Limit) & Cookie Parser"]
-        BodyParser --> ReqID["Request ID (Sanitized) & Pino Logger"]
+        Helmet --> ReqID["Request ID (Sanitized) & Pino Logger"]
         ReqID --> OriginGuard["Origin Validation (State Mutations)"]
         OriginGuard --> RateLimiter["Global Rate Limiter"]
-        RateLimiter --> Validate["Zod Validation Middleware"]
-        Validate --> AuthGuard["Auth Middleware"]
-        AuthGuard --> RouteRL["Route-Level Rate Limiter"]
-        RouteRL --> PermissionGuard["RequireRole / RequirePermission Guard"]
+        RateLimiter --> BodyParser["JSON (16kb Limit) & Cookie Parser"]
+        BodyParser --> RouteRL["Route-Level Rate Limiter"]
+        RouteRL --> Validate["Zod Validation Middleware"]
+        Validate --> AuthGuard["Auth Middleware (req.auth)"]
+        AuthGuard --> PermissionGuard["RequireRole / RequirePermission Guard"]
     end
 
     subgraph Feature Module Layer
@@ -56,6 +57,7 @@ graph TD
 
     subgraph Infrastructure Layer
         RateLimiter -->|Lua EVALSHA Atomic Counters| Redis[("Redis Cache")]
+        RouteRL -->|Lua EVALSHA Atomic Counters| Redis
         Service -->|Permission Lookups / Cache| Redis
         Service -->|AES-256-GCM / Argon2id / SHA-256| CryptoLib["Crypto Library"]
         Repository -->|Prisma 7 ORM| Postgres[("PostgreSQL DB")]
@@ -64,13 +66,13 @@ graph TD
 
 ### Layer Responsibilities
 
-| Layer                   | Primary Responsibility                                                                                                                                                                       | Architectural Rule                                                                                                         |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Middleware Pipeline** | Input parsing (16kb body limit), request tracing/sanitization, origin validation on mutations, global and route-level rate limiting, schema validation, token verification, RBAC/ABAC guards | Rejects malformed, oversized, untrusted-origin, rate-limited, or unauthorized requests before reaching domain controllers. |
-| **Controller**          | HTTP orchestration, extracting pre-validated input, setting/clearing cookies, returning standard JSON DTOs                                                                                   | Must contain zero business logic or SQL queries. Calls services.                                                           |
-| **Service**             | Core domain logic, cross-module orchestration, security decisions, MFA verification, session generation, cache invalidation                                                                  | Independent of Express `req`/`res`. Throws `AppError` subclasses.                                                          |
-| **Repository**          | Data access layer using Prisma 7 ORM and database transactions                                                                                                                               | Encapsulates all SQL/Prisma operations. Handles `P2002` duplicate errors and executes atomic queries.                      |
-| **Infrastructure**      | Singletons for Database (Prisma + `pg`), Cache (`node-redis`), Logging (Pino), Crypto (Argon2id, AES-256-GCM)                                                                                | Instantiated inside `src/lib/` and shared across modules.                                                                  |
+| Layer                   | Primary Responsibility                                                                                                                                          | Architectural Rule                                                                                                         |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Middleware Pipeline** | Request tracing, origin validation on mutations, global and route rate limiting, input parsing (16kb limit), schema validation, token verification, RBAC guards | Rejects malformed, oversized, untrusted-origin, rate-limited, or unauthorized requests before reaching domain controllers. |
+| **Controller**          | HTTP orchestration, extracting pre-validated input, setting/clearing cookies, returning standard JSON DTOs                                                      | Must contain zero business logic or SQL queries. Calls services.                                                           |
+| **Service**             | Core domain logic, cross-module orchestration, security decisions, MFA verification, session generation, cache invalidation                                     | Independent of Express `req`/`res`. Throws `AppError` subclasses.                                                          |
+| **Repository**          | Data access layer using Prisma 7 ORM and database transactions                                                                                                  | Encapsulates all SQL/Prisma operations. Handles `P2002` duplicate errors and executes atomic queries.                      |
+| **Infrastructure**      | Singletons for Database (Prisma + `pg`), Cache (`node-redis`), Logging (Pino), Crypto (Argon2id, AES-256-GCM)                                                   | Instantiated inside `src/lib/` and shared across modules.                                                                  |
 
 ---
 
@@ -96,8 +98,12 @@ erDiagram
         string email UK
         string passwordHash "Argon2id / Null for social"
         boolean isEmailVerified
+        string firstName "Nullable"
+        string lastName "Nullable"
         string roleId FK
-        datetime passwordChangedAt
+        datetime lastLoginAt "Nullable"
+        datetime verifiedAt "Nullable"
+        datetime passwordChangedAt "Nullable"
         boolean mfaEnabled
         string mfaSecret "AES-256-GCM Encrypted"
         int mfaLastUsedWindow "Monotonic Window Index"
@@ -108,7 +114,7 @@ erDiagram
     Role {
         string id PK "UUIDv7"
         enum name UK "USER | ADMIN"
-        string description
+        string description "Nullable"
         datetime createdAt
         datetime updatedAt
     }
@@ -116,7 +122,7 @@ erDiagram
     Permission {
         string id PK "UUIDv7"
         string name UK "e.g. user.read"
-        string description
+        string description "Nullable"
         datetime createdAt
         datetime updatedAt
     }
@@ -130,8 +136,8 @@ erDiagram
         string id PK "UUIDv7"
         string userId FK
         string tokenHash UK "SHA-256"
-        string ipAddress
-        string userAgent
+        string ipAddress "Nullable"
+        string userAgent "Nullable"
         datetime expiresAt
         datetime createdAt
     }
@@ -156,7 +162,7 @@ erDiagram
         string id PK "UUIDv7"
         string userId FK
         string codeHash UK "SHA-256"
-        datetime usedAt
+        datetime usedAt "Nullable"
         datetime createdAt
     }
 
@@ -273,7 +279,7 @@ sequenceDiagram
 
 ### 4.3 Role Permission Management & Cache Invalidation Flow
 
-When an administrator updates permissions assigned to a role, cache consistency is maintained across distributed nodes:
+When an administrator updates permissions assigned to a non-admin role, cache consistency is maintained across distributed nodes:
 
 ```mermaid
 sequenceDiagram
@@ -286,16 +292,17 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant Redis as Redis Cache
 
-    Admin->>Route: PUT /roles/ADMIN/permissions { permissions: [...] }
+    Admin->>Route: PUT /roles/USER/permissions { permissions: [...] }
+    Route->>Route: auth (verify JWT) & rateLimiter(ROLE_UPDATE_PERMISSIONS)
     Route->>Route: Validate Params & Body (Zod Deduplicate)
     Route->>Route: requireRole(ADMIN)
     Route->>Controller: updatePermissions()
-    Controller->>Service: updateRolePermissions("ADMIN", ["user.read", ...])
-    Service->>Repo: updateRolePermissions("ADMIN", [...])
+    Controller->>Service: updateRolePermissions("USER", ["profile.read", ...])
+    Service->>Repo: updateRolePermissions("USER", [...])
     Repo->>DB: Atomic prisma.role.update (deleteMany + create connect)
     DB-->>Repo: Updated Role & Permissions
     Repo-->>Service: Success
-    Service->>Redis: DEL role:permissions:ADMIN
+    Service->>Redis: DEL role:permissions:USER
     Redis-->>Service: OK
     Service-->>Controller: DTO
     Controller-->>Admin: 200 OK { success: true, data }
@@ -330,23 +337,25 @@ sequenceDiagram
     API->>Provider: Exchange authorization code for access token & profile
     Provider-->>API: Normalized OAuthProfile (verified email, providerId)
     API->>DB: Query OAuthAccount(provider, providerId) & User by email
-    alt Returning Linked User
+    alt Returning Linked User with MFA Enabled
+        API->>DB: Create MfaChallenge (UUIDv7 mfaToken, 5m TTL)
+        API-->>User: 200 OK { mfaRequired: true, mfaToken }
+    else Returning User (MFA Disabled) / Authenticated Link / New User Registration
+        alt Authenticated Account Link (state.userId present)
+            API->>DB: Create OAuthAccount linked to current user
+        else New User Registration
+            API->>DB: Atomic Transaction: Create User (isEmailVerified: true) + OAuthAccount
+        end
         API->>DB: Create Session via generateAuthTokensAndSession()
-    else Authenticated Account Link (state.userId present)
-        API->>DB: Create OAuthAccount linked to current user
-        API->>DB: Create Session via generateAuthTokensAndSession()
+        API-->>User: Set-Cookie: accessToken, refreshToken + 200 OK
     else Unauthenticated Existing Email Conflict
         API-->>User: 409 Conflict ("Account exists. Log in with password to link")
-    else New User Registration
-        API->>DB: Atomic Transaction: Create User (isEmailVerified: true) + OAuthAccount
-        API->>DB: Create Session via generateAuthTokensAndSession()
     end
-    API-->>User: Set-Cookie: accessToken, refreshToken + 200 OK
 ```
 
 ### 4.5 Passwordless Magic Link Authentication Flow
 
-Passwordless authentication provides enumeration-safe token issuance and atomic single-query consumption:
+Passwordless authentication provides enumeration-safe token issuance and atomic single-use nested consumption:
 
 ```mermaid
 sequenceDiagram
@@ -372,14 +381,14 @@ sequenceDiagram
     Note over User, DB: Step 2: Magic Link Verification & Session Issuance
     User->>API: POST /auth/magic-link/verify { token }
     API->>API: Rate Limiter (10/5m) & hashToken(input.token)
-    API->>DB: DELETE FROM magic_link_tokens WHERE token_hash = $1 RETURNING user, role
+    API->>DB: findMagicLinkTokenWithUser(tokenHash) (expiresAt >= NOW)
     alt Token Invalid / Expired / Already Consumed
         API-->>User: 400 Bad Request ("Invalid or expired magic link token")
     else Token Valid & MFA Enabled (user.mfaEnabled === true)
-        API->>DB: Create MfaChallenge (UUIDv7 mfaToken, 5m TTL)
+        API->>DB: Atomic user.update (magicLinkToken: { delete: {} }) + createMfaChallenge
         API-->>User: 200 OK { mfaRequired: true, mfaToken }
     else Token Valid & MFA Disabled
-        API->>DB: Create Session via generateAuthTokensAndSession()
+        API->>DB: Atomic user.update (magicLinkToken: { delete: {} }) + createSession
         API-->>User: Set-Cookie: accessToken, refreshToken + 200 OK "Login successful via Magic Link"
     end
 ```
@@ -409,7 +418,8 @@ sequenceDiagram
    - **Mandatory Email Verification**: Enforces `email_verified: true` across providers, resolving private verified GitHub emails via `/user/emails` `[ADR-062]`.
 6. **Passwordless Magic Link Security**:
    - **1-1 Token Relation & Prior Link Revocation**: Enforces `userId @unique` on `MagicLinkToken`, automatically invalidating superseded links on re-request `[ADR-064]`.
-   - **Single-Query Atomic Deletion**: Consumes and deletes tokens in a single SQL statement (`DELETE FROM magic_link_tokens WHERE token_hash = $1 RETURNING ...`), eliminating concurrent race conditions `[ADR-065]`.
+   - **Atomic Consumption & Dual-Purpose Verification**: Atomically consumes tokens via 1-to-1 nested deletion (`magicLinkToken: { delete: {} }`), automatically marks unverified accounts as verified upon login, and defers expired token cleanup to scheduled jobs `[ADR-065]`.
+   - **Universal Account Access**: Enables both password-based and social-login-created users to log in passwordlessly.
    - **Enumeration-Safe Policy**: Requests return identical generic responses regardless of account existence `[ADR-023]`.
 7. **Input Sanitization & Request Hardening**:
    - Multi-target Zod validation (`ValidationTarget.BODY`, `PARAMS`, `QUERY`) strips undeclared parameters to prevent mass assignment `[ADR-026]`. Array deduplication via Zod `.transform()` normalizes inputs `[ADR-038]`.
@@ -435,6 +445,7 @@ sequenceDiagram
 
 - **Centralized Session Utility**: `generateAuthTokensAndSession` helper consolidates token signing, hashing, and session creation/rotation `[ADR-039]`.
 - **Repository Exception Translation**: Prisma `P2002` unique constraint failures (e.g. concurrent duplicate signups) are caught in the repository layer and rethrown as `AppError("Email already in use", 409)` `[ADR-041]`.
+- **Last-Admin Demotion Guard**: Mutexes on the `ADMIN` role record via interactive Prisma transaction row-locking, preventing write-skew concurrency bugs that could demote the final system administrator `[ADR-067]`.
 - **Graceful Shutdown**: Intercepts `SIGINT`/`SIGTERM` to close HTTP listeners, drain active connections with a 10s timeout, and disconnect Prisma and Redis concurrently `[ADR-010]`.
 - **Fail-Safe Caching**: `redis.isOpen` checks ensure that Redis network outages transparently fallback to PostgreSQL DB queries without crashing requests `[ADR-035]`.
 - **Structured Logging**: Pino emits structured JSON logs with correlated `X-Request-Id` headers across request lifecycles `[ADR-009]`.
