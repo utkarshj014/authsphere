@@ -17,7 +17,9 @@ const updateRolePermissions = async (
     input.permissions,
   );
 
-  // Invalidate Redis role-permission cache only after successful DB update
+  // Invalidate Redis role-permission cache immediately upon DB update.
+  // Note: Active sessions reflect updated permissions upon their next access token
+  // refresh (bounded by 15m JWT_ACCESS_EXPIRES_IN_MS), avoiding disruptive mass session revocations.
   await authorizationService.invalidateRolePermissionsCache(roleName);
 
   return result;

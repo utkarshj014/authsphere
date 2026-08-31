@@ -6,8 +6,8 @@ import {
   UnauthorizedError,
 } from "../../common/errors/index.js";
 
-// In this file, we don't need asyncHandler, as we don't have redis/database calls,
-// but we are using it for consistency with the authentication middleware.
+// Note: Authorization guards execute synchronously in-memory against req.auth,
+// but use asyncHandler for uniform Express promise error forwarding and consistency.
 
 export const requireRole = (...roles: RoleName[]) => {
   return asyncHandler(
