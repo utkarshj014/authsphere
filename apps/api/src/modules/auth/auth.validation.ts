@@ -75,6 +75,11 @@ export const authSchema = {
   verifyMagicLink: z.object({
     token: z.string().trim().min(1),
   }),
+
+  securityEventsQuery: z.object({
+    page: z.coerce.number().int().positive().optional().default(1),
+    limit: z.coerce.number().int().positive().max(100).optional().default(20),
+  }),
 };
 
 export type SignupInput = z.infer<typeof authSchema.signup>;
@@ -94,3 +99,6 @@ export type MfaRegenerateRecoveryCodesInput = z.infer<
 >;
 export type SendMagicLinkInput = z.infer<typeof authSchema.sendMagicLink>;
 export type VerifyMagicLinkInput = z.infer<typeof authSchema.verifyMagicLink>;
+export type SecurityEventsQueryInput = z.infer<
+  typeof authSchema.securityEventsQuery
+>;

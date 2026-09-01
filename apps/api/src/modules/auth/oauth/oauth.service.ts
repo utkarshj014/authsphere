@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import {
   ROLES,
   OAUTH_PROVIDERS,
+  SECURITY_EVENT_TYPES,
   type OAuthProviderName,
   type RoleName,
 } from "@authsphere/shared";
@@ -9,7 +10,10 @@ import type { OAuthProvider } from "../../../generated/prisma/client.js";
 import { redis } from "../../../lib/redis.js";
 import { AppError } from "../../../common/errors/index.js";
 import { authRepository } from "../auth.repository.js";
-import { generateAuthTokensAndSession } from "../auth.service.js";
+import {
+  generateAuthTokensAndSession,
+  recordSecurityEvent,
+} from "../auth.service.js";
 import { googleOAuthProvider } from "./google.provider.js";
 import { githubOAuthProvider } from "./github.provider.js";
 import type { AuthTokens } from "../auth.types.js";
@@ -214,6 +218,14 @@ export const handleOAuthCallback = async (
       challengeExpiresAt,
     );
 
+    await recordSecurityEvent(
+      userToAuthenticate.id,
+      SECURITY_EVENT_TYPES.OAUTH_LOGIN,
+      ipAddress,
+      userAgent,
+      { provider, mfaRequired: true },
+    );
+
     return {
       mfaRequired: true,
       mfaToken: challenge.id,
@@ -226,6 +238,14 @@ export const handleOAuthCallback = async (
     userToAuthenticate.role.name,
     ipAddress,
     userAgent,
+  );
+
+  await recordSecurityEvent(
+    userToAuthenticate.id,
+    SECURITY_EVENT_TYPES.OAUTH_LOGIN,
+    ipAddress,
+    userAgent,
+    { provider },
   );
 
   return {

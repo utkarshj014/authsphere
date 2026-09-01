@@ -143,6 +143,24 @@ export const RATE_LIMIT_POLICIES = {
     windowMs: 60 * 1000,
     keyType: "user",
   },
+  SESSIONS_READ: {
+    name: "sessions-read",
+    limit: 60,
+    windowMs: 60 * 1000,
+    keyType: "user",
+  },
+  SESSION_REVOKE: {
+    name: "session-revoke",
+    limit: 20,
+    windowMs: 60 * 1000,
+    keyType: "user",
+  },
+  SECURITY_EVENTS_READ: {
+    name: "security-events-read",
+    limit: 60,
+    windowMs: 60 * 1000,
+    keyType: "user",
+  },
 } as const satisfies Record<string, RateLimitPolicy>;
 
 /** Reusable Express middleware factory for enforcing Redis-backed fixed-window rate limits */

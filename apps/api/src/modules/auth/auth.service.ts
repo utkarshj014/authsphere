@@ -1,5 +1,10 @@
 import { uuidv7 } from "uuidv7";
-import { ROLES, type RoleName } from "@authsphere/shared";
+import {
+  ROLES,
+  SECURITY_EVENT_TYPES,
+  type RoleName,
+  type SecurityEventTypeName,
+} from "@authsphere/shared";
 import { AppError, UnauthorizedError } from "../../common/errors/index.js";
 import { authRepository } from "./auth.repository.js";
 import type {
@@ -16,6 +21,7 @@ import type {
   MfaRegenerateRecoveryCodesInput,
   SendMagicLinkInput,
   VerifyMagicLinkInput,
+  SecurityEventsQueryInput,
 } from "./auth.validation.js";
 import {
   hashPassword,
@@ -38,12 +44,28 @@ import {
   signRefreshToken,
   verifyRefreshToken,
 } from "../../lib/jwt/index.js";
-import type { AuthTokens } from "./auth.types.js";
+import type { AuthTokens, PaginatedSecurityEventsDto } from "./auth.types.js";
 import { env } from "../../config/env.js";
 
 // ==========================================
 // Private Helpers
 // ==========================================
+
+export const recordSecurityEvent = async (
+  userId: string,
+  type: SecurityEventTypeName,
+  ipAddress?: string,
+  userAgent?: string,
+  metadata?: Record<string, unknown>,
+) => {
+  await authRepository.createSecurityEvent({
+    userId,
+    type,
+    ...(ipAddress ? { ipAddress } : {}),
+    ...(userAgent ? { userAgent } : {}),
+    ...(metadata ? { metadata } : {}),
+  });
+};
 
 export const generateAuthTokensAndSession = async (
   userId: string,
@@ -217,6 +239,13 @@ const login = async (
 
   const passwordMatch = await verifyPassword(user.passwordHash, input.password);
   if (!passwordMatch) {
+    await recordSecurityEvent(
+      user.id,
+      SECURITY_EVENT_TYPES.LOGIN_FAILED,
+      ipAddress,
+      userAgent,
+      { reason: "INVALID_PASSWORD" },
+    );
     throw new UnauthorizedError("Invalid credentials");
   }
 
@@ -240,6 +269,13 @@ const login = async (
   const tokens = await generateAuthTokensAndSession(
     user.id,
     user.role.name,
+    ipAddress,
+    userAgent,
+  );
+
+  await recordSecurityEvent(
+    user.id,
+    SECURITY_EVENT_TYPES.LOGIN_SUCCESS,
     ipAddress,
     userAgent,
   );
@@ -307,15 +343,35 @@ const logout = async (token?: string) => {
   }
 
   await authRepository.deleteSessionById(session.id);
+
+  await recordSecurityEvent(
+    session.userId,
+    SECURITY_EVENT_TYPES.LOGOUT,
+    session.ipAddress ?? undefined,
+    session.userAgent ?? undefined,
+    { sessionId: session.id },
+  );
 };
 
-const logoutAll = async (userId: string) => {
+const logoutAll = async (
+  userId: string,
+  ipAddress?: string,
+  userAgent?: string,
+) => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
     return;
   }
 
   await authRepository.deleteAllSessionsByUserId(user.id);
+
+  await recordSecurityEvent(
+    user.id,
+    SECURITY_EVENT_TYPES.LOGOUT,
+    ipAddress,
+    userAgent,
+    { scope: "ALL_SESSIONS" },
+  );
 };
 
 const getCurrentUser = async (userId: string) => {
@@ -384,6 +440,8 @@ const resetPassword = async (
 
   await authRepository.resetPasswordAndDeleteToken(user.id, newPasswordHash);
 
+  await recordSecurityEvent(user.id, SECURITY_EVENT_TYPES.PASSWORD_RESET);
+
   return { mfaRequired: false };
 };
 
@@ -435,6 +493,8 @@ const changePassword = async (
   const newPasswordHash = await hashPassword(input.newPassword);
 
   await authRepository.changePassword(userId, newPasswordHash);
+
+  await recordSecurityEvent(userId, SECURITY_EVENT_TYPES.PASSWORD_CHANGED);
 
   return { mfaRequired: false };
 };
@@ -490,6 +550,8 @@ const mfaVerifySetup = async (userId: string, input: MfaVerifySetupInput) => {
     recoveryCodeHashes,
   );
 
+  await recordSecurityEvent(userId, SECURITY_EVENT_TYPES.MFA_ENABLED);
+
   return {
     recoveryCodes,
   };
@@ -511,12 +573,27 @@ const mfaVerifyLogin = async (
 
   const { user } = challenge;
 
-  const verificationResult = await verifyMfaCodeOrRecoveryCode(
-    user.id,
-    user.mfaSecret,
-    user.mfaEnabled,
-    input.code,
-  );
+  let verificationResult: { usedRecoveryCode: boolean };
+  try {
+    verificationResult = await verifyMfaCodeOrRecoveryCode(
+      user.id,
+      user.mfaSecret,
+      user.mfaEnabled,
+      input.code,
+    );
+  } catch (error) {
+    await recordSecurityEvent(
+      user.id,
+      SECURITY_EVENT_TYPES.LOGIN_FAILED,
+      ipAddress,
+      userAgent,
+      {
+        reason:
+          error instanceof AppError ? error.message : "MFA_CHALLENGE_FAILED",
+      },
+    );
+    throw error;
+  }
 
   await authRepository.deleteMfaChallenge(input.mfaToken);
 
@@ -532,6 +609,16 @@ const mfaVerifyLogin = async (
     user.role.name,
     ipAddress,
     userAgent,
+  );
+
+  await recordSecurityEvent(
+    user.id,
+    SECURITY_EVENT_TYPES.LOGIN_SUCCESS,
+    ipAddress,
+    userAgent,
+    {
+      usedRecoveryCode: verificationResult.usedRecoveryCode,
+    },
   );
 
   if (remainingRecoveryCodes !== undefined && remainingRecoveryCodes <= 2) {
@@ -559,6 +646,8 @@ const mfaDisable = async (userId: string, input: MfaDisableInput) => {
   );
 
   await authRepository.disableMfaAndRevokeSessions(userId);
+
+  await recordSecurityEvent(userId, SECURITY_EVENT_TYPES.MFA_DISABLED);
 };
 
 const mfaRegenerateRecoveryCodes = async (
@@ -629,6 +718,14 @@ const verifyMagicLink = async (
       challengeExpiresAt,
     );
 
+    await recordSecurityEvent(
+      user.id,
+      SECURITY_EVENT_TYPES.MAGIC_LINK_LOGIN,
+      ipAddress,
+      userAgent,
+      { mfaRequired: true },
+    );
+
     return {
       mfaRequired: true,
       mfaToken: challenge.id,
@@ -642,9 +739,42 @@ const verifyMagicLink = async (
     userAgent,
   );
 
+  await recordSecurityEvent(
+    user.id,
+    SECURITY_EVENT_TYPES.MAGIC_LINK_LOGIN,
+    ipAddress,
+    userAgent,
+  );
+
   return {
     mfaRequired: false,
     tokens,
+  };
+};
+
+const getSecurityEvents = async (
+  userId: string,
+  query: SecurityEventsQueryInput,
+): Promise<PaginatedSecurityEventsDto> => {
+  const skip = (query.page - 1) * query.limit;
+
+  const [events, totalCount] = await Promise.all([
+    authRepository.findSecurityEventsByUserId(userId, skip, query.limit),
+    authRepository.countSecurityEventsByUserId(userId),
+  ]);
+
+  const totalPages = Math.ceil(totalCount / query.limit) || 1;
+
+  return {
+    events,
+    pagination: {
+      page: query.page,
+      limit: query.limit,
+      totalCount,
+      totalPages,
+      hasNextPage: query.page < totalPages,
+      hasPreviousPage: query.page > 1,
+    },
   };
 };
 
@@ -667,4 +797,5 @@ export const authService = {
   mfaRegenerateRecoveryCodes,
   sendMagicLink,
   verifyMagicLink,
+  getSecurityEvents,
 };

@@ -7,6 +7,7 @@ import {
   clearAuthCookies,
   getClientIp,
 } from "../../common/utils/index.js";
+import type { SecurityEventsQueryInput } from "./auth.validation.js";
 
 const signup = asyncHandler(async (req: Request, res: Response) => {
   await authService.signup(req.body);
@@ -89,8 +90,10 @@ const logout = asyncHandler(async (req: Request, res: Response) => {
 
 const logoutAll = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.auth.userId;
+  const ipAddress = getClientIp(req);
+  const userAgent = req.header("user-agent");
 
-  await authService.logoutAll(userId);
+  await authService.logoutAll(userId, ipAddress, userAgent);
 
   clearAuthCookies(res);
 
@@ -267,6 +270,20 @@ const verifyMagicLink = asyncHandler(async (req: Request, res: Response) => {
   return ApiResponse.success(res, null, "Login successful via Magic Link", 200);
 });
 
+const getSecurityEvents = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.auth.userId;
+  const query = req.query as unknown as SecurityEventsQueryInput;
+
+  const result = await authService.getSecurityEvents(userId, query);
+
+  return ApiResponse.success(
+    res,
+    result,
+    "Security events retrieved successfully",
+    200,
+  );
+});
+
 export const authController = {
   signup,
   verifyEmail,
@@ -286,4 +303,5 @@ export const authController = {
   mfaRegenerateRecoveryCodes,
   sendMagicLink,
   verifyMagicLink,
+  getSecurityEvents,
 };

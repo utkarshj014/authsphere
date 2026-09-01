@@ -53,6 +53,7 @@ model User {
   mfaRecoveryCodes MfaRecoveryCode[]
   oauthAccounts    OAuthAccount[]
   sessions         Session[]
+  securityEvents   SecurityEvent[]
 
   @@map("users")
 }
@@ -212,4 +213,35 @@ model MagicLinkToken {
 
   @@index([expiresAt])
   @@map("magic_link_tokens")
+}
+
+enum SecurityEventType {
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGOUT
+  MFA_ENABLED
+  MFA_DISABLED
+  PASSWORD_CHANGED
+  PASSWORD_RESET
+  OAUTH_LOGIN
+  MAGIC_LINK_LOGIN
+}
+
+model SecurityEvent {
+  id String @id @default(uuid(7))
+
+  userId String @map("user_id")
+
+  type SecurityEventType
+
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
+  metadata  Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("security_events")
 }

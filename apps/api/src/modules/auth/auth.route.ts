@@ -7,7 +7,7 @@ import {
   githubInitiate,
   githubCallback,
 } from "./oauth/oauth.controller.js";
-import { validate } from "../../middlewares/validate.js";
+import { validate, ValidationTarget } from "../../middlewares/validate.js";
 import { auth, optionalAuth } from "../../middlewares/auth.js";
 import {
   rateLimiter,
@@ -134,6 +134,13 @@ router
     rateLimiter(RATE_LIMIT_POLICIES.MAGIC_LINK_VERIFY),
     validate(authSchema.verifyMagicLink),
     authController.verifyMagicLink,
+  )
+  .get(
+    "/security-events",
+    auth,
+    rateLimiter(RATE_LIMIT_POLICIES.SECURITY_EVENTS_READ),
+    validate(authSchema.securityEventsQuery, ValidationTarget.QUERY),
+    authController.getSecurityEvents,
   );
 
 export default router;

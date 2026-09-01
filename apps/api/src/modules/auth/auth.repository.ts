@@ -1,7 +1,7 @@
 import { prisma } from "../../lib/prisma.js";
 import { Prisma, type OAuthProvider } from "../../generated/prisma/client.js";
 import { AppError, UnauthorizedError } from "../../common/errors/index.js";
-import type { RoleName } from "@authsphere/shared";
+import type { RoleName, SecurityEventTypeName } from "@authsphere/shared";
 
 const findUserByEmail = (email: string) =>
   prisma.user.findUnique({ where: { email } });
@@ -519,6 +519,46 @@ const consumeMagicLinkToken = async (
   }
 };
 
+const createSecurityEvent = async (data: {
+  userId: string;
+  type: SecurityEventTypeName;
+  ipAddress?: string;
+  userAgent?: string;
+  metadata?: Record<string, unknown>;
+}) =>
+  prisma.securityEvent.create({
+    data: {
+      ...data,
+      metadata: data.metadata
+        ? (data.metadata as Prisma.InputJsonValue)
+        : Prisma.JsonNull,
+    },
+  });
+
+const findSecurityEventsByUserId = (
+  userId: string,
+  skip: number,
+  take: number,
+) =>
+  prisma.securityEvent.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    skip,
+    take,
+    select: {
+      id: true,
+      type: true,
+      ipAddress: true,
+      userAgent: true,
+      createdAt: true,
+    },
+  });
+
+const countSecurityEventsByUserId = (userId: string) =>
+  prisma.securityEvent.count({
+    where: { userId },
+  });
+
 export const authRepository = {
   findUserByEmail,
   findRoleByName,
@@ -552,4 +592,7 @@ export const authRepository = {
   createMagicLinkToken,
   findMagicLinkTokenWithUser,
   consumeMagicLinkToken,
+  createSecurityEvent,
+  findSecurityEventsByUserId,
+  countSecurityEventsByUserId,
 };
