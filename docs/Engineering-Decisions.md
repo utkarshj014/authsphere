@@ -54,6 +54,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-029: `deleteMany` for Idempotent Session Deletion](#adr-029--deletemany-for-idempotent-session-deletion)
 - [ADR-039: Centralized Auth Token and Session Generation](#adr-039--centralized-auth-token-and-session-generation)
 - [ADR-061: Strict Conflict-Guarded OAuth Identity Resolution Workflow](#adr-061--strict-conflict-guarded-oauth-identity-resolution-workflow)
+- [ADR-068: Active Session Introspection, Ownership-Enforced Revocation, and Safe Cookie Invalidation](#adr-068--active-session-introspection-ownership-enforced-revocation-and-safe-cookie-invalidation)
 
 </details>
 
@@ -114,6 +115,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-010: Multi-Resource Graceful Shutdown](#adr-010--multi-resource-graceful-shutdown)
 - [ADR-011: Operational Health Monitoring Pattern](#adr-011--operational-health-monitoring-pattern)
 - [ADR-043: Request ID Sanitization with Context Preservation](#adr-043--request-id-sanitization-with-context-preservation)
+- [ADR-069: Multi-Phase Security Audit Logging, Standardized Helper Encapsulation, and Indexed User History Retrieval](#adr-069--multi-phase-security-audit-logging-standardized-helper-encapsulation-and-indexed-user-history-retrieval)
 
 </details>
 
@@ -122,7 +124,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-067)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-069)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -191,6 +193,8 @@ This document records the architectural and engineering decisions made during th
 - [ADR-065: Magic Link Token Lifecycle, Dual-Purpose Email Verification, and Atomic Consumption](#adr-065--magic-link-token-lifecycle-dual-purpose-email-verification-and-atomic-consumption)
 - [ADR-066: Multi-Tier Rate Limiting for OAuth Callbacks and Passwordless Magic Links](#adr-066--multi-tier-rate-limiting-for-oauth-callbacks-and-passwordless-magic-links)
 - [ADR-067: Atomic Last-Admin Demotion Guard via Exclusive Role Row-Locking](#adr-067--atomic-last-admin-demotion-guard-via-exclusive-role-row-locking)
+- [ADR-068: Active Session Introspection, Ownership-Enforced Revocation, and Safe Cookie Invalidation](#adr-068--active-session-introspection-ownership-enforced-revocation-and-safe-cookie-invalidation)
+- [ADR-069: Multi-Phase Security Audit Logging, Standardized Helper Encapsulation, and Indexed User History Retrieval](#adr-069--multi-phase-security-audit-logging-standardized-helper-encapsulation-and-indexed-user-history-retrieval)
 
 </details>
 
@@ -232,7 +236,8 @@ Organize backend code inside `apps/api/src/modules/` by feature domain. Each mod
 
 | Module           | Domain                               | Key Endpoints                                                                                       |
 | ---------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `auth/`          | Authentication & session management  | `POST /auth/signup`, `POST /auth/login`, `GET /auth/oauth/:provider`, `POST /auth/magic-link`, etc. |
+| `auth/`          | Authentication & credentials         | `POST /auth/signup`, `POST /auth/login`, `GET /auth/oauth/:provider`, `POST /auth/magic-link`, etc. |
+| `sessions/`      | Active session lifecycle             | `GET /sessions`, `DELETE /sessions/:id`                                                             |
 | `authorization/` | Permission resolution & caching      | Internal service (consumed by `auth` middleware)                                                    |
 | `users/`         | User profile & role assignment       | `GET /users/:id`, `PATCH /users/:id/role`                                                           |
 | `roles/`         | Role-permission management           | `PUT /roles/:roleName/permissions`                                                                  |
@@ -640,18 +645,12 @@ Individual properties (`req.userId`, `req.sessionId`, `req.role`) on the Express
 Populate a structured `req.auth` object from the JWT payload and authorization service:
 
 ```typescript
-// express.d.ts
-auth: {
-  userId: string;
-  role: RoleName;
-  sessionId: string;
-  permissions: PermissionName[];
+req.auth = {
+  userId: payload.sub,
+  role: payload.role,
+  sessionId: payload.sid,
+  permissions: await authorizationService.getPermissionsByRole(payload.role),
 };
-
-// middlewares/auth.ts
-const payload = await verifyAccessToken(accessToken);
-const permissions = await authorizationService.getPermissionsByRole(payload.role);
-req.auth = { userId: payload.sub, role: payload.role, sessionId: payload.sid, permissions };
 ```
 
 ### Rationale
@@ -757,34 +756,19 @@ Validation inside controllers creates boilerplate and must target different requ
 
 ### Decision
 
-`validate` middleware factory accepts a `ZodType` schema and explicit `ValidationTarget` enum:
+`validate` middleware factory accepts a `ZodType` schema and explicit `ValidationTarget` (`BODY`, `PARAMS`, `QUERY`):
 
 ```typescript
-export enum ValidationTarget {
-  BODY = "body",
-  PARAMS = "params",
-  QUERY = "query",
-}
-
 export const validate = (
   schema: ZodType,
   target: ValidationTarget = ValidationTarget.BODY,
-) => {
-  return asyncHandler(async (req, _res, next) => {
+) =>
+  asyncHandler(async (req, _res, next) => {
     const input = schema.safeParse(req[target]);
     if (!input.success) throw new ValidationError(formatZodError(input.error));
     req[target] = input.data;
     next();
   });
-};
-
-// Usage — multiple targets chainable on a single route:
-router.put(
-  "/:roleName/permissions",
-  validate(rolesSchema.updatePermissionsParams, ValidationTarget.PARAMS),
-  validate(rolesSchema.updatePermissionsBody, ValidationTarget.BODY),
-  rolesController.updatePermissions,
-);
 ```
 
 ### Rationale
@@ -1115,20 +1099,10 @@ const generateAuthTokensAndSession = async (
   existingSessionId?: string,
 ): Promise<AuthTokens> => {
   const sessionId = existingSessionId ?? uuidv7();
-  // ... sign tokens, hash refresh token, build session payload ...
-  if (existingSessionId) {
-    await authRepository.rotateSession(sessionId, sessionPayload);
-  } else {
-    await authRepository.createSession(userId, {
-      id: sessionId,
-      ...sessionPayload,
-    });
-  }
+  // signs accessToken & refreshToken, persists new or rotates existing session
   return { accessToken, refreshToken };
 };
 ```
-
-Private helpers (`generateAuthTokensAndSession`, `verifyMfaCodeOrRecoveryCode`) are grouped at the top of the service file under a `// Private Helpers` section, above the public service functions.
 
 ### Rationale
 
@@ -1437,25 +1411,28 @@ Define all rate limit policies as a single typed constant `RATE_LIMIT_POLICIES` 
 | ------------------------------- | ----- | ------ | -------- | ------------------------------------------- |
 | `GLOBAL`                        | 100   | 1 min  | IP       | All routes via `app.use`                    |
 | `HEALTH`                        | 60    | 1 min  | IP       | `GET /health`                               |
-| `SIGNUP`                        | 5     | 15 min | IP       | `POST /auth/signup`                         |
-| `VERIFY_EMAIL`                  | 10    | 5 min  | IP       | `POST /auth/verify-email`                   |
-| `RESEND_VERIFICATION`           | 5     | 15 min | IP       | `POST /auth/resend-verification`            |
-| `LOGIN`                         | 10    | 1 min  | IP       | `POST /auth/login`                          |
+| `USER_READ`                     | 60    | 1 min  | User     | `GET /users/:id`, `GET /users/me`           |
+| `SESSIONS_READ`                 | 60    | 1 min  | User     | `GET /sessions`                             |
+| `SECURITY_EVENTS_READ`          | 60    | 1 min  | User     | `GET /auth/security-events`                 |
 | `REFRESH_TOKEN`                 | 30    | 1 min  | IP       | `POST /auth/refresh-token`                  |
-| `FORGOT_PASSWORD`               | 5     | 15 min | IP       | `POST /auth/forgot-password`                |
-| `RESET_PASSWORD`                | 5     | 15 min | IP       | `POST /auth/reset-password`                 |
-| `CHANGE_PASSWORD`               | 5     | 15 min | User     | `POST /auth/change-password`                |
-| `MFA_VERIFY`                    | 10    | 1 min  | IP       | `POST /auth/mfa/verify`                     |
-| `MFA_VERIFY_SETUP`              | 5     | 5 min  | User     | `POST /auth/mfa/setup`, `/mfa/verify-setup` |
-| `MFA_DISABLE`                   | 5     | 15 min | User     | `POST /auth/mfa/disable`                    |
-| `MFA_REGENERATE_RECOVERY_CODES` | 5     | 15 min | User     | `POST /auth/mfa/regenerate-recovery-codes`  |
-| `MAGIC_LINK_REQUEST`            | 5     | 15 min | IP       | `POST /auth/magic-link`                     |
-| `MAGIC_LINK_VERIFY`             | 10    | 5 min  | IP       | `POST /auth/magic-link/verify`              |
 | `OAUTH_INITIATE`                | 20    | 1 min  | IP       | `GET /auth/oauth/:provider`                 |
 | `OAUTH_CALLBACK`                | 20    | 1 min  | IP       | `GET /auth/oauth/:provider/callback`        |
-| `USER_READ`                     | 60    | 1 min  | User     | `GET /users/:id`                            |
+| `SESSION_REVOKE`                | 20    | 1 min  | User     | `DELETE /sessions/:id`                      |
+| `LOGIN`                         | 10    | 1 min  | IP       | `POST /auth/login`                          |
+| `MFA_VERIFY`                    | 10    | 1 min  | IP       | `POST /auth/mfa/verify`                     |
 | `USER_CHANGE_ROLE`              | 10    | 1 min  | User     | `PATCH /users/:id/role`                     |
 | `ROLE_UPDATE_PERMISSIONS`       | 10    | 1 min  | User     | `PUT /roles/:roleName/permissions`          |
+| `VERIFY_EMAIL`                  | 10    | 5 min  | IP       | `POST /auth/verify-email`                   |
+| `RESET_PASSWORD`                | 10    | 5 min  | IP       | `POST /auth/reset-password`                 |
+| `MAGIC_LINK_VERIFY`             | 10    | 5 min  | IP       | `POST /auth/magic-link/verify`              |
+| `MFA_VERIFY_SETUP`              | 5     | 5 min  | User     | `POST /auth/mfa/setup`, `/mfa/verify-setup` |
+| `SIGNUP`                        | 5     | 15 min | IP       | `POST /auth/signup`                         |
+| `RESEND_VERIFICATION`           | 5     | 15 min | IP       | `POST /auth/resend-verification`            |
+| `FORGOT_PASSWORD`               | 5     | 15 min | IP       | `POST /auth/forgot-password`                |
+| `MAGIC_LINK_REQUEST`            | 5     | 15 min | IP       | `POST /auth/magic-link`                     |
+| `CHANGE_PASSWORD`               | 5     | 15 min | User     | `POST /auth/change-password`                |
+| `MFA_DISABLE`                   | 5     | 15 min | User     | `POST /auth/mfa/disable`                    |
+| `MFA_REGENERATE_RECOVERY_CODES` | 5     | 15 min | User     | `POST /auth/mfa/regenerate-recovery-codes`  |
 
 ### Rationale
 
@@ -1769,31 +1746,17 @@ OAuth initiation and callback handlers perform identical HTTP-layer responsibili
 Implement higher-order controller factories `initiateOAuthHandler` and `oauthCallbackHandler` in `oauth.controller.ts` parameterised by `OAuthProviderName`:
 
 ```typescript
-export const initiateOAuthHandler = (provider: OAuthProviderName) =>
-  asyncHandler(async (req: Request, res: Response) => {
-    const redirectUrl = await initiateOAuth(provider, req.auth?.userId);
-    return res.redirect(redirectUrl);
-  });
-
 export const oauthCallbackHandler = (provider: OAuthProviderName) =>
   asyncHandler(async (req: Request, res: Response) => {
-    const code = req.query.code as string;
-    const state = req.query.state as string;
     const result = await handleOAuthCallback(
       provider,
-      code,
-      state,
+      req.query.code as string,
+      req.query.state as string,
       getClientIp(req),
       req.header("user-agent"),
     );
-    if (result.mfaRequired) {
-      return ApiResponse.success(
-        res,
-        result,
-        "MFA verification required to complete login",
-        200,
-      );
-    }
+    if (result.mfaRequired)
+      return ApiResponse.success(res, result, "MFA verification required", 200);
     setAuthCookies(res, result.tokens);
     return ApiResponse.success(
       res,
@@ -1832,9 +1795,7 @@ model MagicLinkToken {
   tokenHash String   @unique @map("token_hash")
   userId    String   @unique @map("user_id")
   expiresAt DateTime @map("expires_at")
-  createdAt DateTime @default(now()) @map("created_at")
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  @@index([expiresAt])
   @@map("magic_link_tokens")
 }
 ```
@@ -1871,48 +1832,19 @@ Implement a clean two-phase lookup and consumption workflow in `auth.repository.
    Magic links are available to any existing account, enabling users created via OAuth or password to log in passwordlessly.
 
 ```typescript
-const findMagicLinkTokenWithUser = (tokenHash: string) =>
-  prisma.magicLinkToken.findFirst({
-    where: {
-      tokenHash,
-      expiresAt: { gte: new Date() },
-    },
-    include: {
-      user: {
-        include: {
-          role: {
-            select: {
-              name: true,
-            },
-          },
-        },
-      },
-    },
-  });
-
 const consumeMagicLinkToken = async (
   userId: string,
   shouldMarkEmailVerified: boolean,
 ) => {
-  try {
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        ...(shouldMarkEmailVerified
-          ? { isEmailVerified: true, verifiedAt: new Date() }
-          : {}),
-        magicLinkToken: { delete: {} },
-      },
-    });
-  } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2025"
-    ) {
-      throw new AppError("Invalid or expired magic link token", 400);
-    }
-    throw error;
-  }
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      ...(shouldMarkEmailVerified
+        ? { isEmailVerified: true, verifiedAt: new Date() }
+        : {}),
+      magicLinkToken: { delete: {} },
+    },
+  });
 };
 ```
 
@@ -1975,7 +1907,7 @@ const updateUserRole = async (userId: string, roleName: RoleName) =>
     }
     const user = await tx.user.findUnique({
       where: { id: userId },
-      include: { role: { select: { name: true } } },
+      include: { role: true },
     });
     if (!user) throw new AppError("User not found", 404);
     if (user.role.name === ROLES.ADMIN && roleName !== ROLES.ADMIN) {
@@ -1996,3 +1928,106 @@ const updateUserRole = async (userId: string, roleName: RoleName) =>
 - **Write-Skew Elimination:** Mutexing on the unique `ADMIN` role record serializes concurrent demotions without table-wide locks or complex advisory lock SQL.
 - **Strict Invariant Guarantee:** Guarantees mathematically that active administrator count cannot drop below one under any concurrency load.
 - **Pure ORM Portability:** Relies entirely on standard Prisma client transactional constructs without dialect-specific raw queries.
+
+---
+
+## ADR-068 — Active Session Introspection, Ownership-Enforced Revocation, and Safe Cookie Invalidation
+
+**Status:** Accepted
+
+### Context
+
+Users require visibility into their active device sessions and the ability to remotely revoke suspicious sessions. Exposing sensitive internal token hashes or allowing users to delete sessions belonging to other accounts represents severe security vulnerabilities. Furthermore, revoking the session corresponding to the currently active client request must properly clear the client's HTTP authentication cookies to avoid stale authentication state.
+
+### Decision
+
+Implement dedicated `/sessions` endpoints (`GET /sessions`, `DELETE /sessions/:id`) in a dedicated `sessions` module (`src/modules/sessions`):
+
+1. **Safe Metadata Query:**
+   Query active sessions filtering out expired records (`expiresAt: { gt: new Date() }`), selecting only `{ id, ipAddress, userAgent, createdAt, expiresAt }`, and annotating `isCurrent: session.id === req.auth.sessionId`. `tokenHash` is strictly excluded from response DTOs.
+
+2. **Strict Ownership Verification:**
+   Before deletion, verify session existence (throwing `404 AppError` if missing) and user ownership (`session.userId === req.auth.userId`, throwing `403 ForbiddenError` on mismatch). Deletion executes via `deleteSessionByIdAndUserId(sessionId, userId)`.
+
+3. **Current-Session Cookie Invalidation:**
+   If `isCurrent` is true, invoke `clearAuthCookies(res)` in the controller to wipe access and refresh token cookies.
+
+```typescript
+const revokeSession = async (
+  sessionId: string,
+  userId: string,
+  currentSessionId: string,
+  ipAddress: string,
+  userAgent?: string,
+) => {
+  const session = await sessionsRepository.findSessionById(sessionId);
+  if (!session) throw new AppError("Session not found", 404);
+  if (session.userId !== userId)
+    throw new ForbiddenError("You cannot revoke another user's session");
+  await sessionsRepository.deleteSessionByIdAndUserId(sessionId, userId);
+  await recordSecurityEvent(
+    userId,
+    SECURITY_EVENT_TYPES.LOGOUT,
+    ipAddress,
+    userAgent,
+    {
+      revokedSessionId: sessionId,
+      isCurrentSession: sessionId === currentSessionId,
+    },
+  );
+  return { isCurrent: sessionId === currentSessionId };
+};
+```
+
+### Rationale
+
+- **Zero Hash Leakage:** Exposes only device/network metadata without internal cryptographic tokens.
+- **Strict Ownership Defense:** Direct database-level ownership filtering and explicit 403 Forbidden checks prevent cross-user session tampering.
+- **Safe Client Synchronization:** Automatic cookie clearance on current session revocation prevents client authentication desynchronization.
+
+---
+
+## ADR-069 — Multi-Phase Security Audit Logging, Standardized Helper Encapsulation, and Indexed User History Retrieval
+
+**Status:** Accepted
+
+### Context
+
+Security compliance and user trust require an immutable audit trail of authentication events (logins, failed attempts, logouts, credential changes, 2FA mutations). In multi-step flows (e.g. OAuth or Magic Link with MFA enabled), single-point event recording loses the distinction between the primary identity provider exchange and the subsequent second-factor verification. Furthermore, ad-hoc event creation leads to code duplication and optional property typing inconsistencies.
+
+### Decision
+
+Introduce the `SecurityEvent` model with composite index `@@index([userId, createdAt(sort: Desc)])` and `SecurityEventType` enum:
+
+1. **Standardized Helper Encapsulation:**
+   Provide a centralized `recordSecurityEvent(userId, type, ipAddress?, userAgent?, metadata?)` helper in `auth.service.ts` that handles optional property shaping uniformly.
+
+2. **Multi-Phase Audit Logging:**
+   Record `OAUTH_LOGIN` / `MAGIC_LINK_LOGIN` with `{ mfaRequired: true }` upon primary challenge generation, followed by `LOGIN_SUCCESS` with `{ usedRecoveryCode }` upon second-factor verification.
+
+3. **Indexed Paginated Retrieval:**
+   Expose `GET /auth/security-events` with Zod-defaulted pagination (`page` default 1, `limit` default 20 max 100), fetching user events sorted by `createdAt DESC`.
+
+```typescript
+export const recordSecurityEvent = async (
+  userId: string,
+  type: SecurityEventTypeName,
+  ipAddress?: string,
+  userAgent?: string,
+  metadata?: Record<string, unknown>,
+) => {
+  await authRepository.createSecurityEvent({
+    userId,
+    type,
+    ...(ipAddress ? { ipAddress } : {}),
+    ...(userAgent ? { userAgent } : {}),
+    ...(metadata ? { metadata } : {}),
+  });
+};
+```
+
+### Rationale
+
+- **Multi-Phase Traceability:** Preserves the complete authentication provenance across two-factor challenges.
+- **Sub-Millisecond Query Performance:** Composite index on `(userId, createdAt DESC)` eliminates table scans for user event history.
+- **Zero Code Duplication:** Standardized helper eliminates object-spread boilerplate and guarantees uniform optional field mapping.

@@ -19,11 +19,11 @@ authsphere/ (Monorepo Root)
 │   │       ├── generated/    # Generated Prisma client
 │   │       ├── lib/          # Singleton infrastructure clients (DB, Redis, Logger, Crypto)
 │   │       ├── middlewares/  # Global & request-level middlewares
-│   │       ├── modules/      # Domain feature modules (auth, roles, users, health, email)
+│   │       ├── modules/      # Domain feature modules (auth, sessions, roles, users, health, email)
 │   │       └── types/        # Global Express ambient declarations
 │   └── web/                  # React & Vite frontend application
 ├── packages/
-│   └── shared/               # Shared domain constants (ROLES, PERMISSIONS, OAUTH_PROVIDERS) & types
+│   └── shared/               # Shared domain constants (ROLES, PERMISSIONS, OAUTH_PROVIDERS, SECURITY_EVENT_TYPES) & types
 └── docker/                   # Development infrastructure (PostgreSQL, Redis Compose configurations)
 ```
 
@@ -78,7 +78,7 @@ graph TD
 
 ## 3. Data Model & Entity Relationship Diagram
 
-The database schema is designed around user identity, active sessions, multi-factor authentication (MFA), role-based access control (RBAC), and single-use verification/reset tokens.
+The database schema is designed around user identity, active sessions, multi-factor authentication (MFA), role-based access control (RBAC), security audit logs, and single-use verification/reset tokens.
 
 ```mermaid
 erDiagram
@@ -89,6 +89,7 @@ erDiagram
     User ||--o{ MfaChallenge : "has pending"
     User ||--o{ OAuthAccount : "linked with"
     User ||--o| MagicLinkToken : "has active"
+    User ||--o{ SecurityEvent : "audited by"
     User }|--|| Role : "assigned"
     Role ||--o{ RolePermission : "has"
     Permission ||--o{ RolePermission : "has"
@@ -187,6 +188,16 @@ erDiagram
         string userId UK,FK
         string tokenHash UK "SHA-256"
         datetime expiresAt
+        datetime createdAt
+    }
+
+    SecurityEvent {
+        string id PK "UUIDv7"
+        string userId FK
+        enum type "SecurityEventType"
+        string ipAddress "Nullable"
+        string userAgent "Nullable"
+        json metadata "Nullable"
         datetime createdAt
     }
 ```
@@ -393,6 +404,42 @@ sequenceDiagram
     end
 ```
 
+### 4.6 Active Session Management & Revocation Flow
+
+Users manage their active device sessions and perform remote session revocation with automatic cookie synchronization:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Client Browser
+    participant API as AuthSphere API
+    participant DB as PostgreSQL
+
+    Note over User, DB: 1. Listing Active Sessions
+    User->>API: GET /sessions (accessToken cookie)
+    API->>API: auth middleware: extract req.auth.userId, req.auth.sessionId
+    API->>DB: Query Session (userId, expiresAt > NOW)
+    API-->>User: 200 OK [ { id, ipAddress, userAgent, createdAt, expiresAt, isCurrent } ]
+
+    Note over User, DB: 2. Revoking a Session
+    User->>API: DELETE /sessions/:id (accessToken cookie)
+    API->>API: auth middleware & validate UUIDv7 param
+    API->>DB: findSessionById(sessionId)
+    alt Session Not Found
+        API-->>User: 404 Not Found ("Session not found")
+    else Session Belongs to Another User (session.userId !== req.auth.userId)
+        API-->>User: 403 Forbidden ("You cannot revoke another user's session")
+    else Ownership Verified
+        API->>DB: deleteSessionByIdAndUserId(sessionId, userId)
+        API->>DB: createSecurityEvent(LOGOUT, { revokedSessionId, isCurrentSession })
+        alt isCurrentSession is True
+            API-->>User: Clear Auth Cookies & 200 OK "Session revoked successfully"
+        else Remote Session Revoked
+            API-->>User: 200 OK "Session revoked successfully"
+        end
+    end
+```
+
 ---
 
 ## 5. Security & Infrastructure Architecture
@@ -411,34 +458,42 @@ sequenceDiagram
    - Long-lived Refresh Tokens (30d) tied to database sessions. Store only `SHA-256` token hashes `[ADR-012]`.
    - **Refresh Token Rotation (RTR)** with reuse detection revokes sessions immediately upon detecting token replay `[ADR-014]`.
    - Delivered via `httpOnly`, `secure`, `sameSite: "lax"` cookies. Refresh token cookie scoped to path `/auth` (covering `/auth/refresh-token` and `/auth/logout`) `[ADR-033, ADR-042]`.
-5. **OAuth 2.0 & Social Identity Security**:
+5. **Active Session Management & Revocation**:
+   - Exposes safe session metadata (`id`, `ipAddress`, `userAgent`, `createdAt`, `expiresAt`, `isCurrent`) via `GET /sessions`, strictly omitting sensitive token hashes `[ADR-068]`.
+   - Enforces database-level ownership guards on `DELETE /sessions/:id`, rejecting foreign session revocation attempts with `403 Forbidden` `[ADR-068]`.
+   - Automatically wipes authentication cookies when a client revokes its own active session `[ADR-068]`.
+6. **Immutable Security Audit Logging**:
+   - Audits all security-critical operations (`LOGIN_SUCCESS`, `LOGIN_FAILED`, `LOGOUT`, `MFA_ENABLED`, `MFA_DISABLED`, `PASSWORD_CHANGED`, `PASSWORD_RESET`, `OAUTH_LOGIN`, `MAGIC_LINK_LOGIN`) via `SecurityEvent` `[ADR-069]`.
+   - Supports multi-phase logging preserving provenance across two-factor challenges for OAuth and Magic Link flows `[ADR-069]`.
+   - High-speed query execution backed by composite index `@@index([userId, createdAt(sort: Desc)])` for `GET /auth/security-events` `[ADR-069]`.
+7. **OAuth 2.0 & Social Identity Security**:
    - **Provider-Agnostic Strategy**: Strategy interfaces (`OAuthProviderStrategy`) isolate provider APIs and normalize profile payloads `[ADR-059]`. Higher-order controller factories eliminate route boilerplate `[ADR-063]`.
    - **Redis Ephemeral State**: Cryptographic 32-byte state tokens in Redis (10m TTL) consumed atomically via `GETDEL` (`redis.getDel`) prevent CSRF and replay attacks `[ADR-060]`.
    - **Anti-Account Takeover Identity Resolution**: Prohibits unauthenticated auto-linking by email alone; requires explicit credentials to link third-party accounts (`409 Conflict`) `[ADR-061]`.
    - **Mandatory Email Verification**: Enforces `email_verified: true` across providers, resolving private verified GitHub emails via `/user/emails` `[ADR-062]`.
-6. **Passwordless Magic Link Security**:
+8. **Passwordless Magic Link Security**:
    - **1-1 Token Relation & Prior Link Revocation**: Enforces `userId @unique` on `MagicLinkToken`, automatically invalidating superseded links on re-request `[ADR-064]`.
    - **Atomic Consumption & Dual-Purpose Verification**: Atomically consumes tokens via 1-to-1 nested deletion (`magicLinkToken: { delete: {} }`), automatically marks unverified accounts as verified upon login, and defers expired token cleanup to scheduled jobs `[ADR-065]`.
    - **Universal Account Access**: Enables both password-based and social-login-created users to log in passwordlessly.
    - **Enumeration-Safe Policy**: Requests return identical generic responses regardless of account existence `[ADR-023]`.
-7. **Input Sanitization & Request Hardening**:
+9. **Input Sanitization & Request Hardening**:
    - Multi-target Zod validation (`ValidationTarget.BODY`, `PARAMS`, `QUERY`) strips undeclared parameters to prevent mass assignment `[ADR-026]`. Array deduplication via Zod `.transform()` normalizes inputs `[ADR-038]`.
    - Explicit `16kb` body size limit on `express.json()` protects against payload memory consumption `[ADR-044]`.
    - `X-Request-Id` header sanitization strips control/newline characters (`\r\n`) and caps length at 128 chars while preserving distributed trace context `[ADR-043]`.
-8. **Rate Limiting & Anti-Abuse**:
-   - Multi-tiered Redis-backed rate limiting using atomic Lua scripting (`INCR` + conditional `EXPIRE` + `TTL` in a single `EVALSHA` roundtrip) `[ADR-050]`.
-   - Centralized `RATE_LIMIT_POLICIES` dictionary defines per-endpoint quotas and windows. Global layer (100 req/min per IP) protects all routes; route-level policies protect sensitive endpoints (`LOGIN`, `MFA_VERIFY`, `OAUTH_INITIATE`, `OAUTH_CALLBACK`, `MAGIC_LINK_REQUEST`, `MAGIC_LINK_VERIFY`) individually `[ADR-051, ADR-066]`.
-   - Dual-key strategy: IP-based keys for unauthenticated endpoints, authenticated `userId`-based keys for protected endpoints to prevent shared-network false positives `[ADR-052]`.
-   - IETF-compliant `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` headers on all responses.
-   - Fail-open resilience: Redis outages bypass the rate limiter transparently, preventing legitimate traffic from being blocked by infrastructure failures.
-9. **Proxy Trust & IP Security**:
-   - `TRUST_PROXY` environment variable validated and type-coerced at startup via Zod `.transform()` (supports `boolean`, integer hop count, or subnet arrays) `[ADR-053]`.
-   - All client IP resolution uses `req.ip` (Express `proxy-addr` module) instead of manual `X-Forwarded-For` parsing, preventing IP spoofing attacks `[ADR-054]`.
-10. **Resource Isolation & Origin Validation**:
+10. **Rate Limiting & Anti-Abuse**:
+    - Multi-tiered Redis-backed rate limiting using atomic Lua scripting (`INCR` + conditional `EXPIRE` + `TTL` in a single `EVALSHA` roundtrip) `[ADR-050]`.
+    - Centralized `RATE_LIMIT_POLICIES` dictionary defines per-endpoint quotas and windows. Global layer (100 req/min per IP) protects all routes; route-level policies protect sensitive endpoints (`LOGIN`, `MFA_VERIFY`, `OAUTH_INITIATE`, `OAUTH_CALLBACK`, `MAGIC_LINK_REQUEST`, `MAGIC_LINK_VERIFY`, `SESSIONS_READ`, `SESSION_REVOKE`, `SECURITY_EVENTS_READ`) individually `[ADR-051, ADR-066]`.
+    - Dual-key strategy: IP-based keys for unauthenticated endpoints, authenticated `userId`-based keys for protected endpoints to prevent shared-network false positives `[ADR-052]`.
+    - IETF-compliant `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` headers on all responses.
+    - Fail-open resilience: Redis outages bypass the rate limiter transparently, preventing legitimate traffic from being blocked by infrastructure failures.
+11. **Proxy Trust & IP Security**:
+    - `TRUST_PROXY` environment variable validated and type-coerced at startup via Zod `.transform()` (supports `boolean`, integer hop count, or subnet arrays) `[ADR-053]`.
+    - All client IP resolution uses `req.ip` (Express `proxy-addr` module) instead of manual `X-Forwarded-For` parsing, preventing IP spoofing attacks `[ADR-054]`.
+12. **Resource Isolation & Origin Validation**:
     - Evaluates all state-changing HTTP requests (`POST`, `PUT`, `PATCH`, `DELETE`) using a hybrid strategy of unforgeable browser `Sec-Fetch-Site` metadata and normalized `Origin`/`Referer` header checking against `env.FRONTEND_URL` `[ADR-055]`.
     - Fast-paths `same-origin`/`same-site` requests, blocks explicit `cross-site` mutations from untrusted origins, and rejects opaque `Origin: "null"` headers from sandboxed iframe attacks.
     - Deferred body/cookie parsing pipeline placement drops untrusted requests (403) and rate-limited bursts (429) before JSON parsing or memory allocation.
-11. **API-Tuned Security Headers**:
+13. **API-Tuned Security Headers**:
     - `helmet()` configured with `crossOriginResourcePolicy: { policy: "cross-origin" }` for cross-domain API accessibility and `xFrameOptions: { action: "deny" }` for strict clickjacking defense `[ADR-056]`.
 
 ### Infrastructure Resilience & Observability
