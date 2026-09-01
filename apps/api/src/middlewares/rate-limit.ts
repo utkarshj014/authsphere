@@ -10,13 +10,14 @@ export interface RateLimitPolicy {
   name: string;
   limit: number;
   windowMs: number;
-  keyType?: RateLimitKeyType;
+  keyType: RateLimitKeyType;
   keyGenerator?: (req: Request) => string | Promise<string>;
   message?: string;
 }
 
 /** Predefined rate-limiting policy profiles for application endpoints */
 export const RATE_LIMIT_POLICIES = {
+  // Global & Infrastructure
   GLOBAL: {
     name: "global-api",
     limit: 100,
@@ -29,20 +30,10 @@ export const RATE_LIMIT_POLICIES = {
     windowMs: 60 * 1000,
     keyType: "ip",
   },
+
+  // Core Authentication
   SIGNUP: {
     name: "auth-signup",
-    limit: 5,
-    windowMs: 15 * 60 * 1000,
-    keyType: "ip",
-  },
-  VERIFY_EMAIL: {
-    name: "auth-verify-email",
-    limit: 10,
-    windowMs: 5 * 60 * 1000,
-    keyType: "ip",
-  },
-  RESEND_VERIFICATION: {
-    name: "auth-resend-verification",
     limit: 5,
     windowMs: 15 * 60 * 1000,
     keyType: "ip",
@@ -59,24 +50,48 @@ export const RATE_LIMIT_POLICIES = {
     windowMs: 60 * 1000,
     keyType: "ip",
   },
+
+  // Email Dispatch & Password Recovery
   FORGOT_PASSWORD: {
     name: "auth-forgot-password",
     limit: 5,
     windowMs: 15 * 60 * 1000,
     keyType: "ip",
   },
-  RESET_PASSWORD: {
-    name: "auth-reset-password",
+  RESEND_VERIFICATION: {
+    name: "auth-resend-verification",
     limit: 5,
     windowMs: 15 * 60 * 1000,
     keyType: "ip",
   },
-  CHANGE_PASSWORD: {
-    name: "auth-change-password",
+  MAGIC_LINK_REQUEST: {
+    name: "auth-magic-link-request",
     limit: 5,
     windowMs: 15 * 60 * 1000,
-    keyType: "user",
+    keyType: "ip",
   },
+
+  // Token Verification
+  VERIFY_EMAIL: {
+    name: "auth-verify-email",
+    limit: 10,
+    windowMs: 5 * 60 * 1000,
+    keyType: "ip",
+  },
+  RESET_PASSWORD: {
+    name: "auth-reset-password",
+    limit: 10,
+    windowMs: 5 * 60 * 1000,
+    keyType: "ip",
+  },
+  MAGIC_LINK_VERIFY: {
+    name: "auth-magic-link-verify",
+    limit: 10,
+    windowMs: 5 * 60 * 1000,
+    keyType: "ip",
+  },
+
+  // Multi-Factor Authentication
   MFA_VERIFY: {
     name: "auth-mfa-verify",
     limit: 10,
@@ -101,18 +116,16 @@ export const RATE_LIMIT_POLICIES = {
     windowMs: 15 * 60 * 1000,
     keyType: "user",
   },
-  MAGIC_LINK_REQUEST: {
-    name: "auth-magic-link-request",
+
+  // Sensitive Account Mutations
+  CHANGE_PASSWORD: {
+    name: "auth-change-password",
     limit: 5,
     windowMs: 15 * 60 * 1000,
-    keyType: "ip",
+    keyType: "user",
   },
-  MAGIC_LINK_VERIFY: {
-    name: "auth-magic-link-verify",
-    limit: 10,
-    windowMs: 5 * 60 * 1000,
-    keyType: "ip",
-  },
+
+  // OAuth 2.0 Social Logins
   OAUTH_INITIATE: {
     name: "auth-oauth-initiate",
     limit: 20,
@@ -125,6 +138,8 @@ export const RATE_LIMIT_POLICIES = {
     windowMs: 60 * 1000,
     keyType: "ip",
   },
+
+  // User Profile & Administration
   USER_READ: {
     name: "users-read",
     limit: 60,
@@ -143,6 +158,8 @@ export const RATE_LIMIT_POLICIES = {
     windowMs: 60 * 1000,
     keyType: "user",
   },
+
+  // Sessions & Security Events
   SESSIONS_READ: {
     name: "sessions-read",
     limit: 60,
