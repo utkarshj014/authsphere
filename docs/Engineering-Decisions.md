@@ -114,8 +114,14 @@ This document records the architectural and engineering decisions made during th
 - [ADR-009: Structured Observability with Pino & Request Context](#adr-009--structured-observability-with-pino--request-context)
 - [ADR-010: Multi-Resource Graceful Shutdown](#adr-010--multi-resource-graceful-shutdown)
 - [ADR-011: Operational Health Monitoring Pattern](#adr-011--operational-health-monitoring-pattern)
-- [ADR-043: Request ID Sanitization with Context Preservation](#adr-043--request-id-sanitization-with-context-preservation)
 - [ADR-069: Multi-Phase Security Audit Logging, Standardized Helper Encapsulation, and Indexed User History Retrieval](#adr-069--multi-phase-security-audit-logging-standardized-helper-encapsulation-and-indexed-user-history-retrieval)
+
+</details>
+
+<details open>
+<summary><b>🧪 Testing, Quality & Security Invariants</b></summary>
+
+- [ADR-070: High-Signal Hermetic Testing Architecture across Unit, Integration, and E2E Pyramids](#adr-070--high-signal-hermetic-testing-architecture-across-unit-integration-and-e2e-pyramids)
 
 </details>
 
@@ -124,7 +130,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-069)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-070)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -195,6 +201,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-067: Atomic Last-Admin Demotion Guard via Exclusive Role Row-Locking](#adr-067--atomic-last-admin-demotion-guard-via-exclusive-role-row-locking)
 - [ADR-068: Active Session Introspection, Ownership-Enforced Revocation, and Safe Cookie Invalidation](#adr-068--active-session-introspection-ownership-enforced-revocation-and-safe-cookie-invalidation)
 - [ADR-069: Multi-Phase Security Audit Logging, Standardized Helper Encapsulation, and Indexed User History Retrieval](#adr-069--multi-phase-security-audit-logging-standardized-helper-encapsulation-and-indexed-user-history-retrieval)
+- [ADR-070: High-Signal Hermetic Testing Architecture across Unit, Integration, and E2E Pyramids](#adr-070--high-signal-hermetic-testing-architecture-across-unit-integration-and-e2e-pyramids)
 
 </details>
 
@@ -2031,3 +2038,36 @@ export const recordSecurityEvent = async (
 - **Multi-Phase Traceability:** Preserves the complete authentication provenance across two-factor challenges.
 - **Sub-Millisecond Query Performance:** Composite index on `(userId, createdAt DESC)` eliminates table scans for user event history.
 - **Zero Code Duplication:** Standardized helper eliminates object-spread boilerplate and guarantees uniform optional field mapping.
+
+---
+
+## ADR-070 — High-Signal Hermetic Testing Architecture across Unit, Integration, and E2E Pyramids
+
+**Status:** Accepted
+
+### Context
+
+Validating authentication, session management, and authorization requires proving critical security invariants (session revocation, token rotation reuse detection, Last-Admin demotion protection, and rate-limit degradation) without flaky tests, excessive mock maintenance, or coupling tests to live third-party services like email providers. Shared database state and concurrent test runners frequently cause non-deterministic failures and state leaks.
+
+### Decision
+
+Implement a 3-layer test pyramid utilizing **Vitest** and **Supertest** configured with strict environmental separation and hermetic boundaries:
+
+1. **Environmental & State Isolation:**
+   - Dedicated PostgreSQL database (`authsphere_test`) and dedicated Redis index (`redis://localhost:6379/1`).
+   - Dynamic configuration loading (`apps/api/src/config/env.ts`) reading `.env.test` under `NODE_ENV === "test"`.
+   - Deterministic serial test execution (`fileParallelism: false`) with atomic cascade truncations of mutable user tables preserving seeded roles and permissions (`cleanTestState()`) and self-healing baseline role seeding (`ensureBaselineSeed()`).
+
+2. **In-Memory Outbox & Spy Email Layer:**
+   - Mock all email dispatches (`tests/helpers/email.ts`) using Vitest spies (`vi.mock("../../modules/email/demo.js")`), capturing verification tokens and magic links in an in-memory outbox to eliminate network dependencies while enabling direct token assertion.
+
+3. **Three-Tier Pyramid:**
+   - **Focused Unit Tests (3 files, 27 tests — Pure In-Memory):** Direct execution of cryptography (Argon2id, AES-256-GCM, SHA-256 HMAC), TOTP generation, time parsing, and Zod schemas.
+   - **Critical Integration Tests (8 files, 111 tests):** HTTP request/response validation through Express routes, controllers, middleware, PostgreSQL, and Redis.
+   - **E2E User Journeys (3 files, 6 tests):** Stateful multi-step workflows verifying complete auth lifecycles, cross-device session introspection/revocation, and administrative privilege elevation/demotion.
+
+### Rationale
+
+- **Zero Flakiness:** Isolated databases, serial execution, and deterministic cleanups eliminate cross-test data pollution.
+- **Hermetic Third-Party Decoupling:** In-memory email mocks prevent external network requests while keeping verification and magic link tokens directly inspectable.
+- **Architectural Proof:** Validates database constraints, Redis fail-open resilience, and cryptographic token rotation invariants under production-identical routing.

@@ -505,3 +505,41 @@ sequenceDiagram
 - **Fail-Safe Caching**: `redis.isOpen` checks ensure that Redis network outages transparently fallback to PostgreSQL DB queries without crashing requests `[ADR-035]`.
 - **Structured Logging**: Pino emits structured JSON logs with correlated `X-Request-Id` headers across request lifecycles `[ADR-009]`.
 - **Health Checks**: `/health` actively verifies database and Redis connectivity, returning `200 OK` or `503 Service Unavailable` for container orchestrator probes `[ADR-011]`.
+
+---
+
+## 6. Testing Architecture & Invariant Verification
+
+AuthSphere enforces a hermetic, 3-layer test pyramid combining **Vitest** and **Supertest** to verify all system boundaries and security invariants without external network side-effects `[ADR-070]`. For the complete testing specification and CLI execution guide, refer to [TESTING.md](./TESTING.md).
+
+```mermaid
+graph TD
+    subgraph Test Pyramid
+        E2E["Layer 3: E2E User Journeys (3 files, 6 tests)"]
+        INT["Layer 2: Critical Integration Tests (8 files, 111 tests)"]
+        UNIT["Layer 1: Focused Unit Tests (3 files, 27 tests)"]
+    end
+
+    subgraph Hermetic Isolation
+        E2E & INT --> TestDB[("Dedicated PostgreSQL: authsphere_test")]
+        E2E & INT --> TestRedis[("Dedicated Redis: DB Index 1")]
+        E2E & INT --> EmailSpy["In-Memory Email Spy Outbox"]
+        UNIT -.-> PureMemory["Pure In-Memory (Zero I/O)"]
+    end
+```
+
+### Layer Responsibilities & Verification Scopes
+
+| Layer                             | Focus & Coverage Scope                                                                                           | Invariants Verified                                                                                                              |
+| :-------------------------------- | :--------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
+| **Layer 1: Focused Unit**         | Cryptography (Argon2id, AES-256-GCM, HMAC), TOTP RFC 6238, recovery codes, time parsing, Zod schemas             | Algorithm parameters, timing safety, encryption roundtrips, tampered ciphertext detection, single-use window steps.              |
+| **Layer 2: Critical Integration** | Auth flows, MFA setup/verify/disable, OAuth strategies, active sessions, RBAC guards, rate limits, error formats | HTTP-only cookie transport, rotation reuse detection, Last-Admin demotion protection, Redis fail-open degradation.               |
+| **Layer 3: E2E User Journeys**    | Stateful multi-step workflows across registration, multi-device sessions, password resets, and role promotions   | Cross-device session revocation, unauthenticated access rejection, post-reset token invalidation, role authorization revocation. |
+
+### Test Infrastructure & Deterministic Execution
+
+- **Environmental Isolation**: Tests run against isolated instances (`authsphere_test`, Redis DB 1) loaded via `NODE_ENV=test` and `.env.test` `[ADR-003, ADR-070]`.
+- **Serial Execution**: Configured with `fileParallelism: false` to ensure atomic state transitions without race conditions `[ADR-070]`.
+- **Deterministic Reset**: `cleanTestState()` performs cascade table truncations on all user-data tables and flushes Redis test database #1 before each test while strictly preserving seeded role and permission definitions `[ADR-070]`.
+- **Hermetic Email Mock**: In-memory spy layer (`tests/helpers/email.ts`) captures verification tokens and magic links, eliminating third-party API dependencies `[ADR-070]`.
+- **Baseline Seeding**: `ensureBaselineSeed()` automatically verifies and provisions system roles and permissions, eliminating manual seed script prerequisites.
