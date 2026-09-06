@@ -3,8 +3,9 @@ import z from "zod";
 import { formatZodError } from "../common/errors/format-zod-error.js";
 import { parseDurationToMs } from "../common/utils/time.js";
 
-// Always loads apps/api/.env regardless of current working directory
-dotenv.config({ path: new URL("../../.env", import.meta.url) });
+// Loads apps/api/.env.test in test mode, or apps/api/.env otherwise
+const envFile = process.env.NODE_ENV === "test" ? "../../.env.test" : "../../.env";
+dotenv.config({ path: new URL(envFile, import.meta.url), quiet: true });
 
 const envSchema = z
   .object({

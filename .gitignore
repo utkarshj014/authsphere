@@ -13,6 +13,7 @@ out/
 .env
 .env.*
 !.env.example
+!.env.test.example
 
 # Prisma generated client / artifacts (monorepo paths)
 **/src/generated/

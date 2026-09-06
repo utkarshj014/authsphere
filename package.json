@@ -7,7 +7,9 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm test --workspace=@authsphere/api",
+    "test:watch": "npm run test:watch --workspace=@authsphere/api",
+    "test:coverage": "npm run test:coverage --workspace=@authsphere/api"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
