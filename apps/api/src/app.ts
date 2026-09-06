@@ -16,6 +16,7 @@ import { sessionsRouter } from "./modules/sessions/index.js";
 import { usersRouter } from "./modules/users/index.js";
 import { rolesRouter } from "./modules/roles/index.js";
 
+import { openApiRouter } from "./common/openapi/index.js";
 import { notFoundHandler } from "./middlewares/not-found.js";
 import { errorHandler } from "./common/errors/index.js";
 
@@ -65,6 +66,9 @@ app.use("/auth", authRouter);
 app.use("/sessions", sessionsRouter);
 app.use("/users", usersRouter);
 app.use("/roles", rolesRouter);
+
+// OpenAPI Documentation
+app.use(openApiRouter);
 
 // 404 Handler
 app.use(notFoundHandler);
