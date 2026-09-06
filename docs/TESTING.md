@@ -31,9 +31,9 @@ AuthSphere's testing suite is engineered around **high-signal verification, modu
 - **Serial Execution Reliability:** Test files execute serially (`fileParallelism: false`) to eliminate state leakage, cross-test race conditions, and database deadlocks `[ADR-070]`.
 
 ```text
-Suite Status: 14 test files (100% passing)
-Total Tests:  144 passed (144 tests total)
-Architecture: Streamlined, DRY, Modular (3 Unit, 8 Integration, 3 E2E)
+Suite Status: 15 test files (100% passing)
+Total Tests:  153 passed (153 tests total)
+Architecture: Streamlined, DRY, Modular (4 Unit, 8 Integration, 3 E2E)
 Framework:    Vitest 4.x + Supertest 7.x + V8 Coverage
 Runtime:      Node.js >22 ESM
 ```
@@ -49,7 +49,7 @@ graph TD
     subgraph Test Pyramid
         E2E["Layer 3: E2E User Journeys (3 files, 6 tests)"]
         INT["Layer 2: Critical Integration Tests (8 files, 111 tests)"]
-        UNIT["Layer 1: Focused Unit Tests (3 files, 27 tests)"]
+        UNIT["Layer 1: Focused Unit Tests (4 files, 36 tests)"]
     end
 
     subgraph Hermetic Test Environment
@@ -64,7 +64,7 @@ graph TD
     style UNIT fill:#1c4532,stroke:#276749,stroke-width:2px,color:#fff
 ```
 
-### Layer 1: Focused Unit Tests (3 Files, 27 Tests — Pure In-Memory)
+### Layer 1: Focused Unit Tests (4 Files, 36 Tests — Pure In-Memory)
 
 Fast, pure-function tests executing in microseconds without external I/O, database, or Redis dependencies:
 
@@ -73,6 +73,7 @@ Fast, pure-function tests executing in microseconds without external I/O, databa
 | `tests/unit/crypto.test.ts`     | Cryptography, JWT, Password, MFA & Recovery Tokens | Argon2id OWASP compliance, symmetric HS256 JWT sign/verify, AES-256-GCM symmetric encryption, 32-byte hex entropy `[ADR-013, ADR-014, ADR-031, ADR-040]`. |
 | `tests/unit/security.test.ts`   | RFC 6238 TOTP & Request ID Middleware              | Base32 secret generation, HMAC-SHA1 6-digit window validation, UUIDv7 request ID tracking, and header sanitization `[ADR-043, ADR-045]`.                  |
 | `tests/unit/validation.test.ts` | Zod Boundary Schemas & Duration Parsers            | Email normalization, password complexity, UUIDv7 params, pagination offsets, and human-readable time conversion `[ADR-017, ADR-026, ADR-038]`.            |
+| `tests/unit/openapi.test.ts`    | OpenAPI 3.1 Spec & Express Route Parity            | Document generation, cookie security schemes, and 1:1 bidirectional Express router parity invariant `[ADR-071]`.                                          |
 
 ### Layer 2: Critical Integration Tests (8 Files, 111 Tests)
 
@@ -235,6 +236,7 @@ The test suite explicitly verifies the architectural, cryptographic, and resilie
 | **Multi-Tier Rate Limiting & IETF Header Emission**           | `[ADR-050, ADR-051, ADR-052, ADR-066]` | `security-middleware.test.ts`                                       | Redis-backed fixed-window Lua script rate limits global IP (100/min) and sensitive endpoints (`/auth/login`, `/auth/mfa/verify`); emits `RateLimit-*` and `Retry-After` headers. |
 | **Immutable Security Audit Logging**                          | `[ADR-069]`                            | `auth.test.ts`                                                      | Records `LOGIN_SUCCESS`, `LOGIN_FAILED`, `LOGOUT`, `PASSWORD_CHANGED`, `PASSWORD_RESET`; strictly isolates user event trails with descending chronological pagination.           |
 | **Test Infrastructure Cleanup & State Invariant**             | `[ADR-070]`                            | `resilience.test.ts`                                                | Directly asserts `cleanTestState()` purges dynamic user records, flushes Redis DB #1, and preserves seeded `USER`/`ADMIN` baseline roles and system permissions.                 |
+| **Code-First OpenAPI 3.1 & 1:1 Express Route Parity**         | `[ADR-071]`                            | `openapi.test.ts`                                                   | Validates OpenAPI 3.1 document compilation from runtime Zod schemas, cookie-based security schemes, and strict 1:1 bidirectional parity with Express route stacks.               |
 
 ---
 
@@ -335,6 +337,7 @@ apps/api/
     │   └── factories.ts              # Precomputed Argon2id caching & entity factories (User, Session, MFA, OAuth)
     ├── unit/
     │   ├── crypto.test.ts            # Consolidated JWT, Argon2id Password, Token entropy, AES-256 MFA, Recovery codes
+    │   ├── openapi.test.ts           # OpenAPI 3.1 spec generation, tags, cookie security schemes, and Express ↔ OpenAPI 1:1 route parity
     │   ├── security.test.ts          # Consolidated TOTP & Request ID tracking
     │   └── validation.test.ts        # Consolidated Schemas & Time duration parsing
     ├── integration/

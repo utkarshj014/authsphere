@@ -89,6 +89,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-055: Resource Isolation & Origin Validation for State-Changing Requests](#adr-055--resource-isolation--origin-validation-for-state-changing-requests)
 - [ADR-066: Multi-Tier Rate Limiting for OAuth Callbacks and Passwordless Magic Links](#adr-066--multi-tier-rate-limiting-for-oauth-callbacks-and-passwordless-magic-links)
 - [ADR-067: Atomic Last-Admin Demotion Guard via Exclusive Role Row-Locking](#adr-067--atomic-last-admin-demotion-guard-via-exclusive-role-row-locking)
+- [ADR-071: Code-First OpenAPI 3.1 Specification and Interactive Swagger UI Documentation via Zod Registry](#adr-071--code-first-openapi-31-specification-and-interactive-swagger-ui-documentation-via-zod-registry)
 
 </details>
 
@@ -130,7 +131,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-070)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-071)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -202,6 +203,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-068: Active Session Introspection, Ownership-Enforced Revocation, and Safe Cookie Invalidation](#adr-068--active-session-introspection-ownership-enforced-revocation-and-safe-cookie-invalidation)
 - [ADR-069: Multi-Phase Security Audit Logging, Standardized Helper Encapsulation, and Indexed User History Retrieval](#adr-069--multi-phase-security-audit-logging-standardized-helper-encapsulation-and-indexed-user-history-retrieval)
 - [ADR-070: High-Signal Hermetic Testing Architecture across Unit, Integration, and E2E Pyramids](#adr-070--high-signal-hermetic-testing-architecture-across-unit-integration-and-e2e-pyramids)
+- [ADR-071: Code-First OpenAPI 3.1 Specification and Interactive Swagger UI Documentation via Zod Registry](#adr-071--code-first-openapi-31-specification-and-interactive-swagger-ui-documentation-via-zod-registry)
 
 </details>
 
@@ -1418,7 +1420,7 @@ Define all rate limit policies as a single typed constant `RATE_LIMIT_POLICIES` 
 | ------------------------------- | ----- | ------ | -------- | ------------------------------------------- |
 | `GLOBAL`                        | 100   | 1 min  | IP       | All routes via `app.use`                    |
 | `HEALTH`                        | 60    | 1 min  | IP       | `GET /health`                               |
-| `USER_READ`                     | 60    | 1 min  | User     | `GET /users/:id`, `GET /users/me`           |
+| `USER_READ`                     | 60    | 1 min  | User     | `GET /users/:id`                            |
 | `SESSIONS_READ`                 | 60    | 1 min  | User     | `GET /sessions`                             |
 | `SECURITY_EVENTS_READ`          | 60    | 1 min  | User     | `GET /auth/security-events`                 |
 | `REFRESH_TOKEN`                 | 30    | 1 min  | IP       | `POST /auth/refresh-token`                  |
@@ -2071,3 +2073,47 @@ Implement a 3-layer test pyramid utilizing **Vitest** and **Supertest** configur
 - **Zero Flakiness:** Isolated databases, serial execution, and deterministic cleanups eliminate cross-test data pollution.
 - **Hermetic Third-Party Decoupling:** In-memory email mocks prevent external network requests while keeping verification and magic link tokens directly inspectable.
 - **Architectural Proof:** Validates database constraints, Redis fail-open resilience, and cryptographic token rotation invariants under production-identical routing.
+
+---
+
+## ADR-071 — Code-First OpenAPI 3.1 Specification and Interactive Swagger UI Documentation via Zod Registry
+
+**Status:** Accepted
+
+### Context
+
+Manual OpenAPI or Swagger documentation maintained in YAML or JSON inevitably drifts from runtime validation schemas, generating inaccurate API client contracts, misleading endpoint consumers, and imposing high maintenance overhead. Conversely, decorating Express routing controllers with inline annotations or reflection mechanisms couples HTTP request handlers to documentation metadata and breaches AuthSphere's modular layer separation principles. The system requires an automated contract generation pipeline that reuses runtime Zod validation schemas to minimize schema drift, isolates documentation from request handlers, and avoids repeated serialization traversal on live endpoints.
+
+### Decision
+
+Generate an OpenAPI 3.1 specification code-first using `@asteasolutions/zod-to-openapi` (v9.1.0) and serve interactive documentation via `swagger-ui-express` at `/docs` alongside raw JSON at `/openapi.json`:
+
+1. **Central OpenAPIRegistry (`apps/api/src/common/openapi/registry.ts`)**: Extends Zod via `extendZodWithOpenApi(z)` and registers cookie-based security schemes (`accessTokenCookie`, `refreshTokenCookie`) modeled as `apiKey` in `cookie`. Swagger UI is configured to reflect that authentication is governed by browser-managed HttpOnly cookies rather than manual Bearer token pasting.
+2. **Reusable Components & DRY Builders (`apps/api/src/common/openapi/schemas.ts`)**: Registers shared envelopes (`SuccessResponse`, `MessageOnlyResponse`, `ErrorResponse`, `ValidationErrorResponse`, `PaginationMeta`) and exports type-safe composable builders (`jsonContent`, `successResponse`, `messageResponse`, `errorResponse`, `jsonBody`).
+3. **Co-located Module Path Declarations (`apps/api/src/modules/*/*.openapi.ts`)**: Modules register endpoints onto the shared registry without modifying underlying controller, service, or validation files.
+4. **Memoized Document Generation (`apps/api/src/common/openapi/index.ts`)**: `getOpenApiDocument()` builds and memoizes the OpenAPI 3.1 document on initial invocation, reusing the immutable specification to eliminate repetitive AST compilation and schema generation on subsequent `/openapi.json` requests.
+5. **Bidirectional Express Parity Enforcement (`apps/api/tests/unit/openapi.test.ts`)**: Automated unit tests dynamically extract mounted Express route layers and assert a strict 1:1 invariant ensuring every Express route is documented and every documented operation maps to an active Express route.
+
+```typescript
+// apps/api/src/common/openapi/schemas.ts
+export const successResponse = <T extends z.ZodTypeAny>(
+  description: string,
+  dataSchema: T,
+) => ({
+  description,
+  content: jsonContent(successEnvelope(dataSchema)),
+});
+
+export const jsonBody = <T extends z.ZodTypeAny>(schema: T) => ({
+  required: true,
+  content: jsonContent(schema),
+});
+```
+
+### Rationale
+
+- **Schema Drift Minimization:** Derives OpenAPI schemas directly from active Zod validation schemas across all endpoints, significantly reducing request/response contract drift.
+- **Isolated Route Declarations:** Documentation declarations are isolated in dedicated `*.openapi.ts` files imported as side-effects, keeping Express controllers and routes free of documentation clutter.
+- **Automated Parity Verification:** Dynamic tests assert 1:1 bidirectional alignment between Express route stacks and OpenAPI path registrations, catching route omissions or phantom documentation entries.
+- **Immutable Document Reuse:** Caching the generated specification eliminates repeated schema traversal and AST compilation overhead on incoming `/openapi.json` requests.
+- **Accurate Cookie Security Modeling:** Explicitly documents HttpOnly cookie transport (`apiKey` in `cookie`) while establishing clear expectations that authentication is browser-managed rather than token-input driven.

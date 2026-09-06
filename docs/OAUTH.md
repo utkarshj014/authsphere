@@ -12,10 +12,10 @@
 4. [Phase 2 — External Consent](#4-phase-2--external-consent)
 5. [Phase 3 — State Verification & Profile Exchange](#5-phase-3--state-verification--profile-exchange)
 6. [Phase 4 — Identity Resolution Matrix](#6-phase-4--identity-resolution-matrix)
-7. [Phase 5 — Session Issuance](#7-phase-5--session-issuance)
+7. [Phase 5 — MFA Challenge or Session Issuance](#7-phase-5--mfa-challenge-or-session-issuance)
 8. [Provider-Specific Behavior](#8-provider-specific-behavior)
 9. [File Reference Map](#9-file-reference-map)
-10. [Security Properties](#10-security-properties)
+10. [Security Properties & ADR Cross-References](#10-security-properties--adr-cross-references)
 
 ---
 
@@ -339,6 +339,7 @@ apps/api/src/
 │   └── auth.ts                          # auth (required) + optionalAuth (pass-through) middlewares
 └── modules/auth/
     ├── auth.route.ts                    # Mounts GET /oauth/google[/callback], GET /oauth/github[/callback]
+    ├── auth.openapi.ts                  # OpenAPI 3.1 specifications for OAuth initiate and callback endpoints
     ├── auth.repository.ts               # findOAuthAccount, createUserWithOAuthAccount, createOAuthAccount
     ├── auth.service.ts                  # generateAuthTokensAndSession (shared session helper)
     └── oauth/
