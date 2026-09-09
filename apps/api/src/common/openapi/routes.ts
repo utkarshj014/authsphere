@@ -1,6 +1,8 @@
 // Aggregator — importing each *.openapi.ts triggers its side-effect
 // registrations on the shared OpenAPIRegistry.
 
+// NOTE: Protected against bundler tree-shaking via "sideEffects": true in package.json.
+
 // Common schemas (SuccessResponse, ErrorResponse, etc.)
 import "./schemas.js";
 

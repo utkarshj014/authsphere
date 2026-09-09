@@ -39,8 +39,7 @@ registry.registerPath({
   security: cookieSecurity,
   responses: {
     200: successResponse("List of active sessions", z.array(SessionItemSchema)),
-    401: authedErrors[401],
-    429: authedErrors[429],
+    ...authedErrors,
   },
 });
 

@@ -3,7 +3,6 @@ import { registry } from "../../common/openapi/registry.js";
 import {
   cookieSecurity,
   refreshCookieSecurity,
-  ErrorResponseSchema,
   MessageOnlyResponseSchema,
   PaginationMetaSchema,
   standardErrors,
@@ -31,6 +30,16 @@ export const MfaRequiredResponseSchema = registry.register(
     })
     .openapi("MfaRequiredResponse", {
       description: "MFA challenge verification required to complete flow",
+    }),
+);
+
+export const LoginResponseSchema = registry.register(
+  "LoginResponse",
+  z
+    .union([MessageOnlyResponseSchema, MfaRequiredResponseSchema])
+    .openapi("LoginResponse", {
+      description:
+        "Successful login (session cookies set) or MFA challenge verification required",
     }),
 );
 
@@ -68,9 +77,7 @@ export const SecurityEventItemSchema = registry.register(
 
 const loginOrMfaResponse = (description: string) => ({
   description,
-  content: jsonContent(
-    z.union([MessageOnlyResponseSchema, MfaRequiredResponseSchema]),
-  ),
+  content: jsonContent(LoginResponseSchema),
 });
 
 // ─── POST /auth/signup ─────────────────────────────────────────────
@@ -160,7 +167,8 @@ registry.registerPath({
   responses: {
     200: messageResponse("Tokens refreshed — new cookies set"),
     401: errorResponse("Invalid or expired refresh token"),
-    429: authedErrors[429],
+    429: standardErrors[429],
+    500: standardErrors[500],
   },
 });
 
@@ -172,8 +180,12 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Logout current session",
   description: "Revokes the current refresh token and clears auth cookies.",
+  security: refreshCookieSecurity,
   responses: {
     200: messageResponse("Logged out successfully"),
+    401: errorResponse("Unauthorized — missing or invalid refresh token"),
+    429: standardErrors[429],
+    500: standardErrors[500],
   },
 });
 
@@ -454,7 +466,8 @@ registry.registerPath({
     "Redirects the user to Google's OAuth consent screen. Optionally links a Google account to an existing session.",
   responses: {
     302: { description: "Redirect to Google OAuth consent screen" },
-    429: authedErrors[429],
+    429: standardErrors[429],
+    500: standardErrors[500],
   },
 });
 
@@ -478,7 +491,8 @@ registry.registerPath({
     400: errorResponse(
       "OAuth callback failed, invalid or expired state parameter",
     ),
-    429: authedErrors[429],
+    429: standardErrors[429],
+    500: standardErrors[500],
   },
 });
 
@@ -491,7 +505,8 @@ registry.registerPath({
     "Redirects the user to GitHub's OAuth consent screen. Optionally links a GitHub account to an existing session.",
   responses: {
     302: { description: "Redirect to GitHub OAuth consent screen" },
-    429: authedErrors[429],
+    429: standardErrors[429],
+    500: standardErrors[500],
   },
 });
 
@@ -515,6 +530,7 @@ registry.registerPath({
     400: errorResponse(
       "OAuth callback failed, invalid or expired state parameter",
     ),
-    429: authedErrors[429],
+    429: standardErrors[429],
+    500: standardErrors[500],
   },
 });

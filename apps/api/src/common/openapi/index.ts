@@ -1,4 +1,9 @@
-import { Router } from "express";
+import {
+  Router,
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
 import swaggerUi from "swagger-ui-express";
 import { OpenApiGeneratorV31 } from "@asteasolutions/zod-to-openapi";
 import { registry } from "./registry.js";
@@ -11,16 +16,26 @@ type OpenAPIObject = ReturnType<OpenApiGeneratorV31["generateDocument"]>;
 let cachedDocument: OpenAPIObject | null = null;
 
 /**
+ * Clears the memoized OpenAPI document cache (used in tests or dynamic resets).
+ */
+export function clearOpenApiCache(): void {
+  cachedDocument = null;
+}
+
+/**
  * Generates and memoizes the OpenAPI 3.1 document from all registered schemas and paths.
+ * In development mode (NODE_ENV === "development"), memoization is bypassed so hot-reloads
+ * reflect schema changes immediately without requiring a server restart.
  */
 export function getOpenApiDocument(): OpenAPIObject {
-  if (cachedDocument) {
+  const isDev = process.env.NODE_ENV === "development";
+  if (cachedDocument && !isDev) {
     return cachedDocument;
   }
 
   const generator = new OpenApiGeneratorV31(registry.definitions);
 
-  cachedDocument = generator.generateDocument({
+  const doc = generator.generateDocument({
     openapi: "3.1.0",
     info: {
       title: "AuthSphere API",
@@ -53,7 +68,11 @@ export function getOpenApiDocument(): OpenAPIObject {
     ],
   });
 
-  return cachedDocument;
+  if (!isDev) {
+    cachedDocument = doc;
+  }
+
+  return doc;
 }
 
 // ─── Express Router ────────────────────────────────────────────────
@@ -65,7 +84,16 @@ router.get("/openapi.json", (_req, res) => {
   return res.json(getOpenApiDocument());
 });
 
-// Serve Swagger UI
-router.use("/docs", swaggerUi.serve, swaggerUi.setup(getOpenApiDocument()));
+// Serve Swagger UI with dynamic document support
+router.use(
+  "/docs",
+  (req: Request, _res: Response, next: NextFunction) => {
+    (req as Request & { swaggerDoc?: OpenAPIObject }).swaggerDoc =
+      getOpenApiDocument();
+    next();
+  },
+  swaggerUi.serve,
+  swaggerUi.setup(),
+);
 
 export { router as openApiRouter };

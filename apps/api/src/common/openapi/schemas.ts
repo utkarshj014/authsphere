@@ -104,6 +104,22 @@ export const successEnvelope = <T extends z.ZodTypeAny>(dataSchema: T) =>
   });
 
 /**
+ * Registers a named success envelope schema in the central registry,
+ * allowing OpenAPI to reference it as a reusable component ($ref) instead of inlining.
+ */
+export const registerSuccessEnvelope = <T extends z.ZodTypeAny>(
+  name: string,
+  dataSchema: T,
+  description?: string,
+) =>
+  registry.register(
+    name,
+    successEnvelope(dataSchema).openapi(name, {
+      description: description ?? `Successful response envelope for ${name}`,
+    }),
+  );
+
+/**
  * Returns a complete OpenAPI 200 response with data wrapped in the standard success envelope.
  */
 export const successResponse = <T extends z.ZodTypeAny>(
@@ -147,6 +163,10 @@ export const standardErrors = {
   },
   429: {
     description: "Rate limit exceeded",
+    content: jsonContent(ErrorResponseSchema),
+  },
+  500: {
+    description: "Internal server error",
     content: jsonContent(ErrorResponseSchema),
   },
 } as const;
