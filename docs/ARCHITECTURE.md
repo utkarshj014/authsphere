@@ -505,7 +505,7 @@ sequenceDiagram
 - **Fail-Safe Caching**: `redis.isOpen` checks ensure that Redis network outages transparently fallback to PostgreSQL DB queries without crashing requests `[ADR-035]`.
 - **Structured Logging**: Pino emits structured JSON logs with correlated `X-Request-Id` headers across request lifecycles `[ADR-009]`.
 - **Health Checks**: `/health` actively verifies database and Redis connectivity, returning `200 OK` or `503 Service Unavailable` for container orchestrator probes `[ADR-011]`.
-- **OpenAPI 3.1 & Swagger UI**: Code-first API specification derived from active Zod validation schemas via `@asteasolutions/zod-to-openapi`, served dynamically at `GET /openapi.json` and rendered at `GET /docs` via Swagger UI. Documentation declarations are isolated from request handlers in co-located `*.openapi.ts` files, with Express ↔ OpenAPI route synchronization enforced via automated parity tests. Document generation is memoized to avoid repeated schema traversal on subsequent requests `[ADR-071]`.
+- **OpenAPI 3.1 & Swagger UI**: Code-first API specification derived from active Zod validation schemas via `@asteasolutions/zod-to-openapi`, served dynamically at `GET /openapi.json` and rendered at `GET /docs` via Swagger UI. Documentation declarations are isolated from request handlers in co-located `*.openapi.ts` files, with Express ↔ OpenAPI route synchronization enforced via automated parity tests. Document generation is memoized in production to avoid repeated schema traversal on subsequent requests while bypassing caching in development for live hot-reload feedback `[ADR-071]`.
 
 ---
 
@@ -518,7 +518,7 @@ graph TD
     subgraph Test Pyramid
         E2E["Layer 3: E2E User Journeys (3 files, 6 tests)"]
         INT["Layer 2: Critical Integration Tests (8 files, 111 tests)"]
-        UNIT["Layer 1: Focused Unit Tests (4 files, 36 tests)"]
+        UNIT["Layer 1: Focused Unit Tests (4 files, 34 tests)"]
     end
 
     subgraph Hermetic Isolation

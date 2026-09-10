@@ -243,27 +243,28 @@ Organize backend code inside `apps/api/src/modules/` by feature domain. Each mod
 
 ### Current Modules
 
-| Module           | Domain                               | Key Endpoints                                                                                       |
-| ---------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `auth/`          | Authentication & credentials         | `POST /auth/signup`, `POST /auth/login`, `GET /auth/oauth/:provider`, `POST /auth/magic-link`, etc. |
-| `sessions/`      | Active session lifecycle             | `GET /sessions`, `DELETE /sessions/:id`                                                             |
-| `authorization/` | Permission resolution & caching      | Internal service (consumed by `auth` middleware)                                                    |
-| `users/`         | User profile & role assignment       | `GET /users/:id`, `PATCH /users/:id/role`                                                           |
-| `roles/`         | Role-permission management           | `PUT /roles/:roleName/permissions`                                                                  |
-| `health/`        | Operational health monitoring        | `GET /health`                                                                                       |
-| `email/`         | Email dispatch (verification, reset) | Internal service                                                                                    |
+| Module           | Domain Boundary                                                 |
+| ---------------- | --------------------------------------------------------------- |
+| `auth/`          | Credential verification, signup, login, OAuth, magic links, MFA |
+| `sessions/`      | Active device session tracking, listing, and remote revocation  |
+| `authorization/` | Role and permission resolution, caching, and evaluation         |
+| `users/`         | User identity, profile management, and administrative roles     |
+| `roles/`         | System role and permission definition mappings                  |
+| `health/`        | Operational liveness and readiness dependency probing           |
+| `email/`         | In-memory and external transactional notification dispatch      |
 
 ### Module File Convention
 
-| File              | Responsibility                                                         |
-| ----------------- | ---------------------------------------------------------------------- |
-| `*.route.ts`      | Express router with route definitions and middleware wiring            |
-| `*.controller.ts` | HTTP request/response handling, cookie management, response formatting |
-| `*.service.ts`    | Business logic, orchestration, error decisions                         |
-| `*.repository.ts` | Database queries and transactional mutations via Prisma                |
-| `*.validation.ts` | Zod schemas and inferred TypeScript types for request input            |
-| `*.types.ts`      | Shared TypeScript type definitions for the module                      |
-| `index.ts`        | Barrel re-export for external consumers                                |
+| File              | Responsibility                                                           |
+| ----------------- | ------------------------------------------------------------------------ |
+| `*.route.ts`      | Express router with route definitions and middleware wiring              |
+| `*.controller.ts` | HTTP request/response handling, cookie management, response formatting   |
+| `*.service.ts`    | Business logic, orchestration, error decisions                           |
+| `*.repository.ts` | Database queries and transactional mutations via Prisma                  |
+| `*.validation.ts` | Zod schemas and inferred TypeScript types for request input              |
+| `*.openapi.ts`    | OpenAPI 3.1 endpoint registrations and co-located documentation metadata |
+| `*.types.ts`      | Shared TypeScript type definitions for the module                        |
+| `index.ts`        | Barrel re-export for external consumers                                  |
 
 ---
 
@@ -281,9 +282,9 @@ Access all environment variables exclusively through `src/config/env.ts`. Direct
 
 ### Rationale
 
-- Single source of truth for configuration.
-- Central auditing of required/optional variables.
-- Predictable defaults and type coercions.
+- **Single Source of Truth:** Centralized access prevents hidden `process.env` dependencies across modules.
+- **Auditable Defaults:** Default values, optional flags, and types are consolidated in one schema.
+- **Predictable Coercion:** Uniform transformations prevent divergent environment parsing.
 
 ---
 
@@ -321,9 +322,9 @@ Adopt **Prisma 7** with `@prisma/adapter-pg` and `pg` pool connections.
 
 ### Rationale
 
-- End-to-end TypeScript safety from `schema.prisma`.
-- Native PostgreSQL driver pools for optimal performance.
-- Declarative migration workflow via Prisma CLI.
+- **End-to-End Type Safety:** Types are generated directly from `schema.prisma`.
+- **Connection Efficiency:** Native `pg` driver pools optimize database throughput.
+- **Declarative Migrations:** Standardized CLI migration workflows ensure schema reproducibility.
 
 ---
 
@@ -341,9 +342,8 @@ Generate client into `apps/api/src/generated/prisma` via `generator client { out
 
 ### Rationale
 
-- Explicit, reliable imports (`import { Prisma } from "../../generated/prisma/client.js"`).
-- Prevents workspace hoisting conflicts in CI/CD.
-- Keeps generated artifacts within the project boundary.
+- **Explicit Import Resolution:** Resolves package hoisting conflicts across monorepo workspace packages.
+- **Build Reproducibility:** Keeps generated Prisma client artifacts within the project boundary.
 
 ---
 
@@ -361,9 +361,9 @@ Instantiate and export infrastructure singletons strictly inside `src/lib/` (`pr
 
 ### Rationale
 
-- Decouples infrastructure from feature modules.
-- Centralizes connection pool configuration and reconnect strategies.
-- Simplifies mocking during testing.
+- **Modular Decoupling:** Separates low-level connection infrastructure from domain feature services.
+- **Centralized Lifecycles:** Unifies connection pools, retry policies, and reconnect strategies in singleton instances.
+- **Test Isolation:** Enables mocking infrastructure singletons without touching business modules.
 
 ---
 
@@ -431,6 +431,11 @@ Intercept `SIGINT`, `SIGTERM`, `uncaughtException`, and `unhandledRejection` in 
 2. Drain active connections with a 10-second hard timeout.
 3. Concurrently disconnect Prisma and Redis via `Promise.allSettled`.
 
+### Rationale
+
+- **Zero Dropped In-Flight Requests:** Gives existing HTTP requests a 10-second window to complete before termination.
+- **Resource Cleanliness:** Disconnects persistent database pools and Redis sockets cleanly, preventing orphaned server connections.
+
 ---
 
 ## ADR-011 — Operational Health Monitoring Pattern
@@ -444,6 +449,11 @@ Container orchestrators rely on liveness/readiness probes. Health check failures
 ### Decision
 
 `/health` executes active checks against PostgreSQL (`prisma.$queryRaw`) and Redis (`redis.ping()`), returning `200 OK` or `503 Service Unavailable` with granular `"UP"`/`"DOWN"` status per dependency.
+
+### Rationale
+
+- **Orchestrator Compatibility:** Provides standard liveness/readiness probes for Kubernetes, Docker, and cloud load balancers.
+- **Dependency Isolation:** Identifies which infrastructure dependency is degraded without crashing the API process.
 
 ---
 
@@ -501,9 +511,9 @@ Strict **Refresh Token Rotation (RTR)**: every refresh generates a new token pai
 
 ### Rationale
 
-- Limits single-token exposure window.
-- **Reuse Detection:** Stolen token replay → session revocation (configurable: `"SESSION"` or `"GLOBAL"` deletion mode).
-- Follows OAuth 2.0 Security Best Current Practices (RFC 6819 / RFC 8725).
+- **Exposure Window Limitation:** Frequent rotation limits token lifetime and window of vulnerability.
+- **Reuse Detection:** Stolen token replay triggers immediate session revocation across the device or account.
+- **RFC Compliance:** Adheres to OAuth 2.0 Security Best Current Practices (RFC 6819 / RFC 8725).
 
 ---
 
@@ -684,8 +694,8 @@ When user is not found, execute a dummy `verifyPassword(DUMMY_PASSWORD_HASH, inp
 
 ### Rationale
 
-- Both "user not found" and "wrong password" paths take ~equal time (~100ms).
-- Identical `"Invalid credentials"` message on both paths — no oracle for distinguishing failure modes.
+- **Constant Time Execution:** Both "user not found" and "wrong password" execution paths consume approximately equal time (~100ms), mitigating timing attacks.
+- **Oracle Elimination:** Returning identical `"Invalid credentials"` messaging prevents email enumeration.
 
 ---
 
@@ -822,8 +832,8 @@ After verifying the old password, verify the new password differs via `verifyPas
 
 ### Rationale
 
-- Prevents no-op password changes.
-- Uses `AppError(400)` not `UnauthorizedError(401)` — user is authenticated, only the input is invalid.
+- **No-Op Prevention:** Prevents redundant password updates to identical values.
+- **Semantic Status Code:** Emits `AppError(400)` rather than `401` because the client identity is verified and the input itself is invalid.
 
 ---
 
@@ -858,11 +868,20 @@ Tracking last password change is needed for security auditing and potential forc
 
 `passwordChangedAt` (`DateTime?`) column on `User`, updated atomically during both `resetPassword` and `changePassword`. `null` = never changed since creation.
 
+### Rationale
+
+- **Audit Traceability:** Distinguishes legacy accounts from recently rotated credentials during security audits.
+- **Policy Foundation:** Provides necessary timestamp data for forced periodic credential rotation or stale session termination.
+
 ---
 
 ## ADR-031 — Argon2id Password Hashing with OWASP Parameters
 
 **Status:** Accepted
+
+### Context
+
+Storing plaintext or weakly hashed passwords exposes user credentials to offline dictionary and GPU rainbow table attacks if the database is breached.
 
 ### Decision
 
@@ -897,6 +916,11 @@ Guard all password-dependent flows:
 - **Login:** `403` directing user to their social provider.
 - **Forgot Password:** Silent return (same as "user not found").
 - **Change Password:** `403` explaining social accounts cannot change passwords.
+
+### Rationale
+
+- **Clear User Guidance:** Directs social identity users to their respective OAuth provider rather than failing with confusing database errors.
+- **Credential Integrity:** Enforces that password-based mutations apply strictly to accounts maintaining local password hashes.
 
 ---
 
@@ -1141,17 +1165,11 @@ Encrypt TOTP secrets at rest using **AES-256-GCM** (authenticated encryption) vi
 | Storage Format | `ivHex:authTagHex:ciphertextHex`                     |
 | Key Derivation | `SHA-256(MFA_ENCRYPTION_KEY)` → 32 bytes             |
 
-### Implementation Detail
-
-- `encryptMfaSecret(plaintext)` is called during `mfaSetup` before persisting the secret to the database. The raw plaintext is returned to the user for QR code generation.
-- `decryptMfaSecret(secret)` is called during `mfaVerifySetup` and `verifyMfaCodeOrRecoveryCode` before passing the secret to `totp.verifyCode()`.
-- **Fail-Safe:** `decryptMfaSecret` returns the input unchanged if it does not match the `iv:tag:ciphertext` format, enabling transparent backward compatibility with pre-encryption plaintext secrets.
-
 ### Rationale
 
 - **Defense in Depth:** Database compromise no longer yields usable TOTP seeds.
-- **Authenticated Encryption:** GCM mode detects tampering via the auth tag.
-- **Backward Compatible:** Fail-safe decryption handles legacy plaintext secrets gracefully.
+- **Tamper Resistance:** Authenticated encryption (GCM mode) detects any ciphertext alteration via the 128-bit authentication tag.
+- **Deterministic Derivation:** SHA-256 key derivation ensures reliable key length from environment configuration.
 
 ---
 
@@ -1224,7 +1242,7 @@ const sanitizedId =
         .trim()
         .slice(0, 128)
     : "";
-const id = sanitizedId !== "" ? sanitizedId : randomUUID();
+const id = sanitizedId || randomUUID();
 ```
 
 ### Rationale
@@ -1416,32 +1434,13 @@ Rate limit parameters (window duration, request quota, key strategy) scattered a
 
 Define all rate limit policies as a single typed constant `RATE_LIMIT_POLICIES` in `src/middlewares/rate-limit.ts`, typed via `as const satisfies Record<string, RateLimitPolicy>`. The `rateLimiter(policy)` middleware factory consumes any policy from the dictionary.
 
-| Policy                          | Limit | Window | Key Type | Scope                                       |
-| ------------------------------- | ----- | ------ | -------- | ------------------------------------------- |
-| `GLOBAL`                        | 100   | 1 min  | IP       | All routes via `app.use`                    |
-| `HEALTH`                        | 60    | 1 min  | IP       | `GET /health`                               |
-| `USER_READ`                     | 60    | 1 min  | User     | `GET /users/:id`                            |
-| `SESSIONS_READ`                 | 60    | 1 min  | User     | `GET /sessions`                             |
-| `SECURITY_EVENTS_READ`          | 60    | 1 min  | User     | `GET /auth/security-events`                 |
-| `REFRESH_TOKEN`                 | 30    | 1 min  | IP       | `POST /auth/refresh-token`                  |
-| `OAUTH_INITIATE`                | 20    | 1 min  | IP       | `GET /auth/oauth/:provider`                 |
-| `OAUTH_CALLBACK`                | 20    | 1 min  | IP       | `GET /auth/oauth/:provider/callback`        |
-| `SESSION_REVOKE`                | 20    | 1 min  | User     | `DELETE /sessions/:id`                      |
-| `LOGIN`                         | 10    | 1 min  | IP       | `POST /auth/login`                          |
-| `MFA_VERIFY`                    | 10    | 1 min  | IP       | `POST /auth/mfa/verify`                     |
-| `USER_CHANGE_ROLE`              | 10    | 1 min  | User     | `PATCH /users/:id/role`                     |
-| `ROLE_UPDATE_PERMISSIONS`       | 10    | 1 min  | User     | `PUT /roles/:roleName/permissions`          |
-| `VERIFY_EMAIL`                  | 10    | 5 min  | IP       | `POST /auth/verify-email`                   |
-| `RESET_PASSWORD`                | 10    | 5 min  | IP       | `POST /auth/reset-password`                 |
-| `MAGIC_LINK_VERIFY`             | 10    | 5 min  | IP       | `POST /auth/magic-link/verify`              |
-| `MFA_VERIFY_SETUP`              | 5     | 5 min  | User     | `POST /auth/mfa/setup`, `/mfa/verify-setup` |
-| `SIGNUP`                        | 5     | 15 min | IP       | `POST /auth/signup`                         |
-| `RESEND_VERIFICATION`           | 5     | 15 min | IP       | `POST /auth/resend-verification`            |
-| `FORGOT_PASSWORD`               | 5     | 15 min | IP       | `POST /auth/forgot-password`                |
-| `MAGIC_LINK_REQUEST`            | 5     | 15 min | IP       | `POST /auth/magic-link`                     |
-| `CHANGE_PASSWORD`               | 5     | 15 min | User     | `POST /auth/change-password`                |
-| `MFA_DISABLE`                   | 5     | 15 min | User     | `POST /auth/mfa/disable`                    |
-| `MFA_REGENERATE_RECOVERY_CODES` | 5     | 15 min | User     | `POST /auth/mfa/regenerate-recovery-codes`  |
+| Policy Tier           | Quota Window | Key Strategy | Primary Protection Scope                                   |
+| :-------------------- | :----------- | :----------- | :--------------------------------------------------------- |
+| **Global Baseline**   | 100 / 1 min  | IP           | All incoming HTTP traffic via top-level Express middleware |
+| **Standard Reads**    | 60 / 1 min   | User ID / IP | Profile queries, session introspection, audit history      |
+| **Authentication**    | 10–20 / 1m   | IP           | Login, MFA challenge verification, token rotation          |
+| **Account Mutations** | 5–10 / 1m    | User ID      | Role assignments, permission updates                       |
+| **Token Dispatches**  | 5 / 15 min   | IP / User ID | Password resets, email verification, magic link dispatches |
 
 ### Rationale
 
@@ -1666,21 +1665,15 @@ OAuth 2.0 authorization flows require cryptographic state parameters to prevent 
 Store 32-byte cryptographically random state strings in Redis under `oauth:state:<state>` with a strict 10-minute TTL. The state value encapsulates flow metadata (`OAuthStateData`: `provider` and optional `userId`). During authorization callback processing, state is atomically fetched and deleted via Redis `GETDEL` (`redis.getDel`) before verifying provider matching:
 
 ```typescript
-export const consumeOAuthState = async (
-  state: string,
-  expectedProvider: OAuthProviderName,
-): Promise<OAuthStateData> => {
-  const rawData = await redis.getDel(`oauth:state:${state}`);
-  if (!rawData)
-    throw new AppError(
-      "Invalid, expired, or already consumed OAuth state",
-      400,
-    );
-  const data = JSON.parse(rawData) as OAuthStateData;
-  if (data.provider !== expectedProvider)
-    throw new AppError("OAuth state provider mismatch", 400);
-  return data;
-};
+const rawData = await redis.getDel(`oauth:state:${state}`);
+if (!rawData)
+  throw new AppError("Invalid, expired, or already consumed OAuth state", 400);
+
+const data = JSON.parse(rawData) as OAuthStateData;
+if (data.provider !== expectedProvider) {
+  throw new AppError("OAuth state provider mismatch", 400);
+}
+return data;
 ```
 
 ### Rationale
@@ -1759,8 +1752,8 @@ export const oauthCallbackHandler = (provider: OAuthProviderName) =>
   asyncHandler(async (req: Request, res: Response) => {
     const result = await handleOAuthCallback(
       provider,
-      req.query.code as string,
-      req.query.state as string,
+      req.query.code,
+      req.query.state,
       getClientIp(req),
       req.header("user-agent"),
     );
@@ -1841,20 +1834,15 @@ Implement a clean two-phase lookup and consumption workflow in `auth.repository.
    Magic links are available to any existing account, enabling users created via OAuth or password to log in passwordlessly.
 
 ```typescript
-const consumeMagicLinkToken = async (
-  userId: string,
-  shouldMarkEmailVerified: boolean,
-) => {
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      ...(shouldMarkEmailVerified
-        ? { isEmailVerified: true, verifiedAt: new Date() }
-        : {}),
-      magicLinkToken: { delete: {} },
-    },
-  });
-};
+await prisma.user.update({
+  where: { id: userId },
+  data: {
+    ...(shouldMarkEmailVerified
+      ? { isEmailVerified: true, verifiedAt: new Date() }
+      : {}),
+    magicLinkToken: { delete: {} },
+  },
+});
 ```
 
 ### Rationale
@@ -1906,30 +1894,22 @@ Demoting an administrator role requires ensuring at least one active administrat
 Enforce the last-admin demotion guard inside an interactive database transaction in `users.repository.ts`. When demoting away from `ADMIN`, the transaction touches the single `ADMIN` record in the `roles` table (`tx.role.update`), acquiring an exclusive row-level lock that serializes all concurrent demotion attempts before evaluating `tx.user.count`:
 
 ```typescript
-const updateUserRole = async (userId: string, roleName: RoleName) =>
-  prisma.$transaction(async (tx) => {
-    if (roleName !== ROLES.ADMIN) {
-      await tx.role.update({
-        where: { name: ROLES.ADMIN },
-        data: { updatedAt: new Date() },
-      });
-    }
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      include: { role: true },
+await prisma.$transaction(async (tx) => {
+  if (roleName !== ROLES.ADMIN) {
+    await tx.role.update({
+      where: { name: ROLES.ADMIN },
+      data: { updatedAt: new Date() },
     });
-    if (!user) throw new AppError("User not found", 404);
-    if (user.role.name === ROLES.ADMIN && roleName !== ROLES.ADMIN) {
-      const count = await tx.user.count({
-        where: { role: { name: ROLES.ADMIN } },
-      });
-      if (count <= 1) throw new ForbiddenError("Cannot demote the last admin");
-    }
-    return tx.user.update({
-      where: { id: userId },
-      data: { role: { connect: { name: roleName } } },
-    });
+  }
+  const adminCount = await tx.user.count({
+    where: { role: { name: ROLES.ADMIN } },
   });
+  if (adminCount <= 1) throw new ForbiddenError("Cannot demote the last admin");
+  return tx.user.update({
+    where: { id: userId },
+    data: { role: { connect: { name: roleName } } },
+  });
+});
 ```
 
 ### Rationale
@@ -1962,30 +1942,23 @@ Implement dedicated `/sessions` endpoints (`GET /sessions`, `DELETE /sessions/:i
    If `isCurrent` is true, invoke `clearAuthCookies(res)` in the controller to wipe access and refresh token cookies.
 
 ```typescript
-const revokeSession = async (
-  sessionId: string,
-  userId: string,
-  currentSessionId: string,
-  ipAddress: string,
-  userAgent?: string,
-) => {
-  const session = await sessionsRepository.findSessionById(sessionId);
-  if (!session) throw new AppError("Session not found", 404);
-  if (session.userId !== userId)
-    throw new ForbiddenError("You cannot revoke another user's session");
-  await sessionsRepository.deleteSessionByIdAndUserId(sessionId, userId);
-  await recordSecurityEvent(
-    userId,
-    SECURITY_EVENT_TYPES.LOGOUT,
-    ipAddress,
-    userAgent,
-    {
-      revokedSessionId: sessionId,
-      isCurrentSession: sessionId === currentSessionId,
-    },
-  );
-  return { isCurrent: sessionId === currentSessionId };
-};
+const session = await sessionsRepository.findSessionById(sessionId);
+if (!session) throw new AppError("Session not found", 404);
+if (session.userId !== userId)
+  throw new ForbiddenError("You cannot revoke another user's session");
+
+await sessionsRepository.deleteSessionByIdAndUserId(sessionId, userId);
+await recordSecurityEvent(
+  userId,
+  SECURITY_EVENT_TYPES.LOGOUT,
+  ipAddress,
+  userAgent,
+  {
+    revokedSessionId: sessionId,
+    isCurrentSession: sessionId === currentSessionId,
+  },
+);
+return { isCurrent: sessionId === currentSessionId };
 ```
 
 ### Rationale
@@ -2028,9 +2001,9 @@ export const recordSecurityEvent = async (
   await authRepository.createSecurityEvent({
     userId,
     type,
-    ...(ipAddress ? { ipAddress } : {}),
-    ...(userAgent ? { userAgent } : {}),
-    ...(metadata ? { metadata } : {}),
+    ...(ipAddress && { ipAddress }),
+    ...(userAgent && { userAgent }),
+    ...(metadata && { metadata }),
   });
 };
 ```
@@ -2064,9 +2037,9 @@ Implement a 3-layer test pyramid utilizing **Vitest** and **Supertest** configur
    - Mock all email dispatches (`tests/helpers/email.ts`) using Vitest spies (`vi.mock("../../modules/email/demo.js")`), capturing verification tokens and magic links in an in-memory outbox to eliminate network dependencies while enabling direct token assertion.
 
 3. **Three-Tier Pyramid:**
-   - **Focused Unit Tests (3 files, 27 tests — Pure In-Memory):** Direct execution of cryptography (Argon2id, AES-256-GCM, SHA-256 HMAC), TOTP generation, time parsing, and Zod schemas.
-   - **Critical Integration Tests (8 files, 111 tests):** HTTP request/response validation through Express routes, controllers, middleware, PostgreSQL, and Redis.
-   - **E2E User Journeys (3 files, 6 tests):** Stateful multi-step workflows verifying complete auth lifecycles, cross-device session introspection/revocation, and administrative privilege elevation/demotion.
+   - **Focused Unit Tests (Pure In-Memory):** Direct execution of cryptography (Argon2id, AES-256-GCM, SHA-256 HMAC), TOTP generation, time parsing, Zod boundary schemas, and OpenAPI 3.1 specification generation / 1:1 bidirectional Express route parity.
+   - **Critical Integration Tests:** HTTP request/response validation through Express routes, controllers, middleware, PostgreSQL, and Redis.
+   - **E2E User Journeys:** Stateful multi-step workflows verifying complete auth lifecycles, cross-device session introspection/revocation, and administrative privilege elevation/demotion.
 
 ### Rationale
 
@@ -2089,13 +2062,12 @@ Manual OpenAPI or Swagger documentation maintained in YAML or JSON inevitably dr
 Generate an OpenAPI 3.1 specification code-first using `@asteasolutions/zod-to-openapi` (v9.1.0) and serve interactive documentation via `swagger-ui-express` at `/docs` alongside raw JSON at `/openapi.json`:
 
 1. **Central OpenAPIRegistry (`apps/api/src/common/openapi/registry.ts`)**: Extends Zod via `extendZodWithOpenApi(z)` and registers cookie-based security schemes (`accessTokenCookie`, `refreshTokenCookie`) modeled as `apiKey` in `cookie`. Swagger UI is configured to reflect that authentication is governed by browser-managed HttpOnly cookies rather than manual Bearer token pasting.
-2. **Reusable Components & DRY Builders (`apps/api/src/common/openapi/schemas.ts`)**: Registers shared envelopes (`SuccessResponse`, `MessageOnlyResponse`, `ErrorResponse`, `ValidationErrorResponse`, `PaginationMeta`) and exports type-safe composable builders (`jsonContent`, `successResponse`, `messageResponse`, `errorResponse`, `jsonBody`).
-3. **Co-located Module Path Declarations (`apps/api/src/modules/*/*.openapi.ts`)**: Modules register endpoints onto the shared registry without modifying underlying controller, service, or validation files.
-4. **Memoized Document Generation (`apps/api/src/common/openapi/index.ts`)**: `getOpenApiDocument()` builds and memoizes the OpenAPI 3.1 document on initial invocation, reusing the immutable specification to eliminate repetitive AST compilation and schema generation on subsequent `/openapi.json` requests.
+2. **Reusable Envelopes, DRY Builders & Response Schemas (`apps/api/src/common/openapi/schemas.ts`)**: Registers shared universal envelopes (`MessageOnlyResponse`, `ErrorResponse`, `ValidationErrorResponse`) and exports type-safe composable builders (`jsonContent`, `successEnvelope`, `successResponse`, `messageResponse`, `errorResponse`, `jsonBody`). Domain response schemas originate directly in `*.validation.ts` (e.g. `authResponseSchema`, `userResponseSchema`, `sessionResponseSchema`), providing compile-time `Promise<T>` service typing and runtime `schema.parse()` egress validation on sensitive user endpoints, while being registered as named OpenAPI components in co-located `*.openapi.ts` via `.openapi(...)`. Common HTTP errors are DRYly centralized into `standardErrors` (400, 429, 500) and `authedErrors` (+401), while `403 Forbidden` is documented explicitly with precise domain descriptions on endpoints that genuinely enforce RBAC or business guards.
+3. **Co-located Module Path Declarations (`apps/api/src/modules/*/*.openapi.ts`)**: Modules register endpoints onto the shared registry without modifying underlying controller, service, or validation files. Side-effect aggregator `routes.ts` is protected against tree-shaker drops via `"sideEffects": true` in `package.json`.
+4. **Memoized Document Generation with Development Hot-Reload Bypass (`apps/api/src/common/openapi/index.ts`)**: `getOpenApiDocument()` builds and memoizes the OpenAPI 3.1 document on initial invocation in production and test environments, eliminating repetitive AST compilation on live endpoints. When `NODE_ENV === "development"`, caching is bypassed so schema edits are immediately reflected across `/openapi.json` and `/docs` without restarting the server.
 5. **Bidirectional Express Parity Enforcement (`apps/api/tests/unit/openapi.test.ts`)**: Automated unit tests dynamically extract mounted Express route layers and assert a strict 1:1 invariant ensuring every Express route is documented and every documented operation maps to an active Express route.
 
 ```typescript
-// apps/api/src/common/openapi/schemas.ts
 export const successResponse = <T extends z.ZodTypeAny>(
   description: string,
   dataSchema: T,
@@ -2104,16 +2076,21 @@ export const successResponse = <T extends z.ZodTypeAny>(
   content: jsonContent(successEnvelope(dataSchema)),
 });
 
-export const jsonBody = <T extends z.ZodTypeAny>(schema: T) => ({
-  required: true,
-  content: jsonContent(schema),
-});
+export const authedErrors = {
+  ...standardErrors,
+  401: {
+    description: "Unauthorized — missing or invalid access token cookie",
+    content: jsonContent(ErrorResponseSchema),
+  },
+} as const;
 ```
 
 ### Rationale
 
-- **Schema Drift Minimization:** Derives OpenAPI schemas directly from active Zod validation schemas across all endpoints, significantly reducing request/response contract drift.
+- **Single Source of Truth & Zero Schema Drift:** Derives OpenAPI schemas directly from active Zod validation schemas across all request bodies and response payloads. Services strictly type returns via compile-time `Promise<T>` inference and sanitize sensitive user records at runtime via `schema.parse()`, eliminating contract drift across services, controllers, and documentation.
 - **Isolated Route Declarations:** Documentation declarations are isolated in dedicated `*.openapi.ts` files imported as side-effects, keeping Express controllers and routes free of documentation clutter.
 - **Automated Parity Verification:** Dynamic tests assert 1:1 bidirectional alignment between Express route stacks and OpenAPI path registrations, catching route omissions or phantom documentation entries.
-- **Immutable Document Reuse:** Caching the generated specification eliminates repeated schema traversal and AST compilation overhead on incoming `/openapi.json` requests.
+- **Environment-Aware Document Caching:** Caching the generated specification eliminates repeated schema traversal and AST compilation overhead in production while development mode bypasses cache for instant DX feedback.
+- **Tree-Shaking Safety:** Declaring `"sideEffects": true` ensures production bundlers and minifiers never discard route registration side-effect imports.
+- **Truthful, Granular Error Typing:** Shared status codes (400, 401, 429, 500) are centralized via `standardErrors` and `authedErrors`. Endpoint-specific 403 authorization failures are documented explicitly where business guards actually exist, avoiding phantom 403 documentation on standard authenticated endpoints.
 - **Accurate Cookie Security Modeling:** Explicitly documents HttpOnly cookie transport (`apiKey` in `cookie`) while establishing clear expectations that authentication is browser-managed rather than token-input driven.

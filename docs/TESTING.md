@@ -32,7 +32,7 @@ AuthSphere's testing suite is engineered around **high-signal verification, modu
 
 ```text
 Suite Status: 15 test files (100% passing)
-Total Tests:  153 passed (153 tests total)
+Total Tests:  151 passed (151 tests total)
 Architecture: Streamlined, DRY, Modular (4 Unit, 8 Integration, 3 E2E)
 Framework:    Vitest 4.x + Supertest 7.x + V8 Coverage
 Runtime:      Node.js >22 ESM
@@ -49,7 +49,7 @@ graph TD
     subgraph Test Pyramid
         E2E["Layer 3: E2E User Journeys (3 files, 6 tests)"]
         INT["Layer 2: Critical Integration Tests (8 files, 111 tests)"]
-        UNIT["Layer 1: Focused Unit Tests (4 files, 36 tests)"]
+        UNIT["Layer 1: Focused Unit Tests (4 files, 34 tests)"]
     end
 
     subgraph Hermetic Test Environment
@@ -64,7 +64,7 @@ graph TD
     style UNIT fill:#1c4532,stroke:#276749,stroke-width:2px,color:#fff
 ```
 
-### Layer 1: Focused Unit Tests (4 Files, 36 Tests — Pure In-Memory)
+### Layer 1: Focused Unit Tests (4 Files, 34 Tests — Pure In-Memory)
 
 Fast, pure-function tests executing in microseconds without external I/O, database, or Redis dependencies:
 
