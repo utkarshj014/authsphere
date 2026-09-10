@@ -12,19 +12,6 @@ export const refreshCookieSecurity = [{ [refreshTokenSecurity.name]: [] }];
 // ─── Reusable Response Schemas ─────────────────────────────────────
 // These mirror the shapes produced by ApiResponse and the error handler.
 
-export const SuccessResponseSchema = registry.register(
-  "SuccessResponse",
-  z
-    .object({
-      success: z.literal(true),
-      message: z.string(),
-      data: z.unknown().nullable(),
-    })
-    .openapi("SuccessResponse", {
-      description: "Standard success response envelope",
-    }),
-);
-
 export const MessageOnlyResponseSchema = registry.register(
   "MessageOnlyResponse",
   z
@@ -68,22 +55,6 @@ export const ValidationErrorResponseSchema = registry.register(
     }),
 );
 
-export const PaginationMetaSchema = registry.register(
-  "PaginationMeta",
-  z
-    .object({
-      page: z.number().int(),
-      limit: z.number().int(),
-      totalCount: z.number().int(),
-      totalPages: z.number().int(),
-      hasNextPage: z.boolean(),
-      hasPreviousPage: z.boolean(),
-    })
-    .openapi("PaginationMeta", {
-      description: "Pagination metadata for list responses",
-    }),
-);
-
 // ─── Content & Response Builders (DRY Helpers) ─────────────────────
 
 /**
@@ -102,22 +73,6 @@ export const successEnvelope = <T extends z.ZodTypeAny>(dataSchema: T) =>
     message: z.string(),
     data: dataSchema,
   });
-
-/**
- * Registers a named success envelope schema in the central registry,
- * allowing OpenAPI to reference it as a reusable component ($ref) instead of inlining.
- */
-export const registerSuccessEnvelope = <T extends z.ZodTypeAny>(
-  name: string,
-  dataSchema: T,
-  description?: string,
-) =>
-  registry.register(
-    name,
-    successEnvelope(dataSchema).openapi(name, {
-      description: description ?? `Successful response envelope for ${name}`,
-    }),
-  );
 
 /**
  * Returns a complete OpenAPI 200 response with data wrapped in the standard success envelope.

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authSchema } from "./auth.validation.js";
+import { authRequestSchema } from "./auth.validation.js";
 import { authController } from "./auth.controller.js";
 import {
   googleInitiate,
@@ -42,25 +42,25 @@ router
   .post(
     "/signup",
     rateLimiter(RATE_LIMIT_POLICIES.SIGNUP),
-    validate(authSchema.signup),
+    validate(authRequestSchema.signup),
     authController.signup,
   )
   .post(
     "/verify-email",
     rateLimiter(RATE_LIMIT_POLICIES.VERIFY_EMAIL),
-    validate(authSchema.verifyEmail),
+    validate(authRequestSchema.verifyEmail),
     authController.verifyEmail,
   )
   .post(
     "/resend-verification",
     rateLimiter(RATE_LIMIT_POLICIES.RESEND_VERIFICATION),
-    validate(authSchema.resendVerificationToken),
+    validate(authRequestSchema.resendVerificationToken),
     authController.resendVerificationToken,
   )
   .post(
     "/login",
     rateLimiter(RATE_LIMIT_POLICIES.LOGIN),
-    validate(authSchema.login),
+    validate(authRequestSchema.login),
     authController.login,
   )
   .post(
@@ -74,20 +74,20 @@ router
   .post(
     "/forgot-password",
     rateLimiter(RATE_LIMIT_POLICIES.FORGOT_PASSWORD),
-    validate(authSchema.forgotPassword),
+    validate(authRequestSchema.forgotPassword),
     authController.forgotPassword,
   )
   .post(
     "/reset-password",
     rateLimiter(RATE_LIMIT_POLICIES.RESET_PASSWORD),
-    validate(authSchema.resetPassword),
+    validate(authRequestSchema.resetPassword),
     authController.resetPassword,
   )
   .post(
     "/change-password",
     auth,
     rateLimiter(RATE_LIMIT_POLICIES.CHANGE_PASSWORD),
-    validate(authSchema.changePassword),
+    validate(authRequestSchema.changePassword),
     authController.changePassword,
   )
   .post(
@@ -100,46 +100,46 @@ router
     "/mfa/verify-setup",
     auth,
     rateLimiter(RATE_LIMIT_POLICIES.MFA_VERIFY_SETUP),
-    validate(authSchema.mfaVerifySetup),
+    validate(authRequestSchema.mfaVerifySetup),
     authController.mfaVerifySetup,
   )
   .post(
     "/mfa/verify",
     rateLimiter(RATE_LIMIT_POLICIES.MFA_VERIFY),
-    validate(authSchema.mfaVerifyLogin),
+    validate(authRequestSchema.mfaVerifyLogin),
     authController.mfaVerifyLogin,
   )
   .post(
     "/mfa/disable",
     auth,
     rateLimiter(RATE_LIMIT_POLICIES.MFA_DISABLE),
-    validate(authSchema.mfaDisable),
+    validate(authRequestSchema.mfaDisable),
     authController.mfaDisable,
   )
   .post(
     "/mfa/regenerate-recovery-codes",
     auth,
     rateLimiter(RATE_LIMIT_POLICIES.MFA_REGENERATE_RECOVERY_CODES),
-    validate(authSchema.mfaRegenerateRecoveryCodes),
+    validate(authRequestSchema.mfaRegenerateRecoveryCodes),
     authController.mfaRegenerateRecoveryCodes,
   )
   .post(
     "/magic-link",
     rateLimiter(RATE_LIMIT_POLICIES.MAGIC_LINK_REQUEST),
-    validate(authSchema.sendMagicLink),
+    validate(authRequestSchema.sendMagicLink),
     authController.sendMagicLink,
   )
   .post(
     "/magic-link/verify",
     rateLimiter(RATE_LIMIT_POLICIES.MAGIC_LINK_VERIFY),
-    validate(authSchema.verifyMagicLink),
+    validate(authRequestSchema.verifyMagicLink),
     authController.verifyMagicLink,
   )
   .get(
     "/security-events",
     auth,
     rateLimiter(RATE_LIMIT_POLICIES.SECURITY_EVENTS_READ),
-    validate(authSchema.securityEventsQuery, ValidationTarget.QUERY),
+    validate(authRequestSchema.securityEventsQuery, ValidationTarget.QUERY),
     authController.getSecurityEvents,
   );
 

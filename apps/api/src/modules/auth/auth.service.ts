@@ -7,6 +7,7 @@ import {
 } from "@authsphere/shared";
 import { AppError, UnauthorizedError } from "../../common/errors/index.js";
 import { authRepository } from "./auth.repository.js";
+import { authResponseSchema } from "./auth.validation.js";
 import type {
   SignupInput,
   VerifyEmailInput,
@@ -22,6 +23,10 @@ import type {
   SendMagicLinkInput,
   VerifyMagicLinkInput,
   SecurityEventsQueryInput,
+  CurrentUserProfileResponse,
+  MfaSetupResponse,
+  MfaRecoveryCodesResponse,
+  PaginatedSecurityEventsResponse,
 } from "./auth.validation.js";
 import {
   hashPassword,
@@ -44,7 +49,7 @@ import {
   signRefreshToken,
   verifyRefreshToken,
 } from "../../lib/jwt/index.js";
-import type { AuthTokens, PaginatedSecurityEventsDto } from "./auth.types.js";
+import type { AuthTokens } from "./auth.types.js";
 import { env } from "../../config/env.js";
 
 // ==========================================
@@ -374,13 +379,16 @@ const logoutAll = async (
   );
 };
 
-const getCurrentUser = async (userId: string) => {
+const getCurrentUser = async (
+  userId: string,
+): Promise<CurrentUserProfileResponse> => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
     throw new UnauthorizedError("User not found");
   }
 
-  return {
+  // Runtime egress sanitization firewall on sensitive user profile record
+  return authResponseSchema.currentUserProfile.parse({
     id: user.id,
     email: user.email,
     firstName: user.firstName,
@@ -388,7 +396,7 @@ const getCurrentUser = async (userId: string) => {
     role: user.role.name,
     verifiedAt: user.verifiedAt,
     createdAt: user.createdAt,
-  };
+  });
 };
 
 const forgotPassword = async (input: ForgotPasswordInput) => {
@@ -499,7 +507,7 @@ const changePassword = async (
   return { mfaRequired: false };
 };
 
-const mfaSetup = async (userId: string) => {
+const mfaSetup = async (userId: string): Promise<MfaSetupResponse> => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
     throw new AppError("User not found", 404);
@@ -521,7 +529,10 @@ const mfaSetup = async (userId: string) => {
   };
 };
 
-const mfaVerifySetup = async (userId: string, input: MfaVerifySetupInput) => {
+const mfaVerifySetup = async (
+  userId: string,
+  input: MfaVerifySetupInput,
+): Promise<MfaRecoveryCodesResponse> => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
     throw new AppError("User not found", 404);
@@ -653,7 +664,7 @@ const mfaDisable = async (userId: string, input: MfaDisableInput) => {
 const mfaRegenerateRecoveryCodes = async (
   userId: string,
   input: MfaRegenerateRecoveryCodesInput,
-) => {
+): Promise<MfaRecoveryCodesResponse> => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
     throw new AppError("User not found", 404);
@@ -755,7 +766,7 @@ const verifyMagicLink = async (
 const getSecurityEvents = async (
   userId: string,
   query: SecurityEventsQueryInput,
-): Promise<PaginatedSecurityEventsDto> => {
+): Promise<PaginatedSecurityEventsResponse> => {
   const skip = (query.page - 1) * query.limit;
 
   const [events, totalCount] = await Promise.all([

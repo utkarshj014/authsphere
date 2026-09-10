@@ -1,14 +1,7 @@
 import { healthRepository } from "./health.repository.js";
+import type { HealthStatus, HealthDataResponse } from "./health.validation.js";
 
-type ServiceStatus = "UP" | "DOWN";
-
-interface HealthCheckStatus {
-  api: ServiceStatus;
-  database: ServiceStatus;
-  redis: ServiceStatus;
-}
-
-const checkDb = async (): Promise<ServiceStatus> => {
+const checkDb = async (): Promise<HealthStatus> => {
   try {
     await healthRepository.checkDatabase();
     return "UP";
@@ -17,7 +10,7 @@ const checkDb = async (): Promise<ServiceStatus> => {
   }
 };
 
-const checkRedis = async (): Promise<ServiceStatus> => {
+const checkRedis = async (): Promise<HealthStatus> => {
   try {
     await healthRepository.checkRedis();
     return "UP";
@@ -26,7 +19,7 @@ const checkRedis = async (): Promise<ServiceStatus> => {
   }
 };
 
-export const healthService = async (): Promise<HealthCheckStatus> => {
+export const healthService = async (): Promise<HealthDataResponse> => {
   const [dbStatus, redisStatus] = await Promise.all([checkDb(), checkRedis()]);
 
   return {

@@ -10,13 +10,16 @@ import { requestLogger } from "./middlewares/request-logger.js";
 import { originValidation } from "./middlewares/origin-validation.js";
 import { rateLimiter, RATE_LIMIT_POLICIES } from "./middlewares/rate-limit.js";
 
+//openapi router needs to be at the top to ensure the extendZodWithOpenApi is called
+//before any module's *.openapi.ts tries to register a zod schema
+import { openApiRouter } from "./common/openapi/index.js";
+
 import { healthRouter } from "./modules/health/index.js";
 import { authRouter } from "./modules/auth/index.js";
 import { sessionsRouter } from "./modules/sessions/index.js";
 import { usersRouter } from "./modules/users/index.js";
 import { rolesRouter } from "./modules/roles/index.js";
 
-import { openApiRouter } from "./common/openapi/index.js";
 import { notFoundHandler } from "./middlewares/not-found.js";
 import { errorHandler } from "./common/errors/index.js";
 

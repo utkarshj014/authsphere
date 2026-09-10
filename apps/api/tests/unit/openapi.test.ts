@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
-import app from "../../src/app.js";
 import { getOpenApiDocument } from "../../src/common/openapi/index.js";
+import app from "../../src/app.js";
 import { healthRouter } from "../../src/modules/health/index.js";
 import { authRouter } from "../../src/modules/auth/index.js";
 import { sessionsRouter } from "../../src/modules/sessions/index.js";

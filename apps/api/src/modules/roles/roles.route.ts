@@ -3,7 +3,7 @@ import { auth } from "../../middlewares/auth.js";
 import { requireRole } from "../authorization/authorization.middleware.js";
 import { ROLES } from "@authsphere/shared";
 import { validate, ValidationTarget } from "../../middlewares/validate.js";
-import { rolesSchema } from "./roles.validation.js";
+import { rolesRequestSchema } from "./roles.validation.js";
 import { rolesController } from "./roles.controller.js";
 
 import {
@@ -17,8 +17,8 @@ router.put(
   "/:roleName/permissions",
   auth,
   rateLimiter(RATE_LIMIT_POLICIES.ROLE_UPDATE_PERMISSIONS),
-  validate(rolesSchema.updatePermissionsParams, ValidationTarget.PARAMS),
-  validate(rolesSchema.updatePermissionsBody, ValidationTarget.BODY),
+  validate(rolesRequestSchema.updatePermissionsParams, ValidationTarget.PARAMS),
+  validate(rolesRequestSchema.updatePermissionsBody, ValidationTarget.BODY),
   requireRole(ROLES.ADMIN),
   rolesController.updatePermissions,
 );

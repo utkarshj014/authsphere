@@ -7,24 +7,18 @@ import {
   messageResponse,
   errorResponse,
 } from "../../common/openapi/schemas.js";
-import { sessionsSchema } from "./sessions.validation.js";
+import {
+  sessionsRequestSchema,
+  sessionsResponseSchema,
+} from "./sessions.validation.js";
 
 // ─── Session Schemas ───────────────────────────────────────────────
 
 export const SessionItemSchema = registry.register(
   "SessionItem",
-  z
-    .object({
-      id: z.string(),
-      ipAddress: z.string().nullable(),
-      userAgent: z.string().nullable(),
-      createdAt: z.string(),
-      expiresAt: z.string(),
-      isCurrent: z.boolean(),
-    })
-    .openapi("SessionItem", {
-      description: "Active user session details",
-    }),
+  sessionsResponseSchema.sessionItem.openapi("SessionItem", {
+    description: "Active user session details",
+  }),
 );
 
 // ─── GET /sessions ─────────────────────────────────────────────────
@@ -54,7 +48,7 @@ registry.registerPath({
     "Revokes a specific session by ID. If the revoked session is the current one, auth cookies are cleared.",
   security: cookieSecurity,
   request: {
-    params: sessionsSchema.revokeSessionParams,
+    params: sessionsRequestSchema.revokeSessionParams,
   },
   responses: {
     200: messageResponse("Session revoked successfully"),

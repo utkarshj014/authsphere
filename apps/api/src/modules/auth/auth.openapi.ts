@@ -4,33 +4,27 @@ import {
   cookieSecurity,
   refreshCookieSecurity,
   MessageOnlyResponseSchema,
-  PaginationMetaSchema,
   standardErrors,
   authedErrors,
   jsonContent,
+  successEnvelope,
   successResponse,
   messageResponse,
   errorResponse,
   jsonBody,
 } from "../../common/openapi/schemas.js";
-import { authSchema } from "./auth.validation.js";
+import { authRequestSchema, authResponseSchema } from "./auth.validation.js";
 
 // ─── Reusable Auth Response Components ─────────────────────────────
 
 export const MfaRequiredResponseSchema = registry.register(
   "MfaRequiredResponse",
-  z
-    .object({
-      success: z.literal(true),
-      message: z.string(),
-      data: z.object({
-        mfaRequired: z.literal(true),
-        mfaToken: z.string(),
-      }),
-    })
-    .openapi("MfaRequiredResponse", {
+  successEnvelope(authResponseSchema.mfaRequired).openapi(
+    "MfaRequiredResponse",
+    {
       description: "MFA challenge verification required to complete flow",
-    }),
+    },
+  ),
 );
 
 export const LoginResponseSchema = registry.register(
@@ -45,34 +39,19 @@ export const LoginResponseSchema = registry.register(
 
 export const CurrentUserProfileSchema = registry.register(
   "CurrentUserProfile",
-  z
-    .object({
-      id: z.string(),
-      email: z.string(),
-      firstName: z.string().nullable(),
-      lastName: z.string().nullable(),
-      role: z.string(),
-      verifiedAt: z.string().nullable(),
-      createdAt: z.string(),
-    })
-    .openapi("CurrentUserProfile", {
-      description: "Current authenticated user profile data",
-    }),
+  authResponseSchema.currentUserProfile.openapi("CurrentUserProfile", {
+    description: "Current authenticated user profile data",
+  }),
 );
 
-export const SecurityEventItemSchema = registry.register(
-  "SecurityEventItem",
-  z
-    .object({
-      id: z.string(),
-      type: z.string(),
-      ipAddress: z.string().nullable(),
-      userAgent: z.string().nullable(),
-      createdAt: z.string(),
-    })
-    .openapi("SecurityEventItem", {
-      description: "Individual security audit log event entry",
-    }),
+export const PaginatedSecurityEventsResponseSchema = registry.register(
+  "PaginatedSecurityEvents",
+  authResponseSchema.paginatedSecurityEvents.openapi(
+    "PaginatedSecurityEvents",
+    {
+      description: "Paginated security events with metadata",
+    },
+  ),
 );
 
 const loginOrMfaResponse = (description: string) => ({
@@ -90,7 +69,7 @@ registry.registerPath({
   description:
     "Creates a new user with email and password. Sends a verification email.",
   request: {
-    body: jsonBody(authSchema.signup),
+    body: jsonBody(authRequestSchema.signup),
   },
   responses: {
     201: messageResponse("Account created — verification email sent"),
@@ -108,7 +87,7 @@ registry.registerPath({
   summary: "Verify email address",
   description: "Confirms the user's email using a verification token.",
   request: {
-    body: jsonBody(authSchema.verifyEmail),
+    body: jsonBody(authRequestSchema.verifyEmail),
   },
   responses: {
     200: messageResponse("Email verified successfully"),
@@ -126,7 +105,7 @@ registry.registerPath({
   description:
     "Resends a verification email if the account exists and is unverified.",
   request: {
-    body: jsonBody(authSchema.resendVerificationToken),
+    body: jsonBody(authRequestSchema.resendVerificationToken),
   },
   responses: {
     200: messageResponse("Verification email resent (if applicable)"),
@@ -144,7 +123,7 @@ registry.registerPath({
   description:
     "Authenticates a user. Sets HttpOnly auth cookies on success, or returns an MFA challenge if MFA is enabled.",
   request: {
-    body: jsonBody(authSchema.login),
+    body: jsonBody(authRequestSchema.login),
   },
   responses: {
     200: loginOrMfaResponse("Login successful (or MFA challenge returned)"),
@@ -229,7 +208,7 @@ registry.registerPath({
   summary: "Request password reset email",
   description: "Sends a password reset email if the account exists.",
   request: {
-    body: jsonBody(authSchema.forgotPassword),
+    body: jsonBody(authRequestSchema.forgotPassword),
   },
   responses: {
     200: messageResponse("Reset email sent (if account exists)"),
@@ -247,7 +226,7 @@ registry.registerPath({
   description:
     "Resets the user's password using a token from the password reset email. May require MFA verification.",
   request: {
-    body: jsonBody(authSchema.resetPassword),
+    body: jsonBody(authRequestSchema.resetPassword),
   },
   responses: {
     200: loginOrMfaResponse(
@@ -268,7 +247,7 @@ registry.registerPath({
     "Changes the authenticated user's password. Clears auth cookies on success. May require MFA verification.",
   security: cookieSecurity,
   request: {
-    body: jsonBody(authSchema.changePassword),
+    body: jsonBody(authRequestSchema.changePassword),
   },
   responses: {
     200: loginOrMfaResponse(
@@ -294,10 +273,7 @@ registry.registerPath({
   responses: {
     200: successResponse(
       "MFA setup data with secret and otpauthUri",
-      z.object({
-        secret: z.string(),
-        otpauthUri: z.string(),
-      }),
+      authResponseSchema.mfaSetup,
     ),
     ...authedErrors,
   },
@@ -314,14 +290,12 @@ registry.registerPath({
     "Verifies the TOTP code to enable MFA. Returns recovery codes that should be stored securely.",
   security: cookieSecurity,
   request: {
-    body: jsonBody(authSchema.mfaVerifySetup),
+    body: jsonBody(authRequestSchema.mfaVerifySetup),
   },
   responses: {
     200: successResponse(
       "MFA enabled — recovery codes returned",
-      z.object({
-        recoveryCodes: z.array(z.string()),
-      }),
+      authResponseSchema.mfaRecoveryCodes,
     ),
     ...authedErrors,
   },
@@ -337,17 +311,12 @@ registry.registerPath({
   description:
     "Completes login by verifying a TOTP code or recovery code. Sets auth cookies on success.",
   request: {
-    body: jsonBody(authSchema.mfaVerifyLogin),
+    body: jsonBody(authRequestSchema.mfaVerifyLogin),
   },
   responses: {
     200: successResponse(
       "Login completed — auth cookies set",
-      z
-        .object({
-          lowRecoveryCodesWarning: z.boolean(),
-          remainingRecoveryCodes: z.number().int(),
-        })
-        .nullable(),
+      authResponseSchema.mfaVerifyLogin,
     ),
     ...standardErrors,
   },
@@ -364,7 +333,7 @@ registry.registerPath({
     "Disables MFA for the authenticated user. All active sessions are revoked.",
   security: cookieSecurity,
   request: {
-    body: jsonBody(authSchema.mfaDisable),
+    body: jsonBody(authRequestSchema.mfaDisable),
   },
   responses: {
     200: messageResponse("MFA disabled — all sessions revoked"),
@@ -382,14 +351,12 @@ registry.registerPath({
   description: "Generates new recovery codes, invalidating the previous set.",
   security: cookieSecurity,
   request: {
-    body: jsonBody(authSchema.mfaRegenerateRecoveryCodes),
+    body: jsonBody(authRequestSchema.mfaRegenerateRecoveryCodes),
   },
   responses: {
     200: successResponse(
       "New recovery codes generated",
-      z.object({
-        recoveryCodes: z.array(z.string()),
-      }),
+      authResponseSchema.mfaRecoveryCodes,
     ),
     ...authedErrors,
   },
@@ -404,7 +371,7 @@ registry.registerPath({
   summary: "Send magic link email",
   description: "Sends a passwordless login link if the account exists.",
   request: {
-    body: jsonBody(authSchema.sendMagicLink),
+    body: jsonBody(authRequestSchema.sendMagicLink),
   },
   responses: {
     200: messageResponse("Magic link sent (if account exists)"),
@@ -422,7 +389,7 @@ registry.registerPath({
   description:
     "Authenticates a user via magic link token. Sets auth cookies on success, or returns MFA challenge.",
   request: {
-    body: jsonBody(authSchema.verifyMagicLink),
+    body: jsonBody(authRequestSchema.verifyMagicLink),
   },
   responses: {
     200: loginOrMfaResponse("Login successful (or MFA challenge returned)"),
@@ -441,15 +408,12 @@ registry.registerPath({
     "Returns a paginated list of security events (logins, logouts, password changes, etc.) for the authenticated user.",
   security: cookieSecurity,
   request: {
-    query: authSchema.securityEventsQuery,
+    query: authRequestSchema.securityEventsQuery,
   },
   responses: {
     200: successResponse(
       "Paginated security events",
-      z.object({
-        events: z.array(SecurityEventItemSchema),
-        pagination: PaginationMetaSchema,
-      }),
+      PaginatedSecurityEventsResponseSchema,
     ),
     ...authedErrors,
   },
@@ -479,10 +443,7 @@ registry.registerPath({
   description:
     "Handles the redirect from Google after OAuth consent. Creates or links an account and sets auth cookies.",
   request: {
-    query: z.object({
-      code: z.string(),
-      state: z.string(),
-    }),
+    query: authRequestSchema.oauthCallbackQuery,
   },
   responses: {
     200: loginOrMfaResponse(
@@ -518,10 +479,7 @@ registry.registerPath({
   description:
     "Handles the redirect from GitHub after OAuth consent. Creates or links an account and sets auth cookies.",
   request: {
-    query: z.object({
-      code: z.string(),
-      state: z.string(),
-    }),
+    query: authRequestSchema.oauthCallbackQuery,
   },
   responses: {
     200: loginOrMfaResponse(

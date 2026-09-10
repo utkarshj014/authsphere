@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { authSchema } from "../../src/modules/auth/auth.validation.js";
-import { usersSchema } from "../../src/modules/users/users.validation.js";
+import {
+  authSchema,
+  authResponseSchema,
+} from "../../src/modules/auth/auth.validation.js";
+import {
+  usersSchema,
+  usersResponseSchema,
+} from "../../src/modules/users/users.validation.js";
 import { rolesSchema } from "../../src/modules/roles/roles.validation.js";
 import { parseDurationToMs } from "../../src/common/utils/time.js";
 
@@ -105,6 +111,41 @@ describe("Validation Schemas & Utilities Unit Tests", () => {
         authSchema.securityEventsQuery.safeParse({ page: 0 }).success,
       ).toBe(false);
     });
+
+    it("validates oauthCallbackQuery payload", () => {
+      expect(
+        authSchema.oauthCallbackQuery.safeParse({
+          code: "auth-code-123",
+          state: "state-token-456",
+        }).success,
+      ).toBe(true);
+
+      expect(
+        authSchema.oauthCallbackQuery.safeParse({
+          code: "",
+          state: "state-token-456",
+        }).success,
+      ).toBe(false);
+    });
+
+    it("validates mfaVerifyLogin response shape", () => {
+      expect(authResponseSchema.mfaVerifyLogin.safeParse(null).success).toBe(
+        true,
+      );
+
+      expect(
+        authResponseSchema.mfaVerifyLogin.safeParse({
+          lowRecoveryCodesWarning: true,
+          remainingRecoveryCodes: 2,
+        }).success,
+      ).toBe(true);
+
+      expect(
+        authResponseSchema.mfaVerifyLogin.safeParse({
+          lowRecoveryCodesWarning: "invalid",
+        }).success,
+      ).toBe(false);
+    });
   });
 
   describe("Users & Roles Validation Schemas", () => {
@@ -123,14 +164,42 @@ describe("Validation Schemas & Utilities Unit Tests", () => {
       ).toBe(false);
     });
 
+    it("validates usersResponseSchema.userProfile strict roles", () => {
+      expect(
+        usersResponseSchema.userProfile.safeParse({
+          id: "018f4a7b-3b32-7264-b0cf-5b1234567890",
+          email: "user@example.com",
+          firstName: "John",
+          lastName: "Doe",
+          role: "USER",
+          isEmailVerified: true,
+          createdAt: new Date(),
+        }).success,
+      ).toBe(true);
+
+      expect(
+        usersResponseSchema.userProfile.safeParse({
+          id: "018f4a7b-3b32-7264-b0cf-5b1234567890",
+          email: "user@example.com",
+          firstName: null,
+          lastName: null,
+          role: "UNKNOWN_ROLE",
+          isEmailVerified: true,
+          createdAt: new Date(),
+        }).success,
+      ).toBe(false);
+    });
+
     it("validates and deduplicates role permissions update body", () => {
       expect(
-        rolesSchema.updatePermissionsParams.safeParse({ roleName: "USER" })
-          .success,
+        rolesSchema.updatePermissionsParams.safeParse({
+          roleName: "USER",
+        }).success,
       ).toBe(true);
       expect(
-        rolesSchema.updatePermissionsParams.safeParse({ roleName: "INVALID" })
-          .success,
+        rolesSchema.updatePermissionsParams.safeParse({
+          roleName: "INVALID",
+        }).success,
       ).toBe(false);
 
       const result = rolesSchema.updatePermissionsBody.safeParse({

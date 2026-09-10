@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { registry } from "../../common/openapi/registry.js";
 import {
   cookieSecurity,
@@ -7,20 +6,15 @@ import {
   errorResponse,
   jsonBody,
 } from "../../common/openapi/schemas.js";
-import { rolesSchema } from "./roles.validation.js";
+import { rolesRequestSchema, rolesResponseSchema } from "./roles.validation.js";
 
 // ─── Role Schemas ──────────────────────────────────────────────────
 
 export const RolePermissionsSchema = registry.register(
   "RolePermissions",
-  z
-    .object({
-      role: z.string(),
-      permissions: z.array(z.string()),
-    })
-    .openapi("RolePermissions", {
-      description: "Role name and assigned permissions",
-    }),
+  rolesResponseSchema.rolePermissions.openapi("RolePermissions", {
+    description: "Role name and assigned permissions",
+  }),
 );
 
 // ─── PUT /roles/{roleName}/permissions ─────────────────────────────
@@ -34,8 +28,8 @@ registry.registerPath({
     "Sets the permissions for a role. Requires admin role. Admin role permissions cannot be updated. Duplicate permissions are deduplicated.",
   security: cookieSecurity,
   request: {
-    params: rolesSchema.updatePermissionsParams,
-    body: jsonBody(rolesSchema.updatePermissionsBody),
+    params: rolesRequestSchema.updatePermissionsParams,
+    body: jsonBody(rolesRequestSchema.updatePermissionsBody),
   },
   responses: {
     200: successResponse(

@@ -2,12 +2,12 @@ import { sessionsRepository } from "./sessions.repository.js";
 import { recordSecurityEvent } from "../auth/index.js";
 import { AppError, ForbiddenError } from "../../common/errors/index.js";
 import { SECURITY_EVENT_TYPES } from "@authsphere/shared";
-import type { SessionResponseDto } from "./sessions.types.js";
+import type { SessionItemResponse } from "./sessions.validation.js";
 
 const getActiveSessions = async (
   userId: string,
   currentSessionId: string,
-): Promise<SessionResponseDto[]> => {
+): Promise<SessionItemResponse[]> => {
   const sessions = await sessionsRepository.findActiveSessionsByUserId(userId);
 
   return sessions.map((session) => ({

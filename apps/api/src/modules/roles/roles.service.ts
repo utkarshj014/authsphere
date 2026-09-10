@@ -1,13 +1,16 @@
 import { rolesRepository } from "./roles.repository.js";
 import { authorizationService } from "../authorization/index.js";
 import { ROLES, type RoleName } from "@authsphere/shared";
-import type { UpdatePermissionsBody } from "./roles.validation.js";
+import type {
+  UpdatePermissionsBody,
+  RolePermissionsResponse,
+} from "./roles.validation.js";
 import { ForbiddenError } from "../../common/errors/forbidden-error.js";
 
 const updateRolePermissions = async (
   roleName: RoleName,
   input: UpdatePermissionsBody,
-) => {
+): Promise<RolePermissionsResponse> => {
   if (roleName === ROLES.ADMIN) {
     throw new ForbiddenError("Cannot update permissions for the admin role.");
   }

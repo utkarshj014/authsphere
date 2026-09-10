@@ -7,6 +7,7 @@ import {
 import swaggerUi from "swagger-ui-express";
 import { OpenApiGeneratorV31 } from "@asteasolutions/zod-to-openapi";
 import { registry } from "./registry.js";
+import { env } from "../../config/env.js";
 
 // Import aggregator to ensure all schemas and routes are registered
 import "./routes.js";
@@ -28,7 +29,7 @@ export function clearOpenApiCache(): void {
  * reflect schema changes immediately without requiring a server restart.
  */
 export function getOpenApiDocument(): OpenAPIObject {
-  const isDev = process.env.NODE_ENV === "development";
+  const isDev = env.NODE_ENV === "development";
   if (cachedDocument && !isDev) {
     return cachedDocument;
   }
