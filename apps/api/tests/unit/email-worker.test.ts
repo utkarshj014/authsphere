@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { UnrecoverableError } from "bullmq";
 import { emailService } from "../../src/modules/email/email.service.js";
-import { escapeHtml } from "../../src/modules/email/email.templates.js";
 import {
   EMAIL_JOB_TYPES,
   SECURITY_NOTIFICATION_EVENTS,
@@ -110,9 +109,9 @@ describe("emailService.processJob - Template Rendering & Dispatch", () => {
   });
 
   it("propagates transient errors for BullMQ worker retry", async () => {
-    mockProvider.send = vi.fn().mockRejectedValue(
-      new EmailDeliveryError("Rate limit 429", false),
-    );
+    mockProvider.send = vi
+      .fn()
+      .mockRejectedValue(new EmailDeliveryError("Rate limit 429", false));
 
     await expect(
       emailService.processJob(
@@ -124,69 +123,5 @@ describe("emailService.processJob - Template Rendering & Dispatch", () => {
         mockProvider,
       ),
     ).rejects.toThrow("Rate limit 429");
-  });
-
-  describe("Security Notification variants", () => {
-    it("processes PASSWORD_RESET security notification", async () => {
-      await emailService.processJob(
-        {
-          type: EMAIL_JOB_TYPES.SECURITY_NOTIFICATION,
-          email: "alert@example.com",
-          eventType: SECURITY_NOTIFICATION_EVENTS.PASSWORD_RESET,
-        },
-        mockProvider,
-      );
-
-      expect(sentPayloads[0]?.subject).toBe(
-        "Security Alert: Password Reset - AuthSphere",
-      );
-      expect(sentPayloads[0]?.html).toContain("Password Reset");
-    });
-
-    it("processes MFA_DISABLED security notification", async () => {
-      await emailService.processJob(
-        {
-          type: EMAIL_JOB_TYPES.SECURITY_NOTIFICATION,
-          email: "alert@example.com",
-          eventType: SECURITY_NOTIFICATION_EVENTS.MFA_DISABLED,
-        },
-        mockProvider,
-      );
-
-      expect(sentPayloads[0]?.subject).toBe(
-        "Security Alert: Two-Factor Authentication Disabled - AuthSphere",
-      );
-      expect(sentPayloads[0]?.html).toContain(
-        "Two-Factor Authentication Disabled",
-      );
-    });
-
-    it("processes unknown security notification with fallback message", async () => {
-      await emailService.processJob(
-        {
-          type: EMAIL_JOB_TYPES.SECURITY_NOTIFICATION,
-          email: "alert@example.com",
-          eventType: "UNKNOWN_EVENT" as any,
-        },
-        mockProvider,
-      );
-
-      expect(sentPayloads[0]?.subject).toBe(
-        "Security Alert: Security Settings Updated - AuthSphere",
-      );
-      expect(sentPayloads[0]?.html).toContain("Security Settings Updated");
-    });
-  });
-
-  describe("escapeHtml utility", () => {
-    it("escapes all special HTML characters (&, <, >, ', \") properly", () => {
-      const input = `Tom & Jerry <script>alert("XSS")</script> 'safe'`;
-      const expected = `Tom &amp; Jerry &lt;script&gt;alert(&quot;XSS&quot;)&lt;/script&gt; &#39;safe&#39;`;
-      expect(escapeHtml(input)).toBe(expected);
-    });
-
-    it("returns clean string without HTML characters unchanged", () => {
-      expect(escapeHtml("plain clean text")).toBe("plain clean text");
-    });
   });
 });

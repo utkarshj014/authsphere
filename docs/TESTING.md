@@ -32,7 +32,7 @@ AuthSphere's testing suite is engineered around **high-signal verification, modu
 
 ```text
 Suite Status: 18 test files (100% passing)
-Total Tests:  177 passed (177 tests total)
+Total Tests:  171 passed (171 tests total)
 Architecture: Streamlined, DRY, Modular (7 Unit, 8 Integration, 3 E2E)
 Framework:    Vitest 4.x + Supertest 7.x + V8 Coverage
 Runtime:      Node.js >22 ESM
@@ -46,13 +46,13 @@ The suite is structured into three practical, consolidated layers, establishing 
 
 ```mermaid
 graph TD
-    subgraph Test Pyramid
+    subgraph TP ["Test Pyramid"]
         E2E["Layer 3: E2E User Journeys (3 files, 6 tests)"]
         INT["Layer 2: Critical Integration Tests (8 files, 116 tests)"]
-        UNIT["Layer 1: Focused Unit Tests (7 files, 55 tests)"]
+        UNIT["Layer 1: Focused Unit Tests (7 files, 49 tests)"]
     end
 
-    subgraph Hermetic Test Environment
+    subgraph HTE ["Hermetic Test Environment"]
         E2E & INT --> TestDB[("PostgreSQL: authsphere_test")]
         E2E & INT --> TestRedis[("Redis: DB Index 1")]
         E2E & INT --> EmailSpy["In-Memory Email Spy Outbox"]
@@ -64,19 +64,19 @@ graph TD
     style UNIT fill:#1c4532,stroke:#276749,stroke-width:2px,color:#fff
 ```
 
-### Layer 1: Focused Unit Tests (7 Files, 55 Tests — Pure In-Memory)
+### Layer 1: Focused Unit Tests (7 Files, 49 Tests — Pure In-Memory)
 
 Fast, pure-function tests executing in microseconds without external I/O, database, or Redis dependencies:
 
-| Test File                         | Verification Scope                                 | Invariants Verified                                                                                                                                       |
-| :-------------------------------- | :------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tests/unit/crypto.test.ts`       | Cryptography, JWT, Password, MFA & Recovery Tokens | Argon2id OWASP compliance, symmetric HS256 JWT sign/verify, AES-256-GCM symmetric encryption, 32-byte hex entropy `[ADR-013, ADR-014, ADR-031, ADR-040]`. |
-| `tests/unit/security.test.ts`     | RFC 6238 TOTP & Request ID Middleware              | Base32 secret generation, HMAC-SHA1 6-digit window validation, UUIDv7 request ID tracking, and header sanitization `[ADR-043, ADR-045]`.                  |
-| `tests/unit/validation.test.ts`   | Zod Boundary Schemas & Duration Parsers            | Email normalization, password complexity, UUIDv7 params, pagination offsets, and human-readable time conversion `[ADR-017, ADR-026, ADR-038]`.            |
-| `tests/unit/openapi.test.ts`      | OpenAPI 3.1 Spec & Express Route Parity            | Document generation, cookie security schemes, and 1:1 bidirectional Express router parity invariant `[ADR-071]`.                                          |
-| `tests/unit/email-worker.test.ts` | Email Worker Job Processing & Provider Delegation | HTML template rendering across all email types, provider delegation, error propagation, and unrecoverable failure detection `[ADR-072, ADR-073, ADR-075]`. |
-| `tests/unit/email-queue.test.ts`  | BullMQ Queue Producer Operations                   | Type-safe enqueue helpers, payload contract validation, and correct job type routing `[ADR-072]`.                                                         |
-| `tests/unit/resend-provider.test.ts` | Resend Provider Adapter & Error Normalization    | Message ID dispatch, permanent error classification (validation/domain), transient error classification (rate limits/server), and transport exception bubbling `[ADR-073]`. |
+| Test File                            | Verification Scope                                 | Invariants Verified                                                                                                                                                         |
+| :----------------------------------- | :------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/unit/crypto.test.ts`          | Cryptography, JWT, Password, MFA & Recovery Tokens | Argon2id OWASP compliance, symmetric HS256 JWT sign/verify, AES-256-GCM symmetric encryption, 32-byte hex entropy `[ADR-013, ADR-014, ADR-031, ADR-040]`.                   |
+| `tests/unit/security.test.ts`        | RFC 6238 TOTP & Request ID Middleware              | Base32 secret generation, HMAC-SHA1 6-digit window validation, UUIDv7 request ID tracking, and header sanitization `[ADR-043, ADR-045]`.                                    |
+| `tests/unit/validation.test.ts`      | Zod Boundary Schemas & Duration Parsers            | Email normalization, password complexity, UUIDv7 params, pagination offsets, and human-readable time conversion `[ADR-017, ADR-026, ADR-038]`.                              |
+| `tests/unit/openapi.test.ts`         | OpenAPI 3.1 Spec & Express Route Parity            | Document generation, cookie security schemes, and 1:1 bidirectional Express router parity invariant `[ADR-071]`.                                                            |
+| `tests/unit/email-worker.test.ts`    | Email Worker Job Processing & Provider Delegation  | HTML template rendering across all email types, provider delegation, error propagation, and unrecoverable failure detection `[ADR-072, ADR-073, ADR-075]`.                  |
+| `tests/unit/email-queue.test.ts`     | BullMQ Queue Producer Operations                   | Type-safe enqueue helpers, payload contract validation, and correct job type routing `[ADR-072]`.                                                                           |
+| `tests/unit/resend-provider.test.ts` | Resend Provider Adapter & Error Normalization      | Message ID dispatch, permanent error classification (validation/domain), transient error classification (rate limits/server), and transport exception bubbling `[ADR-073]`. |
 
 ### Layer 2: Critical Integration Tests (8 Files, 116 Tests)
 
@@ -198,13 +198,13 @@ const resetToken = getLastSentForgotPasswordEmail();
 
 All reusable testing utilities reside under `apps/api/tests/helpers/` and are re-exported via a unified barrel export (`tests/helpers/index.ts`):
 
-| Helper               | File                   | Purpose                                                                                                                                                                                                                |
-| :------------------- | :--------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------     |
-| **Barrel Export**    | `helpers/index.ts`     | Unified, modular export point for all test helpers, factories, singletons, and lifecycle resets.                                                                                                                       |
-| **Database & Cache** | `helpers/db.ts`        | Exports `prisma` client, `redis` client, `cleanDatabase()`, `flushRedis()`, `cleanTestState()`, and `ensureBaselineSeed()` auto-seeding guard.                                                                         |
+| Helper               | File                   | Purpose                                                                                                                                                                                                                      |
+| :------------------- | :--------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Barrel Export**    | `helpers/index.ts`     | Unified, modular export point for all test helpers, factories, singletons, and lifecycle resets.                                                                                                                             |
+| **Database & Cache** | `helpers/db.ts`        | Exports `prisma` client, `redis` client, `cleanDatabase()`, `flushRedis()`, `cleanTestState()`, and `ensureBaselineSeed()` auto-seeding guard.                                                                               |
 | **Email Outbox**     | `helpers/email.ts`     | Captures sent emails into an in-memory outbox (`emailQueueMocks`, `getLastSentVerificationEmail`, `getLastSentForgotPasswordEmail`, `getLastSentMagicLinkEmail`, `getLastSentSecurityNotificationEmail`, `resetEmailMocks`). |
-| **Entity Factories** | `helpers/factories.ts` | Generates persisted test entities with sensible defaults and cached Argon2id hashing (`createUser`, `createVerifiedUser`, `createAdmin`, `createMfaUser`, `createOAuthUser`, `createSession`, `createExpiredSession`). |
-| **Auth & App**       | `helpers/auth.ts`      | Express test app singleton (`getTestApp`), cookie parsing (`getAuthCookies`), header formatting (`formatCookieHeader`), and automated test login (`authenticate`, `login`).                                            |
+| **Entity Factories** | `helpers/factories.ts` | Generates persisted test entities with sensible defaults and cached Argon2id hashing (`createUser`, `createVerifiedUser`, `createAdmin`, `createMfaUser`, `createOAuthUser`, `createSession`, `createExpiredSession`).       |
+| **Auth & App**       | `helpers/auth.ts`      | Express test app singleton (`getTestApp`), cookie parsing (`getAuthCookies`), header formatting (`formatCookieHeader`), and automated test login (`authenticate`, `login`).                                                  |
 
 ### Entity Factory Usage Example
 

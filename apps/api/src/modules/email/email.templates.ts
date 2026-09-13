@@ -10,7 +10,7 @@ const HTML_ESCAPE_MAP: Record<string, string> = {
 };
 
 export const escapeHtml = (str: string): string =>
-  str.replace(/[&<>'"]/g, (char) => HTML_ESCAPE_MAP[char]!);
+  str.replace(/[&<>'"]/g, (char) => HTML_ESCAPE_MAP[char] ?? char);
 
 const baseTemplate = (title: string, bodyContent: string): string => `
 <!DOCTYPE html>

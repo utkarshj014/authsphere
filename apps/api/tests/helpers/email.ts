@@ -23,7 +23,6 @@ export const emailQueueMocks = {
   enqueueSecurityNotificationEmail: vi.fn(
     async (email: string, eventType: string) => undefined,
   ),
-  enqueueEmailJob: vi.fn(async () => undefined),
 };
 
 export function resetEmailMocks() {
@@ -31,7 +30,6 @@ export function resetEmailMocks() {
   emailQueueMocks.enqueuePasswordResetEmail.mockClear();
   emailQueueMocks.enqueueMagicLinkEmail.mockClear();
   emailQueueMocks.enqueueSecurityNotificationEmail.mockClear();
-  emailQueueMocks.enqueueEmailJob.mockClear();
 }
 
 export function getLastSentVerificationEmail(): SentEmail | undefined {

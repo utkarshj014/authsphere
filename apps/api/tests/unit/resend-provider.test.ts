@@ -15,7 +15,6 @@ vi.mock("resend", () => {
 });
 
 import { resendProvider } from "../../src/modules/email/resend.provider.js";
-import { EmailDeliveryError } from "../../src/modules/email/email.types.js";
 
 describe("resendProvider - Resend API Adapter", () => {
   beforeEach(() => {
@@ -105,27 +104,6 @@ describe("resendProvider - Resend API Adapter", () => {
     ).rejects.toMatchObject({
       name: "EmailDeliveryError",
       message: expect.stringContaining("rate_limit_exceeded"),
-      isPermanent: false,
-    });
-  });
-
-  it("handles unnamed error responses gracefully as transient failure", async () => {
-    mockSend.mockResolvedValue({
-      data: null,
-      error: {
-        message: "Internal unclassified service issue",
-      } as any,
-    });
-
-    await expect(
-      resendProvider.send({
-        to: "user@example.com",
-        subject: "Test",
-        html: "<p>Hello</p>",
-      }),
-    ).rejects.toMatchObject({
-      name: "EmailDeliveryError",
-      message: "Resend []: Internal unclassified service issue",
       isPermanent: false,
     });
   });

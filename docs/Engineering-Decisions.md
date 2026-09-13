@@ -119,7 +119,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-011: Operational Health Monitoring Pattern](#adr-011--operational-health-monitoring-pattern)
 - [ADR-069: Multi-Phase Security Audit Logging, Standardized Helper Encapsulation, and Indexed User History Retrieval](#adr-069--multi-phase-security-audit-logging-standardized-helper-encapsulation-and-indexed-user-history-retrieval)
 - [ADR-072: Asynchronous Email Delivery via BullMQ Task Queue](#adr-072--asynchronous-email-delivery-via-bullmq-task-queue)
-- [ADR-075: Email Worker Retry Policy and Dead-Letter Retention](#adr-075--email-worker-retry-policy-and-dead-letter-retention)
+- [ADR-075: Email Worker Retry Policy and Failed-Job Retention](#adr-075--email-worker-retry-policy-and-failed-job-retention)
 
 </details>
 
@@ -211,7 +211,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-072: Asynchronous Email Delivery via BullMQ Task Queue](#adr-072--asynchronous-email-delivery-via-bullmq-task-queue)
 - [ADR-073: Provider-Agnostic Email Abstraction with Resend Implementation](#adr-073--provider-agnostic-email-abstraction-with-resend-implementation)
 - [ADR-074: Unified Redis Architecture (ioredis Migration)](#adr-074--unified-redis-architecture-ioredis-migration)
-- [ADR-075: Email Worker Retry Policy and Dead-Letter Retention](#adr-075--email-worker-retry-policy-and-dead-letter-retention)
+- [ADR-075: Email Worker Retry Policy and Failed-Job Retention](#adr-075--email-worker-retry-policy-and-failed-job-retention)
 
 </details>
 
@@ -2123,9 +2123,9 @@ The system requires moving email dispatch out of the synchronous request-respons
 
 Decouple email delivery from HTTP requests using a Redis-backed BullMQ task queue (`authsphere-email`):
 
-1. **Transactional Invariant:** All database state mutations (user record creation, verification tokens, password reset tokens, security audit logs) must commit successfully before enqueuing an email job.
-2. **At-Most-Once Queue Hand-off:** The HTTP handler awaits the fast local Redis enqueue operation (`emailQueue.add()`) before returning an HTTP response. Queue publication is not transactionally bound to PostgreSQL (no two-phase commit); failures during queue enqueue log errors without rolling back committed database credentials.
-3. **Dedicated Queue Helpers:** Encapsulate queue publication within typed helpers (`enqueueVerificationEmail`, `enqueuePasswordResetEmail`, `enqueueMagicLinkEmail`, `enqueueSecurityNotificationEmail`) carrying minimal data payloads (`{ email, token }` or `{ email, eventType }`) rather than whole entity models.
+1. **Post-Commit Best-Effort Publication:** All database state mutations (user record creation, verification tokens, password reset tokens, security audit logs) must commit successfully before enqueuing an email job. The system intentionally accepts an asynchronous failure window between PostgreSQL commit and Redis enqueue: if the server process terminates abruptly after commit but before enqueue, the email remains unsent while database state remains authoritative. This trade-off is accepted to avoid the architectural overhead of a transactional outbox table and polling daemon.
+2. **Dedicated Queue Helpers:** Encapsulate queue publication within typed helpers (`enqueueVerificationEmail`, `enqueuePasswordResetEmail`, `enqueueMagicLinkEmail`, `enqueueSecurityNotificationEmail`) carrying minimal data payloads (`{ email, token }` or `{ email, eventType }`) rather than whole entity models.
+3. **Security Transit Perimeter:** Background queue payloads carry sensitive credentials (raw email verification tokens, password-reset tokens, and magic-link tokens). Redis is therefore classified as a sensitive data perimeter requiring TLS in transit, authenticated access, and network isolation from untrusted environments.
 
 ```typescript
 export const enqueueVerificationEmail = (email: string, token: string) =>
@@ -2138,7 +2138,7 @@ export const enqueueVerificationEmail = (email: string, token: string) =>
 
 ### Rationale
 
-- **Sub-100ms Request Latency:** Eliminates 300–1500ms SMTP/REST delivery latency from user-facing authentication flows, ensuring rapid client response times.
+- **Structural Latency Decoupling:** Eliminates variable third-party SMTP/REST network roundtrips from user-facing authentication request lifecycles, maintaining rapid client response times.
 - **Fault Isolation:** External email service downtime or transient rate limits do not disrupt primary registration, password reset, or magic link database mutations.
 - **Minimal Payload Contracts:** Queued jobs contain only primitive identifiers and tokens rather than complex database entity objects, preventing serialization churn and stale state discrepancies.
 
@@ -2218,7 +2218,7 @@ export const redis = new Redis(env.REDIS_URL, {
 
 ---
 
-## ADR-075 — Email Worker Retry Policy and Dead-Letter Retention
+## ADR-075 — Email Worker Retry Policy and Failed-Job Retention
 
 **Status:** Accepted
 
@@ -2226,16 +2226,17 @@ export const redis = new Redis(env.REDIS_URL, {
 
 Asynchronous background jobs interacting with external networks inevitably encounter transient failures such as network interruptions, third-party 5xx errors, and rate limit throttling. Conversely, executing retries on permanent failures (such as malformed email addresses, unsupported job types, or non-existent recipient domains) wastes queue capacity and CPU cycles while risking upstream provider penalties.
 
-The task processing subsystem requires a resilient retry policy paired with dead-letter job retention for operational inspection.
+The task processing subsystem requires a resilient retry policy paired with failed-job retention storage for operational inspection.
 
 ### Decision
 
-Implement an exponential backoff retry policy in BullMQ, combined with permanent-failure fast-failing:
+Implement an exponential backoff retry policy in BullMQ, combined with permanent-failure fast-failing and at-least-once delivery guarantees:
 
-1. **Exponential Backoff:** Configure default job options with 5 retry attempts and exponential backoff (`delay: 2000`, doubling to 2s, 4s, 8s, 16s, 32s).
+1. **Exponential Backoff:** Configure default job options with 5 total delivery attempts (1 initial attempt + up to 4 backoff retries with delays at 2s, 4s, 8s, 16s via `delay: 2000`).
 2. **Permanent Failure Fast-Path:** In the worker processor, when `EmailDeliveryError.isPermanent` or corrupted/unsupported job types are encountered, throw BullMQ's built-in `UnrecoverableError`. This immediately transitions the job to the failed state, bypassing remaining retry attempts.
-3. **Dead-Letter Retention:** Configure `removeOnComplete: true` to prune successful executions and `removeOnFail: { count: 500 }` to retain the last 500 failed jobs with stack traces and payload metadata in Redis for operational debugging.
+3. **Failed-Job Retention Storage:** Configure `removeOnComplete: true` to prune successful executions and `removeOnFail: { count: 500 }` to retain the last 500 failed jobs with stack traces and payload metadata in BullMQ's internal failed-job set for operational debugging.
 4. **Graceful Worker Shutdown with Watchdog:** Register `SIGINT`, `SIGTERM`, and unhandled exception listeners that call `await worker.close()` with an unreferenced 10-second watchdog timer (`timer.unref()`), allowing active jobs to finish processing while guaranteeing shutdown completion.
+5. **At-Least-Once Delivery Reality:** Processing adheres to at-least-once delivery semantics; if a worker terminates after provider acceptance but before BullMQ marks the job complete, the job may be re-dispatched upon recovery. Downstream email recipients must tolerate occasional duplicate messages during abrupt worker crashes.
 
 ```typescript
 export const emailWorker = new Worker<EmailJobData>(
@@ -2259,5 +2260,5 @@ export const emailWorker = new Worker<EmailJobData>(
 
 - **Resilience to Transient Outages:** Exponential backoff gracefully absorbs short-lived network glitches and third-party rate limiting without losing queued emails.
 - **Resource Conservation:** Immediate failure classification prevents futile retries on unrecoverable validation errors.
-- **Zero In-Flight Job Corruption:** Graceful worker shutdown permits in-flight email dispatches to complete, preventing duplicate deliveries on process termination.
+- **Zero In-Flight Job Corruption:** Graceful worker shutdown permits in-flight email dispatches to complete, minimizing duplicate deliveries on process termination.
 - **Production Auditability:** Retaining failed jobs in Redis allows operators to inspect payloads, failure reasons, and timestamps via standard queue inspection tools.

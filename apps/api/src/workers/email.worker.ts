@@ -19,7 +19,7 @@ export const emailWorker = new Worker<EmailJobData>(
       await emailService.processJob(data, resendProvider);
       logger.info(
         { jobId: id, jobType: data.type, email: data.email },
-        "Email delivered successfully",
+        "Email submission accepted by provider",
       );
     } catch (err: unknown) {
       if (err instanceof UnrecoverableError) throw err;
@@ -43,7 +43,7 @@ export const emailWorker = new Worker<EmailJobData>(
       } else {
         logger.error(
           { jobId: id, attemptsMade: currentAttempt, maxAttempts, err },
-          "Email delivery exhausted all retry attempts; moved to dead-letter",
+          "Email delivery exhausted all attempts; retained in failed-job storage",
         );
       }
       throw err;

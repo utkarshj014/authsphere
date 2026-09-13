@@ -16,7 +16,7 @@ export const emailQueue = new Queue<EmailJobData>(EMAIL_QUEUE_NAME, {
     attempts: 5,
     backoff: {
       type: "exponential",
-      delay: 2000, // 2s, 4s, 8s, 16s, 32s
+      delay: 2000, // Up to 4 backoff retries: 2s, 4s, 8s, 16s
     },
     removeOnComplete: true,
     removeOnFail: {

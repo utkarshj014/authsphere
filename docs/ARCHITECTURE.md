@@ -511,7 +511,8 @@ sequenceDiagram
 - **Structured Logging**: Pino emits structured JSON logs with correlated `X-Request-Id` headers across request lifecycles `[ADR-009]`.
 - **Health Checks**: `/health` actively verifies database and Redis connectivity, returning `200 OK` or `503 Service Unavailable` for container orchestrator probes `[ADR-011]`.
 - **OpenAPI 3.1 & Swagger UI**: Code-first API specification derived from active Zod validation schemas via `@asteasolutions/zod-to-openapi`, served dynamically at `GET /openapi.json` and rendered at `GET /docs` via Swagger UI. Documentation declarations are isolated from request handlers in co-located `*.openapi.ts` files, with Express ↔ OpenAPI route synchronization enforced via automated parity tests. Document generation is memoized in production to avoid repeated schema traversal on subsequent requests while bypassing caching in development for live hot-reload feedback `[ADR-071]`.
-- **Asynchronous Email Task Queue**: Outbound email delivery is decoupled from the synchronous HTTP lifecycle into a BullMQ queue backed by Redis with exponential backoff retries and fast-failing unrecoverable error detection `[ADR-072, ADR-075]`.
+- **Asynchronous Email Task Queue**: Outbound email delivery is decoupled from the synchronous HTTP request-response cycle into a BullMQ queue backed by Redis with exponential backoff retries (up to 4 retries across 5 total attempts) and fast-failing unrecoverable error detection. Jobs are dispatched post-commit with best-effort publication, intentionally accepting an asynchronous failure window in exchange for operational simplicity, with failed jobs retained in Redis for inspection `[ADR-072, ADR-075]`.
+- **Redis Security Transit Perimeter**: Sensitive raw authentication credentials (verification tokens, password-reset tokens, and magic links) traverse Redis in background queue payloads. Consequently, Redis is classified as a sensitive data perimeter requiring TLS in transit, authenticated access, and network isolation `[ADR-072]`.
 - **Provider-Agnostic Email System**: The application interacts exclusively with the `EmailProvider` contract; `resendProvider` handles API communication, enabling clean swapping of providers and mock injection for testing without network side-effects `[ADR-073]`.
 - **Unified Redis Client**: All Redis operations (atomic pipeline rate limiting, OAuth state, role caching, and BullMQ queues) are consolidated onto `ioredis`, eliminating duplicate client libraries and connection divergence `[ADR-074]`.
 
@@ -523,13 +524,13 @@ AuthSphere enforces a hermetic, 3-layer test pyramid combining **Vitest** and **
 
 ```mermaid
 graph TD
-    subgraph Test Pyramid
+    subgraph TP ["Test Pyramid"]
         E2E["Layer 3: E2E User Journeys (3 files, 6 tests)"]
         INT["Layer 2: Critical Integration Tests (8 files, 116 tests)"]
-        UNIT["Layer 1: Focused Unit Tests (7 files, 55 tests)"]
+        UNIT["Layer 1: Focused Unit Tests (7 files, 49 tests)"]
     end
 
-    subgraph Hermetic Isolation
+    subgraph HI ["Hermetic Isolation"]
         E2E & INT --> TestDB[("Dedicated PostgreSQL: authsphere_test")]
         E2E & INT --> TestRedis[("Dedicated Redis: DB Index 1")]
         E2E & INT --> EmailSpy["In-Memory Email Spy Outbox"]
