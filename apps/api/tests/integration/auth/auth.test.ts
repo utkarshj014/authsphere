@@ -7,10 +7,11 @@ import {
   createMfaUser,
   createOAuthUser,
   createSession,
-  getEmailMocks,
+  emailQueueMocks,
   getLastSentVerificationEmail,
   getLastSentMagicLinkEmail,
   getLastSentForgotPasswordEmail,
+  getLastSentSecurityNotificationEmail,
 } from "../../helpers/index.js";
 import {
   UnauthorizedError,
@@ -83,6 +84,41 @@ describe("Auth Service — Core Integration Suite", () => {
       expect(user!.isEmailVerified).toBe(true);
       expect(user!.verifiedAt).toBeDefined();
       expect(user!.emailVerificationToken).toBeNull();
+    });
+
+    it("verifyEmail with invalid or expired token throws 400", async () => {
+      await expect(
+        authService.verifyEmail({ token: "invalid-token-value" }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        message: "Invalid or expired verification token",
+      });
+    });
+
+    it("resendVerificationToken issues new token and sends email for unverified user", async () => {
+      const email = `resend-${Date.now()}@authsphere.test`;
+      await authService.signup({ email, password: "Password123!" });
+
+      const firstEmail = getLastSentVerificationEmail();
+      expect(firstEmail).toBeDefined();
+
+      await authService.resendVerificationToken({ email });
+
+      const resentEmail = getLastSentVerificationEmail();
+      expect(resentEmail).toBeDefined();
+      expect(resentEmail!.email).toBe(email);
+      expect(resentEmail!.token).not.toBe(firstEmail!.token);
+    });
+
+    it("resendVerificationToken returns silently for nonexistent or verified email (enumeration safe)", async () => {
+      await authService.resendVerificationToken({
+        email: "ghost@authsphere.test",
+      });
+      expect(emailQueueMocks.enqueueVerificationEmail).not.toHaveBeenCalled();
+
+      const { user } = await createVerifiedUser();
+      await authService.resendVerificationToken({ email: user.email });
+      expect(emailQueueMocks.enqueueVerificationEmail).not.toHaveBeenCalled();
     });
   });
 
@@ -235,6 +271,30 @@ describe("Auth Service — Core Integration Suite", () => {
     });
   });
 
+  describe("Current User Profile (Me)", () => {
+    it("getCurrentUser returns sanitized profile for authenticated user", async () => {
+      const { user } = await createVerifiedUser();
+
+      const profile = await authService.getCurrentUser(user.id);
+
+      expect(profile.id).toBe(user.id);
+      expect(profile.email).toBe(user.email);
+      expect(profile.role).toBe("USER");
+      expect(profile.verifiedAt).toBeDefined();
+      expect(profile.createdAt).toBeDefined();
+
+      // Invariant: sensitive credentials are never leaked in profile DTO
+      expect((profile as any).passwordHash).toBeUndefined();
+      expect((profile as any).mfaSecret).toBeUndefined();
+    });
+
+    it("getCurrentUser for nonexistent user throws 401 UnauthorizedError", async () => {
+      await expect(
+        authService.getCurrentUser("01912345-6789-7abc-def0-123456789abc"),
+      ).rejects.toThrowError(UnauthorizedError);
+    });
+  });
+
   describe("Magic Link Flow", () => {
     it("sendMagicLink creates token in DB and dispatches email", async () => {
       const { user } = await createUser();
@@ -329,8 +389,7 @@ describe("Auth Service — Core Integration Suite", () => {
     it("forgotPassword for nonexistent email returns silently (enumeration safe)", async () => {
       await authService.forgotPassword({ email: "ghost@authsphere.test" });
 
-      const emailMocks = getEmailMocks();
-      expect(emailMocks.sendForgotPasswordEmail).not.toHaveBeenCalled();
+      expect(emailQueueMocks.enqueuePasswordResetEmail).not.toHaveBeenCalled();
     });
 
     it("resetPassword updates password, deletes token, and revokes active sessions", async () => {
@@ -365,6 +424,11 @@ describe("Auth Service — Core Integration Suite", () => {
         where: { userId: user.id },
       });
       expect(sessions).toHaveLength(0);
+
+      const securityAlert = getLastSentSecurityNotificationEmail();
+      expect(securityAlert).toBeDefined();
+      expect(securityAlert?.email).toBe(user.email);
+      expect(securityAlert?.eventType).toBe("PASSWORD_RESET");
     });
 
     it("resetPassword with invalid token throws 400", async () => {
@@ -401,6 +465,11 @@ describe("Auth Service — Core Integration Suite", () => {
         where: { userId: user.id },
       });
       expect(sessions).toHaveLength(0);
+
+      const securityAlert = getLastSentSecurityNotificationEmail();
+      expect(securityAlert).toBeDefined();
+      expect(securityAlert?.email).toBe(user.email);
+      expect(securityAlert?.eventType).toBe("PASSWORD_CHANGED");
     });
 
     it("changePassword rejects wrong old password with 400", async () => {

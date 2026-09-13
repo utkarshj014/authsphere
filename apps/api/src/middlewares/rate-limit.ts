@@ -184,7 +184,7 @@ export const RATE_LIMIT_POLICIES = {
 export const rateLimiter = (policy: RateLimitPolicy) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // 1. Fail-open resilience check: bypass rate limiter if Redis is offline
-    if (!redis.isOpen) {
+    if (redis.status !== "ready") {
       logger.warn(
         { policy: policy.name, url: req.originalUrl },
         "Redis client offline; bypassing rate limiter",
@@ -208,13 +208,19 @@ export const rateLimiter = (policy: RateLimitPolicy) => {
       const nextWindowMs = (bucket + 1) * policy.windowMs;
       const secondsRemainingInWindow = Math.ceil((nextWindowMs - now) / 1000);
 
-      // 4. Atomic execution of counter increment and expiration in Redis using EVALSHA script
-      const [count = 0, ttl = 0] = await redis.rateLimitIncrExpire(
-        redisKey,
-        secondsRemainingInWindow,
-      );
+      // 4. Atomic execution of counter increment and window expiration via Redis transaction
+      const results = await redis
+        .multi()
+        .incr(redisKey)
+        .expire(redisKey, secondsRemainingInWindow, "NX")
+        .exec();
 
-      const resetSec = ttl > 0 ? ttl : Math.max(1, secondsRemainingInWindow);
+      if (!results || results[0]?.[0]) {
+        throw results?.[0]?.[0] || new Error("Rate limit transaction failed");
+      }
+
+      const count = Number(results?.[0]?.[1] ?? 0);
+      const resetSec = Math.max(1, secondsRemainingInWindow);
       const remaining = Math.max(0, policy.limit - count);
 
       // 5. Set standard IETF RateLimit response headers (included on all responses)

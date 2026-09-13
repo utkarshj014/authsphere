@@ -86,8 +86,8 @@ export async function ensureBaselineSeed() {
 }
 
 export async function flushRedis() {
-  if (redis.isOpen) {
-    await redis.flushDb();
+  if (redis.status === "ready") {
+    await redis.flushdb();
   }
 }
 

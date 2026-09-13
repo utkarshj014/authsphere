@@ -31,9 +31,9 @@ AuthSphere's testing suite is engineered around **high-signal verification, modu
 - **Serial Execution Reliability:** Test files execute serially (`fileParallelism: false`) to eliminate state leakage, cross-test race conditions, and database deadlocks `[ADR-070]`.
 
 ```text
-Suite Status: 15 test files (100% passing)
-Total Tests:  151 passed (151 tests total)
-Architecture: Streamlined, DRY, Modular (4 Unit, 8 Integration, 3 E2E)
+Suite Status: 18 test files (100% passing)
+Total Tests:  177 passed (177 tests total)
+Architecture: Streamlined, DRY, Modular (7 Unit, 8 Integration, 3 E2E)
 Framework:    Vitest 4.x + Supertest 7.x + V8 Coverage
 Runtime:      Node.js >22 ESM
 ```
@@ -48,8 +48,8 @@ The suite is structured into three practical, consolidated layers, establishing 
 graph TD
     subgraph Test Pyramid
         E2E["Layer 3: E2E User Journeys (3 files, 6 tests)"]
-        INT["Layer 2: Critical Integration Tests (8 files, 111 tests)"]
-        UNIT["Layer 1: Focused Unit Tests (4 files, 34 tests)"]
+        INT["Layer 2: Critical Integration Tests (8 files, 116 tests)"]
+        UNIT["Layer 1: Focused Unit Tests (7 files, 55 tests)"]
     end
 
     subgraph Hermetic Test Environment
@@ -64,18 +64,21 @@ graph TD
     style UNIT fill:#1c4532,stroke:#276749,stroke-width:2px,color:#fff
 ```
 
-### Layer 1: Focused Unit Tests (4 Files, 34 Tests — Pure In-Memory)
+### Layer 1: Focused Unit Tests (7 Files, 55 Tests — Pure In-Memory)
 
 Fast, pure-function tests executing in microseconds without external I/O, database, or Redis dependencies:
 
-| Test File                       | Verification Scope                                 | Invariants Verified                                                                                                                                       |
-| :------------------------------ | :------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tests/unit/crypto.test.ts`     | Cryptography, JWT, Password, MFA & Recovery Tokens | Argon2id OWASP compliance, symmetric HS256 JWT sign/verify, AES-256-GCM symmetric encryption, 32-byte hex entropy `[ADR-013, ADR-014, ADR-031, ADR-040]`. |
-| `tests/unit/security.test.ts`   | RFC 6238 TOTP & Request ID Middleware              | Base32 secret generation, HMAC-SHA1 6-digit window validation, UUIDv7 request ID tracking, and header sanitization `[ADR-043, ADR-045]`.                  |
-| `tests/unit/validation.test.ts` | Zod Boundary Schemas & Duration Parsers            | Email normalization, password complexity, UUIDv7 params, pagination offsets, and human-readable time conversion `[ADR-017, ADR-026, ADR-038]`.            |
-| `tests/unit/openapi.test.ts`    | OpenAPI 3.1 Spec & Express Route Parity            | Document generation, cookie security schemes, and 1:1 bidirectional Express router parity invariant `[ADR-071]`.                                          |
+| Test File                         | Verification Scope                                 | Invariants Verified                                                                                                                                       |
+| :-------------------------------- | :------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/unit/crypto.test.ts`       | Cryptography, JWT, Password, MFA & Recovery Tokens | Argon2id OWASP compliance, symmetric HS256 JWT sign/verify, AES-256-GCM symmetric encryption, 32-byte hex entropy `[ADR-013, ADR-014, ADR-031, ADR-040]`. |
+| `tests/unit/security.test.ts`     | RFC 6238 TOTP & Request ID Middleware              | Base32 secret generation, HMAC-SHA1 6-digit window validation, UUIDv7 request ID tracking, and header sanitization `[ADR-043, ADR-045]`.                  |
+| `tests/unit/validation.test.ts`   | Zod Boundary Schemas & Duration Parsers            | Email normalization, password complexity, UUIDv7 params, pagination offsets, and human-readable time conversion `[ADR-017, ADR-026, ADR-038]`.            |
+| `tests/unit/openapi.test.ts`      | OpenAPI 3.1 Spec & Express Route Parity            | Document generation, cookie security schemes, and 1:1 bidirectional Express router parity invariant `[ADR-071]`.                                          |
+| `tests/unit/email-worker.test.ts` | Email Worker Job Processing & Provider Delegation | HTML template rendering across all email types, provider delegation, error propagation, and unrecoverable failure detection `[ADR-072, ADR-073, ADR-075]`. |
+| `tests/unit/email-queue.test.ts`  | BullMQ Queue Producer Operations                   | Type-safe enqueue helpers, payload contract validation, and correct job type routing `[ADR-072]`.                                                         |
+| `tests/unit/resend-provider.test.ts` | Resend Provider Adapter & Error Normalization    | Message ID dispatch, permanent error classification (validation/domain), transient error classification (rate limits/server), and transport exception bubbling `[ADR-073]`. |
 
-### Layer 2: Critical Integration Tests (8 Files, 111 Tests)
+### Layer 2: Critical Integration Tests (8 Files, 116 Tests)
 
 End-to-end HTTP pipeline tests traversing Express routing, middleware, controllers, services, repositories, PostgreSQL, and Redis:
 
@@ -170,14 +173,13 @@ export async function cleanTestState() {
 
 ### In-Memory Email Spy Outbox
 
-AuthSphere decouples automated testing from third-party email delivery services (e.g. Resend, Nodemailer, AWS SES). In `tests/setup.ts`, the email service is globally mocked using Vitest spies `[ADR-070]`:
+AuthSphere decouples automated testing from third-party email delivery services (e.g. Resend, Nodemailer, AWS SES). In `tests/setup.ts`, the asynchronous BullMQ email queue (`email.queue.js`) is globally mocked using Vitest spies `[ADR-070, ADR-072]`:
 
 ```typescript
-vi.mock("../../modules/email/demo.js", () => ({
-  sendVerificationEmail: vi.fn(),
-  sendPasswordResetEmail: vi.fn(),
-  sendMagicLinkEmail: vi.fn(),
-}));
+vi.mock("../src/modules/email/email.queue.js", async () => {
+  const { emailQueueMocks } = await import("./helpers/email.js");
+  return emailQueueMocks;
+});
 ```
 
 Test files consume strongly typed helper accessors to inspect token payloads directly from memory:
@@ -197,10 +199,10 @@ const resetToken = getLastSentForgotPasswordEmail();
 All reusable testing utilities reside under `apps/api/tests/helpers/` and are re-exported via a unified barrel export (`tests/helpers/index.ts`):
 
 | Helper               | File                   | Purpose                                                                                                                                                                                                                |
-| :------------------- | :--------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| :------------------- | :--------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------     |
 | **Barrel Export**    | `helpers/index.ts`     | Unified, modular export point for all test helpers, factories, singletons, and lifecycle resets.                                                                                                                       |
 | **Database & Cache** | `helpers/db.ts`        | Exports `prisma` client, `redis` client, `cleanDatabase()`, `flushRedis()`, `cleanTestState()`, and `ensureBaselineSeed()` auto-seeding guard.                                                                         |
-| **Email Outbox**     | `helpers/email.ts`     | Captures sent emails into an in-memory outbox (`getEmailMocks`, `getLastSentVerificationEmail`, `getLastSentForgotPasswordEmail`, `getLastSentMagicLinkEmail`, `resetEmailMocks`).                                     |
+| **Email Outbox**     | `helpers/email.ts`     | Captures sent emails into an in-memory outbox (`emailQueueMocks`, `getLastSentVerificationEmail`, `getLastSentForgotPasswordEmail`, `getLastSentMagicLinkEmail`, `getLastSentSecurityNotificationEmail`, `resetEmailMocks`). |
 | **Entity Factories** | `helpers/factories.ts` | Generates persisted test entities with sensible defaults and cached Argon2id hashing (`createUser`, `createVerifiedUser`, `createAdmin`, `createMfaUser`, `createOAuthUser`, `createSession`, `createExpiredSession`). |
 | **Auth & App**       | `helpers/auth.ts`      | Express test app singleton (`getTestApp`), cookie parsing (`getAuthCookies`), header formatting (`formatCookieHeader`), and automated test login (`authenticate`, `login`).                                            |
 
@@ -252,20 +254,21 @@ npm run test:coverage
 
 | Module / Layer                           | Statements | Branches   | Functions  | Lines      |
 | :--------------------------------------- | :--------- | :--------- | :--------- | :--------- |
+| **`src/modules/email`**                  | **100%**   | **100%**   | **100%**   | **100%**   |
 | **`src/lib/jwt`**                        | **100%**   | **100%**   | **100%**   | **100%**   |
 | **`src/middlewares/auth.ts`**            | **100%**   | **100%**   | **100%**   | **100%**   |
 | **`src/modules/sessions`**               | **100%**   | **100%**   | **100%**   | **100%**   |
-| **`src/lib/crypto`**                     | **97.87%** | **100%**   | **100%**   | **97.82%** |
+| **`src/lib/crypto`**                     | **95.74%** | **100%**   | **100%**   | **95.65%** |
 | **`src/common/utils`**                   | **96.66%** | **84.61%** | **100%**   | **96.66%** |
 | **`src/modules/oauth/oauth.service.ts`** | **96.92%** | **97.29%** | **100%**   | **96.92%** |
 | **`src/common/errors`**                  | **93.33%** | **68.75%** | **100%**   | **92.85%** |
-| **`src/modules/users`**                  | **93.02%** | **77.77%** | **100%**   | **93.02%** |
-| **`src/middlewares`**                    | **93.06%** | **83.01%** | **92.30%** | **93.00%** |
+| **`src/modules/users`**                  | **93.75%** | **77.77%** | **100%**   | **93.75%** |
+| **`src/middlewares`**                    | **94.23%** | **80.70%** | **92.30%** | **94.17%** |
 | **`src/modules/authorization`**          | **93.10%** | **83.33%** | **100%**   | **92.85%** |
-| **`src/modules/roles`**                  | **88.00%** | **33.33%** | **100%**   | **88.00%** |
-| **`src/modules/health`**                 | **86.95%** | **75.00%** | **100%**   | **86.95%** |
-| **`src/modules/auth`**                   | **80.82%** | **62.92%** | **87.17%** | **80.82%** |
-| **Overall Suite**                        | **79.05%** | **59.82%** | **86.97%** | **79.12%** |
+| **`src/modules/roles`**                  | **90.32%** | **33.33%** | **100%**   | **90.32%** |
+| **`src/modules/health`**                 | **88.88%** | **75.00%** | **100%**   | **88.88%** |
+| **`src/modules/auth`**                   | **84.21%** | **65.73%** | **89.87%** | **84.17%** |
+| **Overall Suite**                        | **84.39%** | **65.44%** | **91.58%** | **84.41%** |
 
 ---
 

@@ -10,7 +10,7 @@ const getPermissionsByRole = async (
 ): Promise<PermissionName[]> => {
   const cacheKey = `role:permissions:${roleName}`;
 
-  if (redis.isOpen) {
+  if (redis.status === "ready") {
     try {
       const cachedData = await redis.get(cacheKey);
       if (cachedData) {
@@ -35,14 +35,14 @@ const getPermissionsByRole = async (
   const permissions =
     await authorizationRepository.findPermissionsByRole(roleName);
 
-  if (redis.isOpen) {
+  if (redis.status === "ready") {
     try {
-      await redis.set(cacheKey, JSON.stringify(permissions), {
-        expiration: {
-          type: "EX",
-          value: CACHE_TTL_SECONDS,
-        },
-      });
+      await redis.set(
+        cacheKey,
+        JSON.stringify(permissions),
+        "EX",
+        CACHE_TTL_SECONDS,
+      );
       logger.debug({ roleName, cacheKey }, "Cached role permissions in Redis");
     } catch (err) {
       logger.error({ err, roleName, cacheKey }, "Error writing to Redis cache");
@@ -62,7 +62,7 @@ const invalidateRolePermissionsCache = async (
 ): Promise<void> => {
   const cacheKey = `role:permissions:${roleName}`;
 
-  if (redis.isOpen) {
+  if (redis.status === "ready") {
     try {
       await redis.del(cacheKey);
       logger.debug(

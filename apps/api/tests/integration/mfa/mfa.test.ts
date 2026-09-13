@@ -5,6 +5,7 @@ import {
   createVerifiedUser,
   createMfaUser,
   createSession,
+  getLastSentSecurityNotificationEmail,
 } from "../../helpers/index.js";
 import { generateSync } from "otplib";
 
@@ -197,6 +198,11 @@ describe("MFA Lifecycle Integration (Setup, Login, Recovery, Disable)", () => {
         where: { userId: user.id, type: "MFA_DISABLED" },
       });
       expect(event).toBeDefined();
+
+      const securityAlert = getLastSentSecurityNotificationEmail();
+      expect(securityAlert).toBeDefined();
+      expect(securityAlert?.email).toBe(user.email);
+      expect(securityAlert?.eventType).toBe("MFA_DISABLED");
     });
 
     it("throws 400 with invalid code and preserves MFA status", async () => {

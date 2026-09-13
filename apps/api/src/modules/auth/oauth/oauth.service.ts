@@ -54,9 +54,7 @@ export const createOAuthState = async (
     ...(userId && { userId }),
   };
 
-  await redis.set(key, JSON.stringify(payload), {
-    EX: OAUTH_STATE_TTL_SECONDS,
-  });
+  await redis.set(key, JSON.stringify(payload), "EX", OAUTH_STATE_TTL_SECONDS);
 
   return state;
 };
@@ -76,7 +74,7 @@ export const consumeOAuthState = async (
   const key = `${OAUTH_STATE_PREFIX}${state}`;
 
   // Atomic fetch & delete to prevent replay attacks
-  const rawData = await redis.getDel(key);
+  const rawData = await redis.getdel(key);
 
   if (!rawData) {
     throw new AppError(

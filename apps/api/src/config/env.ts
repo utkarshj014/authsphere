@@ -4,7 +4,8 @@ import { formatZodError } from "../common/errors/format-zod-error.js";
 import { parseDurationToMs } from "../common/utils/time.js";
 
 // Loads apps/api/.env.test in test mode, or apps/api/.env otherwise
-const envFile = process.env.NODE_ENV === "test" ? "../../.env.test" : "../../.env";
+const envFile =
+  process.env.NODE_ENV === "test" ? "../../.env.test" : "../../.env";
 dotenv.config({ path: new URL(envFile, import.meta.url), quiet: true });
 
 const envSchema = z
@@ -25,6 +26,8 @@ const envSchema = z
     GITHUB_CLIENT_ID: z.string().min(1),
     GITHUB_CLIENT_SECRET: z.string().min(1),
     OAUTH_CALLBACK_BASE_URL: z.url(),
+    RESEND_API_KEY: z.string().min(1),
+    EMAIL_FROM: z.string().min(1),
     TRUST_PROXY: z
       .string()
       .optional()

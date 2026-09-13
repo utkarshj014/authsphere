@@ -20,6 +20,8 @@ This document records the architectural and engineering decisions made during th
 - [ADR-034: Shared Domain Constants via `@authsphere/shared`](#adr-034--shared-domain-constants-via-authsphereshared)
 - [ADR-059: Provider-Agnostic OAuth 2.0 Strategy Pattern](#adr-059--provider-agnostic-oauth-20-strategy-pattern)
 - [ADR-063: Higher-Order Controller Factories for Provider-Agnostic OAuth Handlers](#adr-063--higher-order-controller-factories-for-provider-agnostic-oauth-handlers)
+- [ADR-073: Provider-Agnostic Email Abstraction with Resend Implementation](#adr-073--provider-agnostic-email-abstraction-with-resend-implementation)
+- [ADR-074: Unified Redis Architecture (ioredis Migration)](#adr-074--unified-redis-architecture-ioredis-migration)
 
 </details>
 
@@ -81,7 +83,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-035: Redis Permission Caching with Fail-Safe Bypass](#adr-035--redis-permission-caching-with-fail-safe-bypass)
 - [ADR-036: Middleware-Based Authorization Guards](#adr-036--middleware-based-authorization-guards)
 - [ADR-038: Validation-Layer Input Normalization via Zod Transforms](#adr-038--validation-layer-input-normalization-via-zod-transforms)
-- [ADR-050: Redis-Backed Fixed-Window Rate Limiting with Lua Scripting](#adr-050--redis-backed-fixed-window-rate-limiting-with-lua-scripting)
+- [ADR-050: Redis-Backed Fixed-Window Rate Limiting via Atomic Transactions (MULTI/EXEC)](#adr-050--redis-backed-fixed-window-rate-limiting-via-atomic-transactions-multiexec)
 - [ADR-051: Centralized Rate Limit Policy Dictionary](#adr-051--centralized-rate-limit-policy-dictionary)
 - [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
@@ -116,6 +118,8 @@ This document records the architectural and engineering decisions made during th
 - [ADR-010: Multi-Resource Graceful Shutdown](#adr-010--multi-resource-graceful-shutdown)
 - [ADR-011: Operational Health Monitoring Pattern](#adr-011--operational-health-monitoring-pattern)
 - [ADR-069: Multi-Phase Security Audit Logging, Standardized Helper Encapsulation, and Indexed User History Retrieval](#adr-069--multi-phase-security-audit-logging-standardized-helper-encapsulation-and-indexed-user-history-retrieval)
+- [ADR-072: Asynchronous Email Delivery via BullMQ Task Queue](#adr-072--asynchronous-email-delivery-via-bullmq-task-queue)
+- [ADR-075: Email Worker Retry Policy and Dead-Letter Retention](#adr-075--email-worker-retry-policy-and-dead-letter-retention)
 
 </details>
 
@@ -131,7 +135,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-071)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-075)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -182,7 +186,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-047: SHA-256 Hashed Recovery Codes with Atomic Single-Use Consumption](#adr-047--sha-256-hashed-recovery-codes-with-atomic-single-use-consumption)
 - [ADR-048: Dual-Factor Enforcement on Sensitive Credential Mutations](#adr-048--dual-factor-enforcement-on-sensitive-credential-mutations)
 - [ADR-049: Proactive Low Recovery Code Warning Threshold](#adr-049--proactive-low-recovery-code-warning-threshold)
-- [ADR-050: Redis-Backed Fixed-Window Rate Limiting with Lua Scripting](#adr-050--redis-backed-fixed-window-rate-limiting-with-lua-scripting)
+- [ADR-050: Redis-Backed Fixed-Window Rate Limiting via Atomic Transactions (MULTI/EXEC)](#adr-050--redis-backed-fixed-window-rate-limiting-via-atomic-transactions-multiexec)
 - [ADR-051: Centralized Rate Limit Policy Dictionary](#adr-051--centralized-rate-limit-policy-dictionary)
 - [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
@@ -204,6 +208,10 @@ This document records the architectural and engineering decisions made during th
 - [ADR-069: Multi-Phase Security Audit Logging, Standardized Helper Encapsulation, and Indexed User History Retrieval](#adr-069--multi-phase-security-audit-logging-standardized-helper-encapsulation-and-indexed-user-history-retrieval)
 - [ADR-070: High-Signal Hermetic Testing Architecture across Unit, Integration, and E2E Pyramids](#adr-070--high-signal-hermetic-testing-architecture-across-unit-integration-and-e2e-pyramids)
 - [ADR-071: Code-First OpenAPI 3.1 Specification and Interactive Swagger UI Documentation via Zod Registry](#adr-071--code-first-openapi-31-specification-and-interactive-swagger-ui-documentation-via-zod-registry)
+- [ADR-072: Asynchronous Email Delivery via BullMQ Task Queue](#adr-072--asynchronous-email-delivery-via-bullmq-task-queue)
+- [ADR-073: Provider-Agnostic Email Abstraction with Resend Implementation](#adr-073--provider-agnostic-email-abstraction-with-resend-implementation)
+- [ADR-074: Unified Redis Architecture (ioredis Migration)](#adr-074--unified-redis-architecture-ioredis-migration)
+- [ADR-075: Email Worker Retry Policy and Dead-Letter Retention](#adr-075--email-worker-retry-policy-and-dead-letter-retention)
 
 </details>
 
@@ -1396,29 +1404,33 @@ When an authentication request (`mfaVerifyLogin`) succeeds via a recovery code, 
 
 ---
 
-## ADR-050 — Redis-Backed Fixed-Window Rate Limiting with Lua Scripting
+## ADR-050 — Redis-Backed Fixed-Window Rate Limiting via Atomic Transactions (MULTI/EXEC)
 
 **Status:** Accepted
 
 ### Context
 
-HTTP-level rate limiting requires atomic counter management in a shared store. Performing `INCR`, `EXPIRE`, and `TTL` as separate Redis commands introduces race conditions where a key could be incremented without an expiration being set, causing permanent counter leaks.
+HTTP-level rate limiting requires atomic counter management in a shared store. Performing `INCR` and `EXPIRE` as disconnected Redis commands introduces race conditions where a key could be incremented without an expiration being set, causing permanent counter leaks.
 
 ### Decision
 
-Implement a server-side Lua script registered via `defineScript()` in `src/lib/redis.ts` that atomically executes `INCR`, conditional `EXPIRE` (only on first increment), and `TTL` in a single Redis roundtrip. The script is registered on the Redis client via the `scripts` option, enabling automatic `EVALSHA` execution with transparent `NOSCRIPT` fallback to `EVAL`.
+Atomically execute counter increment and window expiration in a single Redis transaction block using `redis.multi().incr(redisKey).expire(redisKey, secondsRemainingInWindow, "NX").exec()` within `src/middlewares/rate-limit.ts`. The `"NX"` flag on `EXPIRE` ensures TTL is set only on the initial request of the window, while fixed-window bucket keys (`rl:${policy.name}:${identifier}:${bucket}`) ensure mathematical window boundaries without TTL drift.
 
-```lua
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
-return { count, redis.call('TTL', KEYS[1]) }
+```typescript
+const results = await redis
+  .multi()
+  .incr(redisKey)
+  .expire(redisKey, secondsRemainingInWindow, "NX")
+  .exec();
+
+const count = Number(results?.[0]?.[1] ?? 0);
 ```
 
 ### Rationale
 
-- **Atomicity:** Single Lua execution guarantees `INCR` + `EXPIRE` are never partially applied.
-- **Performance:** `EVALSHA` sends only the SHA1 digest after initial script caching, reducing network payload on repeated calls.
-- **Fail-Safe:** `defineScript` handles `NOSCRIPT` errors transparently, re-uploading the script on Redis restarts.
+- **Strict Atomicity:** `MULTI / EXEC` ensures `INCR` and `EXPIRE` are executed together without intermediate operations.
+- **Single Roundtrip:** Commands are pipelined across the network in a single request-response cycle.
+- **Pure Infrastructure Decoupling:** Eliminates custom Lua scripts and module augmentation from `src/lib/redis.ts`, keeping the Redis client generic and standard.
 
 ---
 
@@ -2094,3 +2106,158 @@ export const authedErrors = {
 - **Tree-Shaking Safety:** Declaring `"sideEffects": true` ensures production bundlers and minifiers never discard route registration side-effect imports.
 - **Truthful, Granular Error Typing:** Shared status codes (400, 401, 429, 500) are centralized via `standardErrors` and `authedErrors`. Endpoint-specific 403 authorization failures are documented explicitly where business guards actually exist, avoiding phantom 403 documentation on standard authenticated endpoints.
 - **Accurate Cookie Security Modeling:** Explicitly documents HttpOnly cookie transport (`apiKey` in `cookie`) while establishing clear expectations that authentication is browser-managed rather than token-input driven.
+
+---
+
+## ADR-072 — Asynchronous Email Delivery via BullMQ Task Queue
+
+**Status:** Accepted
+
+### Context
+
+Executing outbound email delivery synchronously within HTTP request handlers couples authentication response latency to third-party network roundtrips, timeouts, and provider rate limits. Transient network blips or external API outages cause request timeouts, degrading user experience and risking orphaned database transactions or client retries.
+
+The system requires moving email dispatch out of the synchronous request-response lifecycle while preserving transactional database guarantees for primary authentication state changes.
+
+### Decision
+
+Decouple email delivery from HTTP requests using a Redis-backed BullMQ task queue (`authsphere-email`):
+
+1. **Transactional Invariant:** All database state mutations (user record creation, verification tokens, password reset tokens, security audit logs) must commit successfully before enqueuing an email job.
+2. **At-Most-Once Queue Hand-off:** The HTTP handler awaits the fast local Redis enqueue operation (`emailQueue.add()`) before returning an HTTP response. Queue publication is not transactionally bound to PostgreSQL (no two-phase commit); failures during queue enqueue log errors without rolling back committed database credentials.
+3. **Dedicated Queue Helpers:** Encapsulate queue publication within typed helpers (`enqueueVerificationEmail`, `enqueuePasswordResetEmail`, `enqueueMagicLinkEmail`, `enqueueSecurityNotificationEmail`) carrying minimal data payloads (`{ email, token }` or `{ email, eventType }`) rather than whole entity models.
+
+```typescript
+export const enqueueVerificationEmail = (email: string, token: string) =>
+  enqueueEmailJob({
+    type: EMAIL_JOB_TYPES.VERIFICATION,
+    email,
+    token,
+  });
+```
+
+### Rationale
+
+- **Sub-100ms Request Latency:** Eliminates 300–1500ms SMTP/REST delivery latency from user-facing authentication flows, ensuring rapid client response times.
+- **Fault Isolation:** External email service downtime or transient rate limits do not disrupt primary registration, password reset, or magic link database mutations.
+- **Minimal Payload Contracts:** Queued jobs contain only primitive identifiers and tokens rather than complex database entity objects, preventing serialization churn and stale state discrepancies.
+
+---
+
+## ADR-073 — Provider-Agnostic Email Abstraction with Resend Implementation
+
+**Status:** Accepted
+
+### Context
+
+Directly coupling application modules and worker processes to a specific third-party email SDK leads to vendor lock-in, leaky abstractions, and complex mocking during test execution. A clean architectural boundary is necessary to encapsulate third-party SDK quirks, configuration, and error schemas behind a stable domain contract.
+
+### Decision
+
+Establish an `EmailProvider` interface contract, domain `EmailDeliveryError`, and a concrete `resendProvider` adapter using the official Resend SDK (`resend`):
+
+1. **Provider Contract (`src/modules/email/email.types.ts`)**: Enforces an agnostic signature accepting `{ to, subject, html }` and returning `{ id }`.
+2. **Normalized Error Classification:** Define a provider-agnostic domain error `EmailDeliveryError` containing `isPermanent: boolean`. Concrete providers (like `resendProvider`) categorize third-party responses into transient failures (429 rate limits, 5xx outages, network timeouts) versus permanent failures (4xx client validation, unverified domain, malformed recipient address) and throw `EmailDeliveryError`.
+3. **Functional Provider Adapter (`src/modules/email/resend.provider.ts`)**: Implement `resendProvider: EmailProvider` as a plain typed object, adhering directly to the functional object conventions used across AuthSphere services and repositories.
+4. **Decoupled Worker Processing:** The worker process has zero imports from Resend or SDK adapters; it depends purely on `emailService` and `resendProvider`.
+
+```typescript
+export class EmailDeliveryError extends Error {
+  readonly isPermanent: boolean;
+
+  constructor(message: string, isPermanent = false) {
+    super(message);
+    this.name = "EmailDeliveryError";
+    this.isPermanent = isPermanent;
+  }
+}
+
+export interface EmailProvider {
+  readonly name: string;
+  send(payload: EmailPayload): Promise<EmailSendResult>;
+}
+```
+
+### Rationale
+
+- **Zero Vendor Lock-In:** Swapping or adding secondary delivery providers (e.g., AWS SES, Postmark, SMTP) requires only a new `EmailProvider` implementation without touching worker logic or queue schemas.
+- **Deterministic Hermetic Testing:** Unit and worker tests inject a mock `EmailProvider` directly, verifying HTML template rendering, XSS sanitization, and parameter bindings without issuing live network requests or requiring API keys.
+- **Centralized Error Normalization:** SDK-specific response payloads and error shapes are converted into unified `EmailDeliveryError` exceptions at the provider boundary.
+
+---
+
+## ADR-074 — Unified Redis Architecture (ioredis Migration)
+
+**Status:** Accepted
+
+### Context
+
+The application initially utilized `redis` (node-redis v6) for fixed-window rate limiting, OAuth ephemeral state storage, and role permission caching. Introducing BullMQ for asynchronous task queue processing mandated `ioredis`, as BullMQ relies on `ioredis` features including atomic queue scripts, cluster/sentinel support, and connection state events. Operating dual Redis client libraries within a single monorepo introduces duplicate connection pools, conflicting configuration conventions, memory bloat, and Developer Experience confusion.
+
+### Decision
+
+Migrate all Redis operations across the codebase to `ioredis` and uninstall `redis` (node-redis):
+
+1. **Unified Client Instance (`src/lib/redis.ts`)**: A single lightweight `ioredis` instance manages application-level operations, configured with `lazyConnect: true` and `maxRetriesPerRequest: null`, completely decoupled from specific middleware scripts.
+2. **Atomic Middleware Transactions:** Rate limiting counter increments and window expirations execute via `redis.multi().incr().expire(..., "NX").exec()` directly within middleware [ADR-050], eliminating custom Lua scripts and interface augmentation.
+3. **Dedicated Queue & Worker Connections (`src/lib/queue.ts`)**: BullMQ Workers and Queues spawn dedicated `ioredis` connections via `createBullMQConnection()`, isolating blocking queue operations (e.g. `BRPOPLPUSH`/`BLMOVE`) from general caching and rate limiting requests.
+4. **Lifecycle & Status Alignment:** Leverage native `redis.status === "ready"` directly for fail-safe connectivity checks across rate limiter middleware and cache access layers, ensuring fail-open resilience without custom wrapper properties.
+
+```typescript
+export const redis = new Redis(env.REDIS_URL, {
+  lazyConnect: true,
+  maxRetriesPerRequest: null,
+});
+```
+
+### Rationale
+
+- **Single Dependency Footprint:** Eliminates client library divergence, redundant documentation, and dual-driver maintenance overhead.
+- **BullMQ Native Compatibility:** `ioredis` is the officially supported, battle-tested driver for BullMQ, eliminating adapter layer instability.
+- **Connection Isolation:** Standard application commands execute on the shared pool while worker polling runs on isolated blocking connections, preventing rate limit starvation.
+
+---
+
+## ADR-075 — Email Worker Retry Policy and Dead-Letter Retention
+
+**Status:** Accepted
+
+### Context
+
+Asynchronous background jobs interacting with external networks inevitably encounter transient failures such as network interruptions, third-party 5xx errors, and rate limit throttling. Conversely, executing retries on permanent failures (such as malformed email addresses, unsupported job types, or non-existent recipient domains) wastes queue capacity and CPU cycles while risking upstream provider penalties.
+
+The task processing subsystem requires a resilient retry policy paired with dead-letter job retention for operational inspection.
+
+### Decision
+
+Implement an exponential backoff retry policy in BullMQ, combined with permanent-failure fast-failing:
+
+1. **Exponential Backoff:** Configure default job options with 5 retry attempts and exponential backoff (`delay: 2000`, doubling to 2s, 4s, 8s, 16s, 32s).
+2. **Permanent Failure Fast-Path:** In the worker processor, when `EmailDeliveryError.isPermanent` or corrupted/unsupported job types are encountered, throw BullMQ's built-in `UnrecoverableError`. This immediately transitions the job to the failed state, bypassing remaining retry attempts.
+3. **Dead-Letter Retention:** Configure `removeOnComplete: true` to prune successful executions and `removeOnFail: { count: 500 }` to retain the last 500 failed jobs with stack traces and payload metadata in Redis for operational debugging.
+4. **Graceful Worker Shutdown with Watchdog:** Register `SIGINT`, `SIGTERM`, and unhandled exception listeners that call `await worker.close()` with an unreferenced 10-second watchdog timer (`timer.unref()`), allowing active jobs to finish processing while guaranteeing shutdown completion.
+
+```typescript
+export const emailWorker = new Worker<EmailJobData>(
+  EMAIL_QUEUE_NAME,
+  async (job: Job<EmailJobData>) => {
+    try {
+      await emailService.processJob(job.data, resendProvider);
+    } catch (err: unknown) {
+      if (err instanceof UnrecoverableError) throw err;
+      if (err instanceof EmailDeliveryError && err.isPermanent) {
+        throw new UnrecoverableError(err.message);
+      }
+      throw err; // BullMQ retries transient errors with exponential backoff
+    }
+  },
+  { connection, concurrency: 5 },
+);
+```
+
+### Rationale
+
+- **Resilience to Transient Outages:** Exponential backoff gracefully absorbs short-lived network glitches and third-party rate limiting without losing queued emails.
+- **Resource Conservation:** Immediate failure classification prevents futile retries on unrecoverable validation errors.
+- **Zero In-Flight Job Corruption:** Graceful worker shutdown permits in-flight email dispatches to complete, preventing duplicate deliveries on process termination.
+- **Production Auditability:** Retaining failed jobs in Redis allows operators to inspect payloads, failure reasons, and timestamps via standard queue inspection tools.

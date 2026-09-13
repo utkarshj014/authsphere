@@ -5,6 +5,7 @@ import app from "./app.js";
 import { logger } from "./lib/logger.js";
 import { prisma } from "./lib/prisma.js";
 import { redis } from "./lib/redis.js";
+import { emailQueue } from "./lib/queue.js";
 
 // Create HTTP server instance early
 const server = http.createServer(app);
@@ -42,11 +43,14 @@ const handleShutdown = async (signal: string) => {
       });
     }
 
-    logger.info("Disconnecting Prisma and Redis connections concurrently...");
+    logger.info(
+      "Disconnecting Prisma, Redis, and Email Queue connections concurrently...",
+    );
 
     const results = await Promise.allSettled([
       prisma.$disconnect(),
       redis.quit(),
+      emailQueue.close(),
     ]);
 
     let resourceShutdownError = false;
@@ -55,7 +59,8 @@ const handleShutdown = async (signal: string) => {
     results.forEach((res, index) => {
       if (res.status === "rejected") {
         resourceShutdownError = true;
-        const resource = index === 0 ? "Prisma" : "Redis";
+        const resource =
+          index === 0 ? "Prisma" : index === 1 ? "Redis" : "EmailQueue";
         const reasonStr =
           res.reason instanceof Error ? res.reason.message : String(res.reason);
         errorMessage += `Error disconnecting ${resource} cleanly: ${reasonStr}\n`;

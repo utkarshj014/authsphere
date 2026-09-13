@@ -130,9 +130,9 @@ describe("Resilience & Invariants (Concurrency, Fail-Open, Constraints)", () => 
 
   describe("Redis Failure & Graceful Degradation", () => {
     it("rateLimiter fails-open when Redis throws an unexpected error", async () => {
-      vi.spyOn(redis, "rateLimitIncrExpire").mockRejectedValue(
-        new Error("Redis connection timed out / socket closed"),
-      );
+      vi.spyOn(redis, "multi").mockImplementation(() => {
+        throw new Error("Redis connection timed out / socket closed");
+      });
 
       const res = await request(app).get("/health");
       expect(res.status).toBe(200);
@@ -159,7 +159,7 @@ describe("Resilience & Invariants (Concurrency, Fail-Open, Constraints)", () => 
       await prisma.securityEvent.create({
         data: { userId: user.id, type: "LOGIN_SUCCESS" },
       });
-      await redis.set("test:cleanup:key", "sample-value", { EX: 60 });
+      await redis.set("test:cleanup:key", "sample-value", "EX", 60);
 
       // Verify records exist
       expect(await prisma.user.count({ where: { id: user.id } })).toBe(1);
@@ -191,7 +191,7 @@ describe("Resilience & Invariants (Concurrency, Fail-Open, Constraints)", () => 
 
       // 5. Assert Redis DB #1 is flushed
       expect(await redis.get("test:cleanup:key")).toBeNull();
-      expect(await redis.dbSize()).toBe(0);
+      expect(await redis.dbsize()).toBe(0);
     });
   });
 });

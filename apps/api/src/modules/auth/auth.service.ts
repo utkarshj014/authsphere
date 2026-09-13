@@ -40,10 +40,12 @@ import {
 } from "../../lib/crypto/index.js";
 import { totp } from "../../lib/totp/index.js";
 import {
-  sendForgotPasswordEmail,
-  sendVerificationEmail,
-  sendMagicLinkEmail,
-} from "../email/demo.js";
+  enqueueVerificationEmail,
+  enqueuePasswordResetEmail,
+  enqueueMagicLinkEmail,
+  enqueueSecurityNotificationEmail,
+} from "../email/email.queue.js";
+import { SECURITY_NOTIFICATION_EVENTS } from "../email/email.types.js";
 import {
   signAccessToken,
   signRefreshToken,
@@ -192,7 +194,7 @@ const signup = async (input: SignupInput) => {
     tokenExpiresAt,
   );
 
-  await sendVerificationEmail(token, user.email);
+  await enqueueVerificationEmail(user.email, token);
 };
 
 const verifyEmail = async (input: VerifyEmailInput) => {
@@ -217,7 +219,7 @@ const resendVerificationToken = async (input: ResendVerificationTokenInput) => {
     tokenExpiresAt,
   );
 
-  await sendVerificationEmail(token, user.email);
+  await enqueueVerificationEmail(user.email, token);
 };
 
 const login = async (
@@ -415,7 +417,7 @@ const forgotPassword = async (input: ForgotPasswordInput) => {
     tokenExpiresAt,
   );
 
-  await sendForgotPasswordEmail(token, user.email);
+  await enqueuePasswordResetEmail(user.email, token);
 };
 
 const resetPassword = async (
@@ -449,6 +451,11 @@ const resetPassword = async (
   await authRepository.resetPasswordAndDeleteToken(user.id, newPasswordHash);
 
   await recordSecurityEvent(user.id, SECURITY_EVENT_TYPES.PASSWORD_RESET);
+
+  await enqueueSecurityNotificationEmail(
+    user.email,
+    SECURITY_NOTIFICATION_EVENTS.PASSWORD_RESET,
+  );
 
   return { mfaRequired: false };
 };
@@ -503,6 +510,11 @@ const changePassword = async (
   await authRepository.changePassword(userId, newPasswordHash);
 
   await recordSecurityEvent(userId, SECURITY_EVENT_TYPES.PASSWORD_CHANGED);
+
+  await enqueueSecurityNotificationEmail(
+    user.email,
+    SECURITY_NOTIFICATION_EVENTS.PASSWORD_CHANGED,
+  );
 
   return { mfaRequired: false };
 };
@@ -659,6 +671,11 @@ const mfaDisable = async (userId: string, input: MfaDisableInput) => {
   await authRepository.disableMfaAndRevokeSessions(userId);
 
   await recordSecurityEvent(userId, SECURITY_EVENT_TYPES.MFA_DISABLED);
+
+  await enqueueSecurityNotificationEmail(
+    user.email,
+    SECURITY_NOTIFICATION_EVENTS.MFA_DISABLED,
+  );
 };
 
 const mfaRegenerateRecoveryCodes = async (
@@ -698,7 +715,7 @@ const sendMagicLink = async (input: SendMagicLinkInput) => {
 
   await authRepository.createMagicLinkToken(tokenHash, user.id, tokenExpiresAt);
 
-  await sendMagicLinkEmail(token, user.email);
+  await enqueueMagicLinkEmail(user.email, token);
 };
 
 const verifyMagicLink = async (

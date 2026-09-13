@@ -16,11 +16,11 @@ import {
   ensureBaselineSeed,
 } from "./helpers/index.js";
 
-// Globally mock the email module to protect against real external calls
-// and allow tests to spy on dispatched emails
-vi.mock("../src/modules/email/demo.js", async () => {
-  const { emailMocks } = await import("./helpers/email.js");
-  return emailMocks;
+// Globally mock the email queue to protect against real Redis/BullMQ and external calls
+// and allow tests to spy on enqueued email jobs
+vi.mock("../src/modules/email/email.queue.js", async () => {
+  const { emailQueueMocks } = await import("./helpers/email.js");
+  return emailQueueMocks;
 });
 
 function isUnitTestSuite(): boolean {
@@ -32,7 +32,7 @@ beforeAll(async () => {
   if (isUnitTestSuite()) return;
 
   await prisma.$connect();
-  if (!redis.isOpen) {
+  if (redis.status !== "ready") {
     await redis.connect();
   }
 
@@ -53,7 +53,7 @@ afterAll(async () => {
   if (isUnitTestSuite()) return;
 
   await prisma.$disconnect();
-  if (redis.isOpen) {
+  if (redis.status === "ready") {
     await redis.quit();
   }
 });
