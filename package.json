@@ -2,21 +2,27 @@
   "name": "authsphere",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
-    "test": "npm test --workspace=@authsphere/api",
-    "test:watch": "npm run test:watch --workspace=@authsphere/api",
-    "test:coverage": "npm run test:coverage --workspace=@authsphere/api"
+    "build:shared": "npm run build -w @authsphere/shared",
+    "build:api": "npm run build:shared && npm run build -w @authsphere/api",
+    "build:web": "npm run build:shared && npm run build -w @authsphere/web",
+    "build": "npm run build:shared && npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
     "typescript": "^7.0.2"
   },
   "engines": {
-    "node": ">22"
+    "node": ">=22"
   },
   "repository": {
     "type": "git",
@@ -25,7 +31,6 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "module",
   "bugs": {
     "url": "https://github.com/utkarshj014/authsphere/issues"
   },

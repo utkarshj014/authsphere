@@ -1,0 +1,64 @@
+networks:
+  authsphere-net:
+    driver: bridge
+
+services:
+  # -------------------------------------------------------------
+  # API Server Container (Express 5 REST API)
+  # -------------------------------------------------------------
+  api:
+    image: ${IMAGE_NAME}:${IMAGE_TAG}
+    container_name: authsphere-api
+    restart: unless-stopped
+    command: ["node", "--enable-source-maps", "dist/server.js"]
+    ports:
+      - "127.0.0.1:4000:4000" # Bound to localhost, exposed to internet via Reverse Proxy (Caddy/Nginx)
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      FRONTEND_URL: ${FRONTEND_URL}
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL} # Upstash Redis (rediss://...)
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN}
+      MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      EMAIL_FROM: ${EMAIL_FROM}
+      OAUTH_CALLBACK_BASE_URL: ${OAUTH_CALLBACK_BASE_URL}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+    networks:
+      - authsphere-net
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  # -------------------------------------------------------------
+  # Email Worker Container (Shares identical image, background consumer)
+  # -------------------------------------------------------------
+  email-worker:
+    image: ${IMAGE_NAME}:${IMAGE_TAG}
+    container_name: authsphere-email-worker
+    restart: unless-stopped
+    command: ["node", "--enable-source-maps", "dist/workers/email.worker.js"]
+    environment:
+      NODE_ENV: production
+      APP_ROLE: worker
+      FRONTEND_URL: ${FRONTEND_URL}
+      REDIS_URL: ${REDIS_URL} # Upstash Redis (rediss://...)
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      EMAIL_FROM: ${EMAIL_FROM}
+    networks:
+      - authsphere-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
