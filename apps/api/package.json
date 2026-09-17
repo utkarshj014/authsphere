@@ -11,7 +11,7 @@
     "clean": "node -e \"import('fs').then(fs => fs.rmSync('dist', { recursive: true, force: true }))\"",
     "prisma:generate": "prisma generate",
     "build": "npm run clean && npm run prisma:generate && tsc",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npm run prisma:generate && tsc --noEmit",
     "start": "node --enable-source-maps dist/server.js",
     "start:email-worker": "node --enable-source-maps dist/workers/email.worker.js",
     "db:migrate:deploy": "prisma migrate deploy",
