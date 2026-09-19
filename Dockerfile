@@ -22,6 +22,10 @@ RUN npm ci
 FROM base AS builder
 WORKDIR /app
 
+# Provide build-time fallback DATABASE_URL required for Prisma Client generation during build
+ARG DATABASE_URL=postgresql://postgres:postgres@localhost:5432/authsphere_build
+ENV DATABASE_URL=${DATABASE_URL}
+
 # Copy source trees for shared library and API
 COPY packages/shared/ packages/shared/
 COPY apps/api/ apps/api/
