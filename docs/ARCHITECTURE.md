@@ -243,16 +243,22 @@ sequenceDiagram
     API->>API: Attach req.auth = { userId, role, sid, permissions }
     API-->>Client: 200 OK User DTO
 
-    Note over User, Client: 3. Token Refresh Phase (RTR)
+    Note over User, Client: 3. Token Refresh Phase (Atomic CAS + Leeway Window)
     Client->>API: POST /auth/refresh-token (refreshToken cookie)
-    API->>API: Verify Refresh Token JWT & sid
-    API->>DB: Find & Rotate active Session by sid
-    alt Token Valid
-        API->>DB: Update Session (same sid, new SHA-256 tokenHash, new expiresAt)
-        API-->>Client: Set rotated HTTP-Only Cookies
-    else Reuse / Invalid Token Detected
-        API->>DB: Revoke sessions (Hard Delete via SESSION/GLOBAL mode)
-        API-->>Client: Clear Auth Cookies & Return 401 Unauthorized
+    API->>API: Verify Refresh Token JWT & SHA-256 oldTokenHash
+    API->>Redis: GET auth:refresh-leeway:{sid}:{oldTokenHash}
+    opt Leeway Window Hit (Concurrent Tab Grace Period)
+        Redis-->>API: Cached AuthTokens
+        API-->>Client: 200 OK (Return synchronized token pair)
+    end
+    API->>DB: Find Session by sid & Verify Ownership
+    API->>DB: Atomic CAS: updateMany(id=sid, tokenHash=oldTokenHash)
+    alt CAS Succeeded (Winner)
+        API->>Redis: SET auth:refresh-leeway:{sid}:{oldTokenHash} (EX 30s)
+        API-->>Client: 200 OK (Set rotated HTTP-Only cookies)
+    else CAS Failed (Replay Attack Detected)
+        API->>DB: Delete session(s) (Hard delete via SESSION/GLOBAL mode)
+        API-->>Client: 401 Unauthorized ("Compromised session detected")
     end
 ```
 
@@ -461,7 +467,7 @@ sequenceDiagram
 4. **Token Security & Transport**:
    - Short-lived JWT Access Tokens (15m) carrying `sub`, `sid`, `role`.
    - Long-lived Refresh Tokens (30d) tied to database sessions. Store only `SHA-256` token hashes `[ADR-012]`.
-   - **Refresh Token Rotation (RTR)** with reuse detection revokes sessions immediately upon detecting token replay `[ADR-014]`.
+   - **Refresh Token Rotation (RTR) with Atomic CAS & Leeway Window**: Employs single-statement PostgreSQL Compare-And-Swap (`updateMany`) paired with an ephemeral Redis leeway cache (`auth:refresh-leeway:{sid}:{tokenHash}`, 30s TTL) to collapse concurrent SPA refresh queries without race conditions while revoking compromised sessions on replay `[ADR-014, ADR-076]`.
    - Delivered via `httpOnly`, `secure`, `sameSite: "lax"` cookies. Refresh token cookie scoped to path `/auth` (covering `/auth/refresh-token` and `/auth/logout`) `[ADR-033, ADR-042]`.
 5. **Active Session Management & Revocation**:
    - Exposes safe session metadata (`id`, `ipAddress`, `userAgent`, `createdAt`, `expiresAt`, `isCurrent`) via `GET /sessions`, strictly omitting sensitive token hashes `[ADR-068]`.

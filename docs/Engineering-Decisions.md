@@ -57,6 +57,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-039: Centralized Auth Token and Session Generation](#adr-039--centralized-auth-token-and-session-generation)
 - [ADR-061: Strict Conflict-Guarded OAuth Identity Resolution Workflow](#adr-061--strict-conflict-guarded-oauth-identity-resolution-workflow)
 - [ADR-068: Active Session Introspection, Ownership-Enforced Revocation, and Safe Cookie Invalidation](#adr-068--active-session-introspection-ownership-enforced-revocation-and-safe-cookie-invalidation)
+- [ADR-076: Refresh Token Rotation with Atomic CAS and Ephemeral Leeway Window](#adr-076--refresh-token-rotation-with-atomic-cas-and-ephemeral-leeway-window)
 
 </details>
 
@@ -135,7 +136,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-075)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-076)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -212,6 +213,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-073: Provider-Agnostic Email Abstraction with Resend Implementation](#adr-073--provider-agnostic-email-abstraction-with-resend-implementation)
 - [ADR-074: Unified Redis Architecture (ioredis Migration)](#adr-074--unified-redis-architecture-ioredis-migration)
 - [ADR-075: Email Worker Retry Policy and Failed-Job Retention](#adr-075--email-worker-retry-policy-and-failed-job-retention)
+- [ADR-076: Refresh Token Rotation with Atomic CAS and Ephemeral Leeway Window](#adr-076--refresh-token-rotation-with-atomic-cas-and-ephemeral-leeway-window)
 
 </details>
 
@@ -507,7 +509,7 @@ Revoke sessions via hard `DELETE` upon logout, token reuse detection, password c
 
 ## ADR-014 — Refresh Token Rotation with Automatic Reuse Detection
 
-**Status:** Accepted
+**Status:** Accepted _(Extended by ADR-076)_
 
 ### Context
 
@@ -2262,3 +2264,39 @@ export const emailWorker = new Worker<EmailJobData>(
 - **Resource Conservation:** Immediate failure classification prevents futile retries on unrecoverable validation errors.
 - **Zero In-Flight Job Corruption:** Graceful worker shutdown permits in-flight email dispatches to complete, minimizing duplicate deliveries on process termination.
 - **Production Auditability:** Retaining failed jobs in Redis allows operators to inspect payloads, failure reasons, and timestamps via standard queue inspection tools.
+
+---
+
+## ADR-076 — Refresh Token Rotation with Atomic CAS and Ephemeral Leeway Window
+
+**Status:** Accepted _(Extends ADR-014)_
+
+### Context
+
+Refresh Token Rotation (RFC 6819) invalidates the consumed refresh token upon first exchange to prevent token replay attacks. In modern Single Page Applications (SPAs) and multi-tab browser environments, components and background queries frequently emit concurrent or rapid back-to-back API requests when an access token expires. Under strict single-winner rotation without concurrency tolerance, parallel refresh requests cause a race condition where one request succeeds while the others present the now-invalidated token, triggering false-positive session revocations ("ghost logouts").
+
+Conversely, relaxing reuse detection entirely creates an unacceptable vulnerability window for stolen credential replay. The authentication subsystem requires an atomic, transaction-free mutation pattern that collapses concurrent client requests into a synchronized response while maintaining strict replay detection.
+
+### Decision
+
+Implement single-statement atomic Compare-And-Swap (CAS) session rotation paired with an ephemeral Redis leeway cache (`auth:refresh-leeway:{sessionId}:{oldTokenHash}`) configured with a 30-second TTL.
+
+When a client initiates a refresh, the system first checks Redis for cached leeway tokens. If not found, the service generates new tokens and executes an atomic CAS update on PostgreSQL via `prisma.session.updateMany` conditioned on both `id` and `tokenHash`. The winning caller caches the newly generated token pair in Redis under the consumed token hash. Concurrent requests within the 30-second leeway window receive the identical cached token pair without database re-rotation, while any reuse outside the leeway window triggers immediate session revocation across the device or account.
+
+```typescript
+const rotated = await prisma.session.updateMany({
+  where: { id: sessionId, tokenHash: expectedOldTokenHash },
+  data: sessionUpdateData,
+});
+if (rotated.count > 0) {
+  await redis.set(leewayKey, JSON.stringify(tokens), "EX", 30);
+  return tokens;
+}
+```
+
+### Rationale
+
+- **Ghost Logout Elimination:** Ephemeral leeway caching collapses concurrent SPA requests into a single synchronized token pair, preventing false-positive revocations across parallel tabs.
+- **Zero Multi-Statement Transaction Overhead:** Single-statement atomic Compare-And-Swap leverages PostgreSQL's row-level write lock, preventing race conditions without database transaction overhead.
+- **Durable Replay Attack Detection:** Any presentation of an invalidated token outside the 30-second grace window triggers immediate session revocation, upholding OAuth 2.0 Security BCP (RFC 6819 / RFC 8725).
+- **Sub-Millisecond Response Collapsing:** Concurrent requests within the leeway window resolve directly from Redis memory in $O(1)$ time without database queries.
