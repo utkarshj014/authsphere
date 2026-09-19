@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import request from "supertest";
 import { authService } from "../../../src/modules/auth/auth.service.js";
+import type { AuthTokens } from "../../../src/modules/auth/auth.types.js";
 import { usersService } from "../../../src/modules/users/users.service.js";
 import { usersRepository } from "../../../src/modules/users/users.repository.js";
 import { authorizationService } from "../../../src/modules/authorization/authorization.service.js";
@@ -14,7 +15,9 @@ import {
   cleanTestState,
   ensureBaselineSeed,
   flushRedis,
+  getLastSentVerificationEmail,
   getLastSentMagicLinkEmail,
+  getLastSentForgotPasswordEmail,
 } from "../../helpers/index.js";
 import { PERMISSIONS, ROLES } from "@authsphere/shared";
 import { Prisma } from "../../../src/generated/prisma/client.js";
@@ -27,7 +30,7 @@ describe("Resilience & Invariants (Concurrency, Fail-Open, Constraints)", () => 
   });
 
   describe("Concurrency & Anti-Replay Invariants", () => {
-    it("concurrent refresh token requests: at most one succeeds, other rejected as reuse", async () => {
+    it("concurrent refresh token requests: both succeed with collapsed tokens within leeway window", async () => {
       const { user, password } = await createVerifiedUser();
       const loginResult = await authService.login(
         { email: user.email, password },
@@ -42,11 +45,49 @@ describe("Resilience & Invariants (Concurrency, Fail-Open, Constraints)", () => 
         authService.refreshToken("127.0.0.1", "Agent-B", token),
       ]);
 
-      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const fulfilled = results.filter(
+        (r): r is PromiseFulfilledResult<AuthTokens> =>
+          r.status === "fulfilled",
+      );
       const rejected = results.filter((r) => r.status === "rejected");
 
-      expect(fulfilled.length).toBeLessThanOrEqual(1);
-      expect(rejected.length).toBeGreaterThanOrEqual(1);
+      expect(fulfilled.length).toBe(2);
+      expect(rejected.length).toBe(0);
+      // Both concurrent requests collapse into identical synchronized tokens
+      expect(fulfilled[0].value.refreshToken).toBe(
+        fulfilled[1].value.refreshToken,
+      );
+      expect(fulfilled[0].value.accessToken).toBe(
+        fulfilled[1].value.accessToken,
+      );
+    });
+
+    it("refresh token reuse outside leeway window triggers compromise detection and revokes sessions", async () => {
+      const { user, password } = await createVerifiedUser();
+      const loginResult = await authService.login(
+        { email: user.email, password },
+        "127.0.0.1",
+      );
+      if (loginResult.mfaRequired) throw new Error("Expected tokens");
+
+      const token = loginResult.tokens.refreshToken;
+
+      await authService.refreshToken("127.0.0.1", "Agent-A", token);
+
+      // Simulate expiry of the leeway grace window by flushing Redis leeway cache
+      await redis.flushdb();
+
+      await expect(
+        authService.refreshToken("127.0.0.1", "Agent-B", token),
+      ).rejects.toMatchObject({
+        statusCode: 401,
+        message: "Compromised session detected",
+      });
+
+      const remainingSessions = await prisma.session.findMany({
+        where: { userId: user.id },
+      });
+      expect(remainingSessions).toHaveLength(0);
     });
 
     it("concurrent admin demotion: write-skew prevented, last admin invariant preserved", async () => {
@@ -89,6 +130,70 @@ describe("Resilience & Invariants (Concurrency, Fail-Open, Constraints)", () => 
 
       expect(fulfilled.length).toBe(1);
       expect(rejected.length).toBe(1);
+      expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+        statusCode: 400,
+        message: "Invalid or expired magic link token",
+      });
+    });
+
+    it("concurrent password reset: token consumed only once", async () => {
+      const { user } = await createVerifiedUser();
+      await authService.forgotPassword({ email: user.email });
+
+      const email = getLastSentForgotPasswordEmail();
+      expect(email).toBeDefined();
+
+      const results = await Promise.allSettled([
+        authService.resetPassword({
+          token: email!.token,
+          password: "NewPassword123!",
+        }),
+        authService.resetPassword({
+          token: email!.token,
+          password: "NewPassword123!",
+        }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+
+      expect(fulfilled.length).toBe(1);
+      expect(rejected.length).toBe(1);
+      expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+        statusCode: 400,
+        message: "Invalid or expired reset token",
+      });
+    });
+
+    it("concurrent email verification: parallel requests succeed idempotently without race conditions", async () => {
+      const email = `concurrent-verify-${Date.now()}@authsphere.test`;
+      await authService.signup({ email, password: "Password123!" });
+
+      const sentEmail = getLastSentVerificationEmail();
+      expect(sentEmail).toBeDefined();
+
+      const results = await Promise.allSettled([
+        authService.verifyEmail({ token: sentEmail!.token }),
+        authService.verifyEmail({ token: sentEmail!.token }),
+      ]);
+
+      // Both requests either succeed cleanly (idempotent / zero-error) or at most one consumed the token first while the second was rejected gracefully
+      const rejected = results.filter((r) => r.status === "rejected");
+      if (rejected.length > 0) {
+        expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+          statusCode: 400,
+          message: "Invalid or expired verification token",
+        });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { email },
+        include: { emailVerificationToken: true },
+      });
+
+      expect(user!.isEmailVerified).toBe(true);
+      expect(user!.verifiedAt).toBeDefined();
+      expect(user!.emailVerificationToken).toBeNull();
     });
   });
 

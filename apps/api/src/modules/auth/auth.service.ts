@@ -53,6 +53,7 @@ import {
 } from "../../lib/jwt/index.js";
 import type { AuthTokens } from "./auth.types.js";
 import { env } from "../../config/env.js";
+import { redis } from "../../lib/redis.js";
 
 // ==========================================
 // Private Helpers
@@ -95,18 +96,14 @@ export const generateAuthTokensAndSession = async (
     role: roleName,
   });
 
-  const refreshTokenHash = hashToken(refreshToken);
-
   const sessionPayload = {
-    tokenHash: refreshTokenHash,
+    tokenHash: hashToken(refreshToken),
     expiresAt: sessionExpiresAt,
     ipAddress,
     ...(userAgent ? { userAgent } : {}),
   };
 
-  if (existingSessionId) {
-    await authRepository.rotateSession(sessionId, sessionPayload);
-  } else {
+  if (!existingSessionId) {
     await authRepository.createSession(userId, {
       id: sessionId,
       ...sessionPayload,
@@ -200,7 +197,20 @@ const signup = async (input: SignupInput) => {
 const verifyEmail = async (input: VerifyEmailInput) => {
   const tokenHash = hashToken(input.token);
 
-  await authRepository.verifyEmailAndDeleteToken(tokenHash);
+  const verificationToken =
+    await authRepository.findVerificationTokenWithUser(tokenHash);
+  if (!verificationToken || !verificationToken.user) {
+    throw new AppError("Invalid or expired verification token", 400);
+  }
+
+  // Idempotent UX: if already verified (via parallel tab, OAuth), return cleanly
+  if (verificationToken.user.isEmailVerified) {
+    return;
+  }
+
+  await authRepository.markEmailVerifiedAndConsumeToken(
+    verificationToken.user.id,
+  );
 };
 
 const resendVerificationToken = async (input: ResendVerificationTokenInput) => {
@@ -303,38 +313,66 @@ const refreshToken = async (
   }
 
   const payload = await verifyRefreshToken(token);
+  const oldTokenHash = hashToken(token);
+  const leewayKey = `auth:refresh-leeway:${payload.sid}:${oldTokenHash}`;
 
+  // 1. Leeway Window: Return cached tokens if recently rotated within grace period (SPA concurrency)
+  const cached = await redis.get(leewayKey);
+  if (cached) {
+    return JSON.parse(cached) as AuthTokens;
+  }
+
+  // 2. Validate active session and ownership
   const session = await authRepository.findSessionById(payload.sid);
-  if (!session) {
+  if (!session || session.userId !== payload.sub) {
     throw new UnauthorizedError("Invalid session");
   }
 
-  // Defense-in-depth
-  if (session.userId !== payload.sub) {
-    throw new UnauthorizedError("Compromised session detected");
-  }
-
-  const oldRefreshTokenHash = hashToken(token);
-  if (session.tokenHash !== oldRefreshTokenHash) {
-    if (env.AUTH_REUSE_DELETION_MODE === "GLOBAL") {
-      await authRepository.deleteAllSessionsByUserId(session.userId);
-    } else {
-      await authRepository.deleteSessionById(session.id);
-    }
-    throw new UnauthorizedError("Compromised session detected");
-  }
-
-  const user = session.user;
-
+  // 3. Issue new tokens & rotate via atomic Compare-And-Swap (CAS)
   const tokens = await generateAuthTokensAndSession(
-    user.id,
-    user.role.name,
+    session.userId,
+    session.user.role.name,
     ipAddress,
     userAgent,
     session.id,
   );
 
-  return tokens;
+  const rotated = await authRepository.rotateSession(session.id, oldTokenHash, {
+    tokenHash: hashToken(tokens.refreshToken),
+    expiresAt: new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_MS),
+    ipAddress,
+    ...(userAgent ? { userAgent } : {}),
+  });
+
+  if (rotated) {
+    if (env.AUTH_REFRESH_TOKEN_LEEWAY_SECONDS > 0) {
+      await redis.set(
+        leewayKey,
+        JSON.stringify(tokens),
+        "EX",
+        env.AUTH_REFRESH_TOKEN_LEEWAY_SECONDS,
+      );
+    }
+    return tokens;
+  }
+
+  // 4. CAS failed: check if a concurrent request won the race and populated leeway cache
+  let concurrentTokens = await redis.get(leewayKey);
+  if (!concurrentTokens) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    concurrentTokens = await redis.get(leewayKey);
+  }
+  if (concurrentTokens) {
+    return JSON.parse(concurrentTokens) as AuthTokens;
+  }
+
+  // 5. Replay detected outside leeway: revoke session
+  if (env.AUTH_REUSE_DELETION_MODE === "GLOBAL") {
+    await authRepository.deleteAllSessionsByUserId(session.userId);
+  } else {
+    await authRepository.deleteSessionById(session.id);
+  }
+  throw new UnauthorizedError("Compromised session detected");
 };
 
 const logout = async (token?: string) => {

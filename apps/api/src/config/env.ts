@@ -30,6 +30,7 @@ const apiConfig = z.object({
   JWT_ACCESS_EXPIRES_IN: z.string().default("15m"),
   JWT_REFRESH_EXPIRES_IN: z.string().default("30d"),
   AUTH_REUSE_DELETION_MODE: z.enum(["SESSION", "GLOBAL"]).default("SESSION"),
+  AUTH_REFRESH_TOKEN_LEEWAY_SECONDS: z.coerce.number().int().min(0).default(30),
   MFA_ENCRYPTION_KEY: z.string().min(16),
   GOOGLE_CLIENT_ID: z.string().min(1),
   GOOGLE_CLIENT_SECRET: z.string().min(1),

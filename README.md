@@ -7,7 +7,7 @@ Production-grade Authentication & Authorization Platform.
 ## Documentation
 
 - [System Architecture & Design](./docs/ARCHITECTURE.md) — Topology, component boundaries, database ERD, and core sequence flows.
-- [Architecture Decision Records (ADR)](./docs/Engineering-Decisions.md) — Comprehensive log of 71 architectural decisions, security trade-offs, and technical rationale.
+- [Architecture Decision Records (ADR)](./docs/Engineering-Decisions.md) — Comprehensive log of 76 architectural decisions, security trade-offs, and technical rationale.
 - [OAuth 2.0 Reference](./docs/OAUTH.md) — Identity resolution matrix, anti-replay state verification, and provider integrations.
 - [Testing Architecture & Verification Reference](./docs/TESTING.md) — Hermetic test environment, 3-layer test pyramid, security invariant matrix, and execution guide.
 
