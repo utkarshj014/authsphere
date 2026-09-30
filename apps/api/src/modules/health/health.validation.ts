@@ -1,16 +1,24 @@
 import { z } from "zod";
 
-const healthStatusSchema = z.enum(["UP", "DOWN"]);
+export const healthStatusSchema = z.enum(["UP", "DOWN"]);
+
+export const livenessDataSchema = z.object({
+  status: healthStatusSchema,
+  timestamp: z.string().datetime(),
+});
+
+export const readinessDataSchema = z.object({
+  status: healthStatusSchema,
+  database: healthStatusSchema,
+  redis: healthStatusSchema,
+  timestamp: z.string().datetime(),
+});
 
 export const healthResponseSchema = {
-  healthData: z.object({
-    api: healthStatusSchema,
-    database: healthStatusSchema,
-    redis: healthStatusSchema,
-  }),
+  livenessData: livenessDataSchema,
+  readinessData: readinessDataSchema,
 };
 
 export type HealthStatus = z.infer<typeof healthStatusSchema>;
-export type HealthDataResponse = z.infer<
-  typeof healthResponseSchema.healthData
->;
+export type LivenessData = z.infer<typeof livenessDataSchema>;
+export type ReadinessData = z.infer<typeof readinessDataSchema>;

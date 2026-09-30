@@ -49,9 +49,8 @@ WORKDIR /app
 RUN apk add --no-cache openssl libc6-compat dumb-init
 
 ENV NODE_ENV=production
-
-# Run container as non-root user
-USER node
+ENV PORT=3000
+ENV PATH="/app/node_modules/.bin:${PATH}"
 
 # Copy production dependencies and compiled outputs
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
@@ -65,7 +64,10 @@ COPY --chown=node:node --from=builder /app/apps/api/prisma ./apps/api/prisma
 
 WORKDIR /app/apps/api
 
-EXPOSE 4000
+# Run container as non-root user
+USER node
+
+EXPOSE 3000
 
 # dumb-init forwards SIGTERM/SIGINT signals to Node.js processes for graceful shutdown
 ENTRYPOINT ["dumb-init", "--"]

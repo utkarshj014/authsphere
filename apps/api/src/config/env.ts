@@ -3,40 +3,35 @@ import z from "zod";
 import { formatZodError } from "../common/errors/format-zod-error.js";
 import { parseDurationToMs } from "../common/utils/time.js";
 
-// Load test environment if running under Vitest, otherwise load default .env
-const envFile =
-  process.env.NODE_ENV === "test" ? "../../.env.test" : "../../.env";
-dotenv.config({ path: new URL(envFile, import.meta.url), quiet: true });
+// Load local/test environment files in non-production environments
+if (process.env.NODE_ENV !== "production") {
+  const envFile =
+    process.env.NODE_ENV === "test" ? "../../.env.test" : "../../.env";
+  dotenv.config({ path: new URL(envFile, import.meta.url), quiet: true });
+}
 
 const isWorker = process.env.APP_ROLE === "worker";
 
-// 1. Shared Infrastructure & Email Config (Required by both API & Worker)
+// 1. Shared Infrastructure (Required by both Express API & Background Worker)
 const sharedConfig = z.object({
   NODE_ENV: z
     .enum(["development", "production", "test"])
     .default("development"),
+  APP_ROLE: z.enum(["api", "worker"]).default("api"),
   FRONTEND_URL: z.url(),
   REDIS_URL: z.url(),
+});
+
+// 2. Email Worker Config (Only required by BullMQ background worker)
+const workerConfig = z.object({
   RESEND_API_KEY: z.string().min(1),
   EMAIL_FROM: z.string().min(1),
 });
 
-// 2. API Server, Database & Auth Config (Only required by Express API)
+// 3. API Server, Database & Auth Config (Only required by Express API)
 const apiConfig = z.object({
-  PORT: z.coerce.number().int().positive().default(4000),
-  DATABASE_URL: z.url(),
-  JWT_ACCESS_SECRET: z.string().min(1),
-  JWT_REFRESH_SECRET: z.string().min(1),
-  JWT_ACCESS_EXPIRES_IN: z.string().default("15m"),
-  JWT_REFRESH_EXPIRES_IN: z.string().default("30d"),
-  AUTH_REUSE_DELETION_MODE: z.enum(["SESSION", "GLOBAL"]).default("SESSION"),
-  AUTH_REFRESH_TOKEN_LEEWAY_SECONDS: z.coerce.number().int().min(0).default(30),
-  MFA_ENCRYPTION_KEY: z.string().min(16),
-  GOOGLE_CLIENT_ID: z.string().min(1),
-  GOOGLE_CLIENT_SECRET: z.string().min(1),
-  GITHUB_CLIENT_ID: z.string().min(1),
-  GITHUB_CLIENT_SECRET: z.string().min(1),
-  OAUTH_CALLBACK_BASE_URL: z.url(),
+  PORT: z.coerce.number().int().positive().default(3000),
+  HOST: z.string().default("0.0.0.0"),
   TRUST_PROXY: z
     .string()
     .optional()
@@ -54,24 +49,32 @@ const apiConfig = z.object({
       return trimmed;
     })
     .default("false"),
+  DATABASE_URL: z.url(),
+  JWT_ACCESS_SECRET: z.string().min(1),
+  JWT_REFRESH_SECRET: z.string().min(1),
+  JWT_ACCESS_EXPIRES_IN: z.string().default("15m"),
+  JWT_REFRESH_EXPIRES_IN: z.string().default("30d"),
+  AUTH_REUSE_DELETION_MODE: z.enum(["SESSION", "GLOBAL"]).default("SESSION"),
+  AUTH_REFRESH_TOKEN_LEEWAY_SECONDS: z.coerce.number().int().min(0).default(30),
+  MFA_ENCRYPTION_KEY: z.string().min(16),
+  GOOGLE_CLIENT_ID: z.string().min(1),
+  GOOGLE_CLIENT_SECRET: z.string().min(1),
+  GITHUB_CLIENT_ID: z.string().min(1),
+  GITHUB_CLIENT_SECRET: z.string().min(1),
+  OAUTH_CALLBACK_BASE_URL: z.url(),
 });
 
-const fullApiSchema = sharedConfig.extend(apiConfig.shape);
-const activeSchema = isWorker
-  ? sharedConfig.extend(apiConfig.partial().shape)
-  : fullApiSchema;
-
-const envSchema = activeSchema.transform((config) => ({
+const apiSchema = sharedConfig.extend(apiConfig.shape).transform((config) => ({
   ...config,
-  JWT_ACCESS_EXPIRES_IN_MS: parseDurationToMs(
-    config.JWT_ACCESS_EXPIRES_IN ?? "15m",
-  ),
-  JWT_REFRESH_EXPIRES_IN_MS: parseDurationToMs(
-    config.JWT_REFRESH_EXPIRES_IN ?? "30d",
-  ),
+  JWT_ACCESS_EXPIRES_IN_MS: parseDurationToMs(config.JWT_ACCESS_EXPIRES_IN),
+  JWT_REFRESH_EXPIRES_IN_MS: parseDurationToMs(config.JWT_REFRESH_EXPIRES_IN),
 }));
 
-const parsed = envSchema.safeParse(process.env);
+const workerSchema = sharedConfig.extend(workerConfig.shape);
+
+const activeSchema = isWorker ? workerSchema : apiSchema;
+
+const parsed = activeSchema.safeParse(process.env);
 
 if (!parsed.success) {
   const formattedErrors = formatZodError(parsed.error);
@@ -84,9 +87,13 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-export type EnvConfig = z.infer<typeof fullApiSchema> & {
+const fullSchema = sharedConfig
+  .extend(apiConfig.shape)
+  .extend(workerConfig.shape);
+
+export type EnvConfig = z.infer<typeof fullSchema> & {
   JWT_ACCESS_EXPIRES_IN_MS: number;
   JWT_REFRESH_EXPIRES_IN_MS: number;
 };
 
-export const env = parsed.data as unknown as EnvConfig;
+export const env = parsed.data as EnvConfig;

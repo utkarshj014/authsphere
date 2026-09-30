@@ -112,8 +112,8 @@ try {
   );
 
   // Start listening on the port after DB and Redis connections are ready
-  server.listen(env.PORT, () => {
-    logger.info(`Server is up and running on http://localhost:${env.PORT}`);
+  server.listen(env.PORT, env.HOST, () => {
+    logger.info(`Server is up and running on ${env.HOST}:${env.PORT}`);
   });
 } catch (startupError) {
   logger.error({ err: startupError }, "Failed to start application");

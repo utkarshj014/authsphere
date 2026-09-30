@@ -22,6 +22,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-063: Higher-Order Controller Factories for Provider-Agnostic OAuth Handlers](#adr-063--higher-order-controller-factories-for-provider-agnostic-oauth-handlers)
 - [ADR-073: Provider-Agnostic Email Abstraction with Resend Implementation](#adr-073--provider-agnostic-email-abstraction-with-resend-implementation)
 - [ADR-074: Unified Redis Architecture (ioredis Migration)](#adr-074--unified-redis-architecture-ioredis-migration)
+- [ADR-077: Process-Aware Environment Partitioning and Least Privilege Secret Isolation](#adr-077--process-aware-environment-partitioning-and-least-privilege-secret-isolation)
 
 </details>
 
@@ -136,7 +137,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-076)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-077)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -214,6 +215,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-074: Unified Redis Architecture (ioredis Migration)](#adr-074--unified-redis-architecture-ioredis-migration)
 - [ADR-075: Email Worker Retry Policy and Failed-Job Retention](#adr-075--email-worker-retry-policy-and-failed-job-retention)
 - [ADR-076: Refresh Token Rotation with Atomic CAS and Ephemeral Leeway Window](#adr-076--refresh-token-rotation-with-atomic-cas-and-ephemeral-leeway-window)
+- [ADR-077: Process-Aware Environment Partitioning and Least Privilege Secret Isolation](#adr-077--process-aware-environment-partitioning-and-least-privilege-secret-isolation)
 
 </details>
 
@@ -454,16 +456,20 @@ Intercept `SIGINT`, `SIGTERM`, `uncaughtException`, and `unhandledRejection` in 
 
 ### Context
 
-Container orchestrators rely on liveness/readiness probes. Health check failures should not trigger crash loops.
+Container orchestrators and AWS Application Load Balancers (ALBs) require health probes. Health check probe failure on external dependency blips must not trigger cascading container termination or target group deregulation.
 
 ### Decision
 
-`/health` executes active checks against PostgreSQL (`prisma.$queryRaw`) and Redis (`redis.ping()`), returning `200 OK` or `503 Service Unavailable` with granular `"UP"`/`"DOWN"` status per dependency.
+Decouple process liveness from external dependency readiness:
+
+- `GET /health/live` (and root alias `GET /health`): Pure in-memory process liveness probe returning `200 OK` with `{ status: "UP", timestamp }`. Zero database or Redis I/O.
+- `GET /health/ready`: Dependency readiness probe concurrently evaluating PostgreSQL (`prisma.$queryRaw\`SELECT 1\``) and Redis (`redis.ping()`). Returns `200 OK`when all dependencies are UP, or`503 Service Unavailable` when any dependency is DOWN.
 
 ### Rationale
 
-- **Orchestrator Compatibility:** Provides standard liveness/readiness probes for Kubernetes, Docker, and cloud load balancers.
-- **Dependency Isolation:** Identifies which infrastructure dependency is degraded without crashing the API process.
+- **AWS ALB Alignment:** AWS strongly recommends ALB health checks be lightweight and verify process responsiveness. Deep dependency probes on ALBs cause catastrophic target group deregulation during transient database maintenance.
+- **Granular Observability:** Returns explicit per-dependency status (`database`, `redis`) on readiness failures without crashing the API process.
+- **Driver-Managed Resilience:** Leverages PostgreSQL connection pool timeouts and Redis client timeouts natively without artificial wrapping.
 
 ---
 
@@ -2025,7 +2031,7 @@ export const recordSecurityEvent = async (
 ### Rationale
 
 - **Multi-Phase Traceability:** Preserves the complete authentication provenance across two-factor challenges.
-- **Sub-Millisecond Query Performance:** Composite index on `(userId, createdAt DESC)` eliminates table scans for user event history.
+- **Index-Backed Query Execution:** Composite index on `(userId, createdAt DESC)` eliminates table scans for user event history.
 - **Zero Code Duplication:** Standardized helper eliminates object-spread boilerplate and guarantees uniform optional field mapping.
 
 ---
@@ -2299,4 +2305,40 @@ if (rotated.count > 0) {
 - **Ghost Logout Elimination:** Ephemeral leeway caching collapses concurrent SPA requests into a single synchronized token pair, preventing false-positive revocations across parallel tabs.
 - **Zero Multi-Statement Transaction Overhead:** Single-statement atomic Compare-And-Swap leverages PostgreSQL's row-level write lock, preventing race conditions without database transaction overhead.
 - **Durable Replay Attack Detection:** Any presentation of an invalidated token outside the 30-second grace window triggers immediate session revocation, upholding OAuth 2.0 Security BCP (RFC 6819 / RFC 8725).
-- **Sub-Millisecond Response Collapsing:** Concurrent requests within the leeway window resolve directly from Redis memory in $O(1)$ time without database queries.
+- **In-Memory Response Collapsing:** Concurrent requests within the leeway window resolve directly from Redis memory in $O(1)$ time without database queries.
+
+---
+
+## ADR-077 — Process-Aware Environment Partitioning and Least Privilege Secret Isolation
+
+**Status:** Accepted _(Extends ADR-003, ADR-004)_
+
+### Context
+
+AuthSphere compiles a single unified container image (`ghcr.io/utkarshj014/authsphere:v1`) that powers two distinct runtime workloads: an internet-facing Express REST API and an asynchronous BullMQ background email worker. Each process role requires a fundamentally different subset of credentials. The public HTTP API requires database connection strings, JWT signing keys, and OAuth provider secrets, but never initiates outbound email dispatches. Conversely, the private background worker requires email provider API keys and sender addresses, but never interacts with the primary PostgreSQL database or token signing keys.
+
+Jamming all environment variables into a single monolithic schema or forcing them across both processes creates a severe breach of the Principle of Least Privilege. Exposing email dispatch keys inside public-facing HTTP containers increases threat surface unnecessarily, while requiring database credentials inside background workers prevents isolated worker deployment. The configuration subsystem requires role-aware schema partitioning that enforces strict credential boundaries at process boot without requiring separate Docker images or runtime fallback hacks.
+
+### Decision
+
+Partition environment configuration in `apps/api/src/config/env.ts` into three discrete Zod schemas: `sharedConfig` (infrastructure common to both: `NODE_ENV`, `APP_ROLE`, `FRONTEND_URL`, `REDIS_URL`), `apiConfig` (database, JWT, OAuth, MFA), and `workerConfig` (`RESEND_API_KEY`, `EMAIL_FROM`).
+
+At startup, the runtime inspects `process.env.APP_ROLE` to construct a dedicated active schema. The API server strictly validates `sharedConfig + apiConfig`, while the background worker strictly validates `sharedConfig + workerConfig`. Zod's default undeclared key-stripping automatically purges any extraneous variables passed to a container, ensuring neither workload leaks or accesses credentials belonging to the other.
+
+```typescript
+const apiSchema = sharedConfig.extend(apiConfig.shape).transform((c) => ({
+  ...c,
+  JWT_ACCESS_EXPIRES_IN_MS: parseDurationToMs(c.JWT_ACCESS_EXPIRES_IN),
+  JWT_REFRESH_EXPIRES_IN_MS: parseDurationToMs(c.JWT_REFRESH_EXPIRES_IN),
+}));
+const workerSchema = sharedConfig.extend(workerConfig.shape);
+const activeSchema = isWorker ? workerSchema : apiSchema;
+const parsed = activeSchema.safeParse(process.env);
+```
+
+### Rationale
+
+- **Principle of Least Privilege:** Public API containers never hold or require third-party email dispatch keys (`RESEND_API_KEY`), and background workers never hold database credentials (`DATABASE_URL`).
+- **Unified Container Portability:** A single immutable container image runs either role simply by declaring `APP_ROLE`, eliminating multi-image build complexity in CI/CD.
+- **Natural Secret Stripping:** Leverages Zod's native undeclared key stripping to discard cross-role environment pollution without fragile `.partial()` extensions or defensive runtime fallback hacks.
+- **Fail-Fast Process Boot:** Each process role immediately validates its exact mandatory credentials at boot (`process.exit(1)`), preventing silent runtime failures during user requests or background job processing.

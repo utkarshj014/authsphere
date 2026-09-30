@@ -7,7 +7,7 @@ Production-grade Authentication & Authorization Platform.
 ## Documentation
 
 - [System Architecture & Design](./docs/ARCHITECTURE.md) — Topology, component boundaries, database ERD, and core sequence flows.
-- [Architecture Decision Records (ADR)](./docs/Engineering-Decisions.md) — Comprehensive log of 76 architectural decisions, security trade-offs, and technical rationale.
+- [Architecture Decision Records (ADR)](./docs/Engineering-Decisions.md) — Comprehensive log of 77 architectural decisions, security trade-offs, and technical rationale.
 - [OAuth 2.0 Reference](./docs/OAUTH.md) — Identity resolution matrix, anti-replay state verification, and provider integrations.
 - [Testing Architecture & Verification Reference](./docs/TESTING.md) — Hermetic test environment, 3-layer test pyramid, security invariant matrix, and execution guide.
 
@@ -39,7 +39,7 @@ authsphere/
 ### 2. Start Infrastructure
 
 ```bash
-docker compose -f docker/docker-compose.infra.yml up -d
+docker compose -f docker/docker-compose.dev.yml up -d
 ```
 
 ### 3. Environment Setup
@@ -63,8 +63,11 @@ npx --prefix apps/api prisma db seed
 ### 5. Start Development Servers
 
 ```bash
-# Start API service
+# Start API service (Express REST API)
 npm run dev --workspace=@authsphere/api
+
+# (Optional) Start Email Worker (BullMQ background consumer)
+npm run dev:email-worker --workspace=@authsphere/api
 
 # Start Web application
 npm run dev --workspace=@authsphere/web

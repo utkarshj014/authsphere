@@ -31,9 +31,9 @@ AuthSphere's testing suite is engineered around **high-signal verification, modu
 - **Serial Execution Reliability:** Test files execute serially (`fileParallelism: false`) to eliminate state leakage, cross-test race conditions, and database deadlocks `[ADR-070]`.
 
 ```text
-Suite Status: 18 test files (100% passing)
-Total Tests:  174 passed (174 tests total)
-Architecture: Streamlined, DRY, Modular (7 Unit, 8 Integration, 3 E2E)
+Suite Status: 19 test files (100% passing)
+Total Tests:  185 passed (185 tests total)
+Architecture: Streamlined, DRY, Modular (7 Unit, 9 Integration, 3 E2E)
 Framework:    Vitest 4.x + Supertest 7.x + V8 Coverage
 Runtime:      Node.js >22 ESM
 ```
@@ -48,7 +48,7 @@ The suite is structured into three practical, consolidated layers, establishing 
 graph TD
     subgraph TP ["Test Pyramid"]
         E2E["Layer 3: E2E User Journeys (3 files, 6 tests)"]
-        INT["Layer 2: Critical Integration Tests (8 files, 119 tests)"]
+        INT["Layer 2: Critical Integration Tests (9 files, 130 tests)"]
         UNIT["Layer 1: Focused Unit Tests (7 files, 49 tests)"]
     end
 
@@ -78,7 +78,7 @@ Fast, pure-function tests executing in microseconds without external I/O, databa
 | `tests/unit/email-queue.test.ts`     | BullMQ Queue Producer Operations                   | Type-safe enqueue helpers, payload contract validation, and correct job type routing `[ADR-072]`.                                                                           |
 | `tests/unit/resend-provider.test.ts` | Resend Provider Adapter & Error Normalization      | Message ID dispatch, permanent error classification (validation/domain), transient error classification (rate limits/server), and transport exception bubbling `[ADR-073]`. |
 
-### Layer 2: Critical Integration Tests (8 Files, 119 Tests)
+### Layer 2: Critical Integration Tests (9 Files, 130 Tests)
 
 End-to-end HTTP pipeline tests traversing Express routing, middleware, controllers, services, repositories, PostgreSQL, and Redis:
 
@@ -91,6 +91,7 @@ End-to-end HTTP pipeline tests traversing Express routing, middleware, controlle
 | **Active Sessions**     | `tests/integration/sessions/sessions.test.ts`            | Metadata introspection (`GET /sessions`), sensitive token hash omission, foreign session revocation defense (403 Forbidden), cookie clearing on self-revocation `[ADR-068]`.                                                                                                                                                                          |
 | **Roles & Permissions** | `tests/integration/roles/roles.test.ts`                  | Dynamic permission assignment (`PUT /roles/:name/permissions`), admin role immutable protection, Redis permission cache invalidation `[ADR-035, ADR-036]`.                                                                                                                                                                                            |
 | **Security Middleware** | `tests/integration/security/security-middleware.test.ts` | Hybrid CORS & `Sec-Fetch-Site` origin protection, Redis-backed fixed-window rate limiting with IETF headers, Helmet headers (`HSTS`, `CSP`, `X-Frame-Options: DENY`), structured JSON error responses `[ADR-050, ADR-055, ADR-056]`.                                                                                                                  |
+| **Health Checks**       | `tests/integration/health/health.test.ts`                | Lightweight ALB liveness probe (`/health/live`, `/health`) with zero external I/O, PostgreSQL & Redis readiness probes (`/health/ready`) with fail-safe degradation responses `[ADR-011]`.                                                                                                                                                            |
 | **Resilience**          | `tests/integration/resilience/resilience.test.ts`        | Fail-open rate limiter when Redis disconnects, race-condition resistance on token rotation with leeway grace window, idempotent concurrent email verification & password reset, Last-Admin demotion protection via row-locking, cleanup helper invariant verification, and Prisma P2002 duplicate translation `[ADR-041, ADR-067, ADR-070, ADR-076]`. |
 
 ### Layer 3: End-to-End User Journeys (3 Files, 6 Tests)
@@ -151,9 +152,11 @@ Redis Test DB Index: redis://localhost:6379/1
 `apps/api/src/config/env.ts` intercepts `NODE_ENV === "test"` and dynamically loads `.env.test`:
 
 ```typescript
-const envFile =
-  process.env.NODE_ENV === "test" ? "../../.env.test" : "../../.env";
-dotenv.config({ path: new URL(envFile, import.meta.url) });
+if (process.env.NODE_ENV !== "production") {
+  const envFile =
+    process.env.NODE_ENV === "test" ? "../../.env.test" : "../../.env";
+  dotenv.config({ path: new URL(envFile, import.meta.url), quiet: true });
+}
 ```
 
 ### Deterministic Database Reset (`cleanTestState`)
@@ -255,6 +258,7 @@ npm run test:coverage
 
 | Module / Layer                  | Statements | Branches   | Functions  | Lines      |
 | :------------------------------ | :--------- | :--------- | :--------- | :--------- |
+| **`src/modules/health`**        | **100%**   | **100%**   | **100%**   | **100%**   |
 | **`src/modules/sessions`**      | **100%**   | **100%**   | **100%**   | **100%**   |
 | **`src/lib/jwt`**               | **100%**   | **100%**   | **100%**   | **100%**   |
 | **`src/modules/email`**         | **98.38%** | **80.95%** | **93.33%** | **100%**   |
@@ -265,10 +269,9 @@ npm run test:coverage
 | **`src/common/errors`**         | **93.33%** | **68.75%** | **100%**   | **92.85%** |
 | **`src/modules/authorization`** | **93.10%** | **83.33%** | **100%**   | **92.85%** |
 | **`src/modules/roles`**         | **90.32%** | **33.33%** | **100%**   | **90.32%** |
-| **`src/modules/health`**        | **88.88%** | **75.00%** | **100%**   | **88.88%** |
-| **`src/modules/auth`**          | **85.71%** | **71.27%** | **90.12%** | **85.65%** |
+| **`src/modules/auth`**          | **86.11%** | **72.87%** | **90.12%** | **86.05%** |
 | **`src/modules/auth/oauth`**    | **54.89%** | **38.88%** | **68.42%** | **55.49%** |
-| **Overall Suite**               | **84.96%** | **66.40%** | **91.20%** | **85.10%** |
+| **Overall Suite**               | **85.50%** | **67.24%** | **91.28%** | **85.65%** |
 
 ---
 
@@ -340,7 +343,10 @@ apps/api/
     │   └── factories.ts              # Precomputed Argon2id caching & entity factories (User, Session, MFA, OAuth)
     ├── unit/
     │   ├── crypto.test.ts            # Consolidated JWT, Argon2id Password, Token entropy, AES-256 MFA, Recovery codes
+    │   ├── email-queue.test.ts       # BullMQ Queue Producer operations & payload contract validation
+    │   ├── email-worker.test.ts      # BullMQ Worker job processing, HTML template rendering & unrecoverable errors
     │   ├── openapi.test.ts           # OpenAPI 3.1 spec generation, tags, cookie security schemes, and Express ↔ OpenAPI 1:1 route parity
+    │   ├── resend-provider.test.ts   # Resend provider adapter, error classification & transient retry mapping
     │   ├── security.test.ts          # Consolidated TOTP & Request ID tracking
     │   └── validation.test.ts        # Consolidated Schemas & Time duration parsing
     ├── integration/
@@ -348,6 +354,8 @@ apps/api/
     │   │   └── auth.test.ts          # Complete Auth suite (Signup, Login, Logout, Magic Link, Passwords, Refresh, Events)
     │   ├── authorization/
     │   │   └── rbac.test.ts          # RBAC, Admin Guard, Self-Demotion & Last Admin Invariants
+    │   ├── health/
+    │   │   └── health.test.ts        # ALB zero-I/O liveness probe & dependency readiness probe
     │   ├── mfa/
     │   │   └── mfa.test.ts           # Complete MFA lifecycle suite (Setup, Verify, Disable, Regenerate)
     │   ├── oauth/
