@@ -2,7 +2,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.unmock("../../src/modules/email/email.queue.js");
 
+vi.mock("../../src/lib/queue.js", () => ({
+  EMAIL_QUEUE_NAME: "authsphere-email",
+  emailQueue: {
+    add: vi.fn().mockResolvedValue({} as any),
+  },
+  createBullMQConnection: vi.fn(),
+}));
+
+vi.mock("../../src/modules/email/email.service.js", () => ({
+  emailService: {
+    processJob: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 import { emailQueue } from "../../src/lib/queue.js";
+import { emailService } from "../../src/modules/email/email.service.js";
 import {
   enqueueVerificationEmail,
   enqueuePasswordResetEmail,
@@ -16,7 +31,7 @@ import {
 
 describe("Email Queue Enqueue Operations", () => {
   beforeEach(() => {
-    vi.spyOn(emailQueue, "add").mockResolvedValue({} as any);
+    vi.clearAllMocks();
   });
 
   it("enqueueVerificationEmail adds a verification job with correct data", async () => {
@@ -66,5 +81,49 @@ describe("Email Queue Enqueue Operations", () => {
         eventType: SECURITY_NOTIFICATION_EVENTS.PASSWORD_CHANGED,
       },
     );
+  });
+
+  it("dispatches email job inline asynchronously when QUEUE_DRIVER is inline", async () => {
+    const { env } = await import("../../src/config/env.js");
+    const originalDriver = env.QUEUE_DRIVER;
+    (env as any).QUEUE_DRIVER = "inline";
+
+    try {
+      await enqueueVerificationEmail("inline@example.com", "inline-tok-123");
+      expect(emailQueue.add).not.toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(emailService.processJob).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: EMAIL_JOB_TYPES.VERIFICATION,
+            email: "inline@example.com",
+            token: "inline-tok-123",
+          }),
+          expect.anything(),
+        );
+      });
+    } finally {
+      (env as any).QUEUE_DRIVER = originalDriver;
+    }
+  });
+
+  it("dispatches email job synchronously when QUEUE_DRIVER is sync", async () => {
+    const { env } = await import("../../src/config/env.js");
+    const originalDriver = env.QUEUE_DRIVER;
+    (env as any).QUEUE_DRIVER = "sync";
+
+    try {
+      await enqueueVerificationEmail("sync@example.com", "sync-tok-456");
+      expect(emailQueue.add).not.toHaveBeenCalled();
+      expect(emailService.processJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: EMAIL_JOB_TYPES.VERIFICATION,
+          email: "sync@example.com",
+          token: "sync-tok-456",
+        }),
+        expect.anything(),
+      );
+    } finally {
+      (env as any).QUEUE_DRIVER = originalDriver;
+    }
   });
 });

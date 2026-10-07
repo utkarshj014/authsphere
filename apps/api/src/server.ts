@@ -5,7 +5,6 @@ import app from "./app.js";
 import { logger } from "./lib/logger.js";
 import { prisma } from "./lib/prisma.js";
 import { redis } from "./lib/redis.js";
-import { emailQueue } from "./lib/queue.js";
 
 // Create HTTP server instance early
 const server = http.createServer(app);
@@ -43,15 +42,19 @@ const handleShutdown = async (signal: string) => {
       });
     }
 
-    logger.info(
-      "Disconnecting Prisma, Redis, and Email Queue connections concurrently...",
-    );
+    logger.info("Disconnecting infrastructure connections concurrently...");
 
-    const results = await Promise.allSettled([
-      prisma.$disconnect(),
-      redis.quit(),
-      emailQueue.close(),
-    ]);
+    const shutdownTasks: { name: string; task: Promise<unknown> }[] = [
+      { name: "Prisma", task: prisma.$disconnect() },
+      { name: "Redis", task: redis.quit() },
+    ];
+
+    if (env.QUEUE_DRIVER === "bullmq") {
+      const { emailQueue } = await import("./lib/queue.js");
+      shutdownTasks.push({ name: "EmailQueue", task: emailQueue.close() });
+    }
+
+    const results = await Promise.allSettled(shutdownTasks.map((t) => t.task));
 
     let resourceShutdownError = false;
     let errorMessage = "";
@@ -59,8 +62,7 @@ const handleShutdown = async (signal: string) => {
     results.forEach((res, index) => {
       if (res.status === "rejected") {
         resourceShutdownError = true;
-        const resource =
-          index === 0 ? "Prisma" : index === 1 ? "Redis" : "EmailQueue";
+        const resource = shutdownTasks[index]?.name ?? `Resource#${index}`;
         const reasonStr =
           res.reason instanceof Error ? res.reason.message : String(res.reason);
         errorMessage += `Error disconnecting ${resource} cleanly: ${reasonStr}\n`;

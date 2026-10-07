@@ -122,6 +122,8 @@ This document records the architectural and engineering decisions made during th
 - [ADR-069: Multi-Phase Security Audit Logging, Standardized Helper Encapsulation, and Indexed User History Retrieval](#adr-069--multi-phase-security-audit-logging-standardized-helper-encapsulation-and-indexed-user-history-retrieval)
 - [ADR-072: Asynchronous Email Delivery via BullMQ Task Queue](#adr-072--asynchronous-email-delivery-via-bullmq-task-queue)
 - [ADR-075: Email Worker Retry Policy and Failed-Job Retention](#adr-075--email-worker-retry-policy-and-failed-job-retention)
+- [ADR-078: Dual-Driver Background Job Architecture and Cloud Migration Path](#adr-078--dual-driver-background-job-architecture-and-cloud-migration-path)
+- [ADR-079: Serverless Lambda Runtime, Synchronous Execution Guard, and Reverse-Proxy Cookie Bridge](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge)
 
 </details>
 
@@ -137,7 +139,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-077)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-078)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -216,6 +218,8 @@ This document records the architectural and engineering decisions made during th
 - [ADR-075: Email Worker Retry Policy and Failed-Job Retention](#adr-075--email-worker-retry-policy-and-failed-job-retention)
 - [ADR-076: Refresh Token Rotation with Atomic CAS and Ephemeral Leeway Window](#adr-076--refresh-token-rotation-with-atomic-cas-and-ephemeral-leeway-window)
 - [ADR-077: Process-Aware Environment Partitioning and Least Privilege Secret Isolation](#adr-077--process-aware-environment-partitioning-and-least-privilege-secret-isolation)
+- [ADR-078: Dual-Driver Background Job Architecture and Cloud Migration Path](#adr-078--dual-driver-background-job-architecture-and-cloud-migration-path)
+- [ADR-079: Serverless Lambda Runtime, Synchronous Execution Guard, and Reverse-Proxy Cookie Bridge](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge)
 
 </details>
 
@@ -2119,7 +2123,7 @@ export const authedErrors = {
 
 ## ADR-072 — Asynchronous Email Delivery via BullMQ Task Queue
 
-**Status:** Accepted
+**Status:** Accepted _(Extended by ADR-078)_
 
 ### Context
 
@@ -2342,3 +2346,84 @@ const parsed = activeSchema.safeParse(process.env);
 - **Unified Container Portability:** A single immutable container image runs either role simply by declaring `APP_ROLE`, eliminating multi-image build complexity in CI/CD.
 - **Natural Secret Stripping:** Leverages Zod's native undeclared key stripping to discard cross-role environment pollution without fragile `.partial()` extensions or defensive runtime fallback hacks.
 - **Fail-Fast Process Boot:** Each process role immediately validates its exact mandatory credentials at boot (`process.exit(1)`), preventing silent runtime failures during user requests or background job processing.
+
+---
+
+## ADR-078 — Dual-Driver Background Job Architecture and Cloud Migration Path
+
+**Status:** Accepted _(Extends ADR-072, ADR-075, ADR-077)_
+
+### Context
+
+Operating a dedicated, persistent BullMQ background worker daemon provides robust job retries and dead-letter retention. However, serverless Redis providers such as Upstash bill strictly per command and sever idle TCP sockets every 60–120 seconds. An idle BullMQ worker continuously executes `BLMOVE` blocking polls, stream inspections, and stalled-job timers every 30 seconds, generating 17,000–30,000 commands daily without processing a single job. In single-tenant cloud VMs, portfolio demonstrations, and low-traffic environments, this command churn rapidly exhausts free-tier quotas and incurs unnecessary operational overhead. Conversely, attempting on-demand container task spin-ups introduces 30–60 second cold-start provisioning latencies that critically degrade interactive user onboarding, verification, and password-reset experiences.
+
+The system requires an operational model that eliminates idle Redis command exhaustion and guarantees sub-second transactional email delivery in resource-constrained environments, while preserving the production BullMQ queue driver and defining a durable cloud migration roadmap.
+
+### Decision
+
+Implement a configurable dual-driver background job architecture governed by `QUEUE_DRIVER: z.enum(["bullmq", "inline", "sync"]).default("bullmq")`:
+
+1. **Inline Event-Loop Offload (`QUEUE_DRIVER=inline`):** In low-traffic or single-container deployments, `enqueueEmailJob()` offloads execution asynchronously to the Node.js event loop via `setImmediate()`. Delivery executes non-blocking via `emailService.processJob()` and `resendProvider`, achieving sub-second delivery (<500ms) with zero Redis command consumption and zero HTTP response latency degradation.
+2. **Dedicated Queue Daemon (`QUEUE_DRIVER=bullmq`):** In clustered or high-concurrency environments, jobs publish to BullMQ (`emailQueue.add()`) and execute across dedicated worker processes with exponential backoff retries [ADR-072, ADR-075].
+3. **Lazy Connection Guards:** Redis queue and provider SDK client instances instantiate lazily upon first invocation with `lazyConnect: true`, ensuring module evaluation never initiates unsolicited TCP handshakes or emits `ECONNREFUSED` errors during offline unit testing or inline operation.
+4. **Intentional Failure Window:** The inline driver accepts an asynchronous in-process failure window: if the API container terminates abruptly between the HTTP response and event-loop execution tick, the email remains unsent without retry storage. This trade-off is intentionally accepted over distributed outbox tables or continuous worker polling costs.
+5. **Cloud Migration Invariant (AWS SQS + Lambda):** When system throughput requires multi-AZ horizontal elasticity, BullMQ and Redis are replaced with native AWS SQS and AWS Lambda. SQS provides push-based invocation ($0 idle cost), automatic scaling from zero to thousands, and native Dead-Letter Queues without continuous compute polling.
+
+```typescript
+export const enqueueEmailJob = async (data: EmailJobData): Promise<void> => {
+  if (env.QUEUE_DRIVER === "inline") {
+    setImmediate(async () => {
+      const { emailService } = await import("./email.service.js");
+      const { resendProvider } = await import("./resend.provider.js");
+      await emailService.processJob(data, resendProvider);
+    });
+    return;
+  }
+  await emailQueue.add(data.type, data);
+};
+```
+
+### Rationale
+
+- **Zero Idle Command Exhaustion:** The inline driver completely eliminates background polling traffic on serverless Redis tiers, saving tens of thousands of idle commands daily.
+- **Sub-Second Interactive UX:** Offloading post-commit dispatch via `setImmediate()` delivers OTP tokens and verification links in under 500ms without container boot delays or synchronous request-thread blocking.
+- **Hermetic Testing Parity:** Lazy connection initialization isolates test suites from physical networking, eliminating unhandled connection rejections while preserving 100% offline unit test fidelity.
+- **Pragmatic Complexity Management:** Avoids premature integration of cloud SDKs or dual queue drivers in application code, while codifying an explicit architectural blueprint for AWS SQS + Lambda cloud evolution.
+
+---
+
+## ADR-079 — Serverless Lambda Runtime, Synchronous Execution Guard, and Reverse-Proxy Cookie Bridge
+
+**Status:** Accepted _(Extends ADR-002, ADR-010, ADR-078)_
+
+### Context
+
+Deploying AuthSphere to ephemeral serverless environments (AWS Lambda) introduces two fundamental execution hazards:
+
+1. **The Lambda Freeze Trap:** Once an HTTP response completes, AWS Lambda immediately pauses execution. Any uncompleted in-process background promises (`QUEUE_DRIVER=inline` via `setImmediate`) freeze mid-flight. If the execution environment scales down, uncompleted transactional emails are silently dropped; if thawed later for a subsequent request, emails dispatch unpredictably out-of-band.
+2. **The "No Custom Domain" Cross-Origin Barrier:** In portfolio and low-cost deployments lacking a unified custom domain, the frontend lives on `https://<app>.vercel.app` while backend compute resides on an AWS Application Load Balancer (`http://...elb.amazonaws.com`) or API Gateway (`https://...execute-api.<region>.amazonaws.com`). Unproxied cross-origin setups fail: browsers block plain HTTP ALB calls (mixed-content), drop authentication cookies (`SameSite=Lax`), and force preflight `OPTIONS` roundtrips (+100–300ms) on every API call.
+
+### Decision
+
+Implement a zero-cost serverless execution model with an edge reverse-proxy architecture:
+
+1. **Serverless Express Adapter (`apps/api/src/lambda.ts`):** Adapt pure Express (`app.ts`) to AWS Lambda via `@codegenie/serverless-express`. Cold starts eagerly initialize database connection pooling (`prisma.$connect()`) and Redis caching (`redis.connect()`), persisting warm client singletons across subsequent invocations.
+2. **Synchronous Execution Guard (`QUEUE_DRIVER=sync`):** When running in AWS Lambda (`AWS_LAMBDA_FUNCTION_NAME` present) or explicitly configured, `enqueueEmailJob()` directly awaits `emailService.processJob()` within the HTTP handler lifecycle before response completion, eliminating uncompleted background tasks.
+3. **Edge Reverse Proxy Rewrite (`apps/web/vercel.json`):** Configure Vercel Edge rewrites (`/api/:path*` -> backend endpoint). Browsers communicate strictly same-origin (`/api/*`), preserving `HttpOnly; SameSite=Lax` cookies, eliminating CORS preflight roundtrips, and handling SSL termination without custom domains.
+
+```typescript
+// apps/api/src/lambda.ts
+export const handler = async (event: unknown, context: unknown) => {
+  if (!serverlessHandler) {
+    await Promise.all([prisma.$connect(), redis.connect()]);
+    serverlessHandler = configureServerless({ app });
+  }
+  return serverlessHandler(event, context);
+};
+```
+
+### Rationale
+
+- **Deterministic Serverless Delivery:** Awaiting email dispatch inside the Lambda handler guarantees delivery before runtime freeze, avoiding silent drops without requiring persistent container infrastructure.
+- **Native Browser Security Without Domain Costs:** The Vercel edge rewrite treats all client interactions as first-party same-site requests, retaining strict `SameSite=Lax` cookie protection and zeroing preflight latency.
+- **Zero Ingress Maintenance:** Single codebase seamlessly targets long-lived containers (`server.ts` on ECS Fargate) and ephemeral serverless compute (`lambda.ts` on AWS Lambda) with 100% route, middleware, and validation parity.

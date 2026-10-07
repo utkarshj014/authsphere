@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - dev
+      - main
   pull_request:
     branches:
       - main
@@ -65,6 +66,7 @@ jobs:
       TRUST_PROXY: false
       RESEND_API_KEY: resend_test_dummy_key_for_testing
       EMAIL_FROM: AuthSphere <noreply@authsphere.dev>
+      QUEUE_DRIVER: inline
 
     steps:
       - name: Checkout

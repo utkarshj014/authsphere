@@ -1,6 +1,6 @@
 # Architecture & System Design — AuthSphere
 
-This document provides a comprehensive overview of **AuthSphere's** system architecture, data models, component interactions, and end-to-end data/user flows. For specific architectural trade-offs, historical context, and design decisions, refer to [Engineering-Decisions.md](./Engineering-Decisions.md).
+This document provides a comprehensive overview of **AuthSphere's** system architecture, data models, component interactions, and end-to-end data/user flows. For deployment topologies (ECS Fargate vs. AWS Lambda) and cloud infrastructure, see [DEPLOYMENT.md](./DEPLOYMENT.md). For specific architectural trade-offs, historical context, and design decisions, refer to [Engineering-Decisions.md](./Engineering-Decisions.md).
 
 ---
 
@@ -21,11 +21,17 @@ authsphere/ (Monorepo Root)
 │   │       ├── middlewares/  # Global & request-level middlewares
 │   │       ├── modules/      # Domain feature modules (auth, sessions, roles, users, health, email) & co-located *.openapi.ts
 │   │       ├── types/        # Global Express ambient declarations
-│   │       └── workers/      # Standalone background worker processes (email.worker.ts)
-│   └── web/                  # React & Vite frontend application
+│   │       ├── workers/      # Standalone background worker processes (email.worker.ts)
+│   │       ├── app.ts        # Pure Express application setup
+│   │       ├── server.ts     # HTTP server entrypoint (ECS Fargate container)
+│   │       └── lambda.ts     # AWS Lambda serverless entrypoint (@codegenie/serverless-express)
+│   └── web/                  # React & Vite frontend application (Vercel edge proxy)
 ├── packages/
 │   └── shared/               # Shared domain constants (ROLES, PERMISSIONS, OAUTH_PROVIDERS, SECURITY_EVENT_TYPES) & types
-└── docker/                   # Container configurations (Development & Production Compose)
+├── infra/                    # Infrastructure as Code
+│   ├── ecs/                  # AWS ECS Task Definitions (API & Worker)
+│   └── lambda/               # AWS SAM / CloudFormation Template
+└── docker/                   # Container configurations (Local dev & infra compose)
 ```
 
 ---
@@ -71,13 +77,13 @@ graph TD
 
 ### Layer Responsibilities
 
-| Layer                   | Primary Responsibility                                                                                                                                          | Architectural Rule                                                                                                         |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Middleware Pipeline** | Request tracing, origin validation on mutations, global and route rate limiting, input parsing (16kb limit), schema validation, token verification, RBAC guards | Rejects malformed, oversized, untrusted-origin, rate-limited, or unauthorized requests before reaching domain controllers. |
-| **Controller**          | HTTP orchestration, extracting pre-validated input, setting/clearing cookies, returning standard JSON DTOs                                                      | Must contain zero business logic or SQL queries. Calls services.                                                           |
-| **Service**             | Core domain logic, cross-module orchestration, security decisions, MFA verification, session generation, cache invalidation                                     | Independent of Express `req`/`res`. Throws `AppError` subclasses.                                                          |
-| **Repository**          | Data access layer using Prisma 7 ORM and database transactions                                                                                                  | Encapsulates all SQL/Prisma operations. Handles `P2002` duplicate errors and executes atomic queries.                      |
-| **Infrastructure**      | Singletons for Database (Prisma + `pg`), Cache & Task Queues (`ioredis` + `BullMQ` [ADR-072, ADR-074]), Logging (Pino), Crypto (Argon2id, AES-256-GCM)          | Instantiated inside `src/lib/` and shared across modules. Worker process operates independently in `src/workers/`.         |
+| Layer                   | Primary Responsibility                                                                                                                                                     | Architectural Rule                                                                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Middleware Pipeline** | Request tracing, origin validation on mutations, global and route rate limiting, input parsing (16kb limit), schema validation, token verification, RBAC guards            | Rejects malformed, oversized, untrusted-origin, rate-limited, or unauthorized requests before reaching domain controllers.                    |
+| **Controller**          | HTTP orchestration, extracting pre-validated input, setting/clearing cookies, returning standard JSON DTOs                                                                 | Must contain zero business logic or SQL queries. Calls services.                                                                              |
+| **Service**             | Core domain logic, cross-module orchestration, security decisions, MFA verification, session generation, cache invalidation                                                | Independent of Express `req`/`res`. Throws `AppError` subclasses.                                                                             |
+| **Repository**          | Data access layer using Prisma 7 ORM and database transactions                                                                                                             | Encapsulates all SQL/Prisma operations. Handles `P2002` duplicate errors and executes atomic queries.                                         |
+| **Infrastructure**      | Singletons for Database (Prisma + `pg`), Cache & Task Queues (`ioredis` + `BullMQ` / `Inline` [ADR-072, ADR-074, ADR-078]), Logging (Pino), Crypto (Argon2id, AES-256-GCM) | Instantiated inside `src/lib/` and shared across modules. Worker process operates independently in `src/workers/` when `QUEUE_DRIVER=bullmq`. |
 
 ---
 
@@ -452,7 +458,7 @@ sequenceDiagram
 
 ### 4.7 Asynchronous Background Email Processing Flow
 
-Outbound emails are structurally decoupled from the synchronous HTTP request-response cycle via a BullMQ task queue backed by Redis `[ADR-072, ADR-074, ADR-075]`:
+Outbound emails are structurally decoupled from the synchronous HTTP request-response cycle via a configurable dual-driver architecture (`QUEUE_DRIVER=bullmq | inline`) `[ADR-072, ADR-074, ADR-075, ADR-078]`:
 
 ```mermaid
 sequenceDiagram
@@ -463,27 +469,41 @@ sequenceDiagram
     participant Worker as Email Worker (APP_ROLE=worker)
     participant Resend as Resend Email Gateway
 
-    Note over Client, Redis: Step 1: Post-Commit Best-Effort Enqueue
+    Note over Client, API: Step 1: Request Processing & DB Commit
     Client->>API: POST /auth/signup (or forgot-password / magic-link)
     API->>API: Execute & commit database transaction
-    API->>Redis: emailQueue.add(jobType, payload) [ADR-072]
     API-->>Client: 201 Created (Instant HTTP response, no email latency)
 
-    Note over Redis, Resend: Step 2: Asynchronous Dequeue & Worker Execution
-    Worker->>Redis: BullMQ worker polling / job dequeue [ADR-074]
-    Redis-->>Worker: EmailJob payload { type, to, data }
-    Worker->>Worker: Render responsive HTML email template
-    Worker->>Resend: POST /emails (Resend API key) [ADR-073, ADR-077]
-    Note over Worker, Resend: Observability Boundary
-    alt Submission Accepted by Provider
-        Resend-->>Worker: HTTP 200 OK { id: "msg_xxx" }
-        Worker->>Redis: Acknowledge job completion
-    else Transient Error (Rate Limit 429 / Server 5xx)
-        Resend-->>Worker: HTTP 429 / 5xx
-        Worker->>Redis: BullMQ exponential backoff retry (up to 4 retries across 5 total attempts) [ADR-075]
-    else Unrecoverable Error (Invalid Recipient / Domain)
-        Resend-->>Worker: HTTP 422 / 400
-        Worker->>Redis: UnrecoverableError: Move to failed-job retention storage [ADR-075]
+    alt QUEUE_DRIVER == bullmq (Dedicated Worker Mode) [ADR-072, ADR-075]
+        Note over API, Redis: Step 2A: BullMQ Queue Publication
+        API->>Redis: emailQueue.add(jobType, payload) [ADR-072]
+        Worker->>Redis: BullMQ worker polling / job dequeue [ADR-074]
+        Redis-->>Worker: EmailJob payload { type, to, data }
+        Worker->>Worker: Render responsive HTML email template
+        Worker->>Resend: POST /emails (Resend API key) [ADR-073, ADR-077]
+        Note over Worker, Resend: Observability Boundary
+        alt Submission Accepted by Provider
+            Resend-->>Worker: HTTP 200 OK { id: "msg_xxx" }
+            Worker->>Redis: Acknowledge job completion
+        else Transient Error (Rate Limit 429 / Server 5xx)
+            Resend-->>Worker: HTTP 429 / 5xx
+            Worker->>Redis: BullMQ exponential backoff retry (up to 4 retries across 5 total attempts) [ADR-075]
+        else Unrecoverable Error (Invalid Recipient / Domain)
+            Resend-->>Worker: HTTP 422 / 400
+            Worker->>Redis: UnrecoverableError: Move to failed-job retention storage [ADR-075]
+        end
+    else QUEUE_DRIVER == inline (In-Process Asynchronous Mode) [ADR-078]
+        Note over API, Resend: Step 2B: Event Loop Offload (Zero Redis Commands)
+        API->>API: setImmediate(async () => emailService.processJob())
+        API->>API: Render responsive HTML email template
+        API->>Resend: POST /emails (Resend API key) [ADR-073, ADR-078]
+        Note over API, Resend: Observability Boundary
+        alt Submission Accepted by Provider
+            Resend-->>API: HTTP 200 OK { id: "msg_xxx" }
+        else Delivery Failure
+            Resend-->>API: HTTP 4xx / 5xx Error
+            API->>API: Log structured error (Pino)
+        end
     end
 ```
 
@@ -553,8 +573,9 @@ sequenceDiagram
 - **Structured Logging**: Pino emits structured JSON logs with correlated `X-Request-Id` headers across request lifecycles `[ADR-009]`.
 - **Health Checks**: Decoupled liveness and readiness probes following AWS best practices. `/health/live` (and root alias `/health`) provides an in-memory, zero-I/O probe for AWS ALB target groups (returning `200 OK`), preventing cascading target group deregulation during transient dependency blips. `/health/ready` concurrently evaluates PostgreSQL (`prisma.$queryRaw`) and Redis (`redis.ping()`) connectivity, returning `200 OK` or `503 Service Unavailable` `[ADR-011]`.
 - **OpenAPI 3.1 & Swagger UI**: Code-first API specification derived from active Zod validation schemas via `@asteasolutions/zod-to-openapi`, served dynamically at `GET /openapi.json` and rendered at `GET /docs` via Swagger UI. Documentation declarations are isolated from request handlers in co-located `*.openapi.ts` files, with Express ↔ OpenAPI route synchronization enforced via automated parity tests. Document generation is memoized in production to avoid repeated schema traversal on subsequent requests while bypassing caching in development for live hot-reload feedback `[ADR-071]`.
-- **Asynchronous Email Task Queue**: Outbound email delivery is decoupled from the synchronous HTTP request-response cycle into a BullMQ queue backed by Redis with exponential backoff retries (up to 4 retries across 5 total attempts) and fast-failing unrecoverable error detection. Jobs are dispatched post-commit with best-effort publication, intentionally accepting an asynchronous failure window in exchange for operational simplicity, with failed jobs retained in Redis for inspection `[ADR-072, ADR-075]`.
-- **Redis Security Transit Perimeter**: Sensitive raw authentication credentials (verification tokens, password-reset tokens, and magic links) traverse Redis in background queue payloads. Consequently, Redis is classified as a sensitive data perimeter requiring TLS in transit, authenticated access, and network isolation `[ADR-072]`.
+- **Dual-Driver Background Queue**: Outbound email delivery is decoupled from the synchronous HTTP request-response cycle via a configurable dual-driver architecture (`QUEUE_DRIVER=bullmq | inline`). In clustered production, BullMQ backed by Redis provides asynchronous execution with exponential backoff (up to 4 retries across 5 attempts) and failed-job retention. In single-container cloud deployments or demos, the inline driver asynchronously offloads delivery via `setImmediate()`, eliminating 100% of idle Redis commands on serverless tiers (Upstash) while guaranteeing sub-second delivery (<500ms) `[ADR-072, ADR-075, ADR-078]`.
+- **Cloud Migration Roadmap (AWS SQS + Lambda)**: When traffic demands multi-AZ elasticity and autoscaling from zero, the background queue migrates to native AWS SQS and AWS Lambda, providing true zero-idle compute billing, push-based trigger invocation, and automated Dead-Letter Queues without continuous polling overhead `[ADR-078]`.
+- **Redis Security Transit Perimeter**: Sensitive raw authentication credentials (verification tokens, password-reset tokens, and magic links) traverse Redis when `QUEUE_DRIVER=bullmq`. Consequently, Redis is classified as a sensitive data perimeter requiring TLS in transit, authenticated access, and network isolation `[ADR-072, ADR-078]`.
 - **Provider-Agnostic Email System**: The application interacts exclusively with the `EmailProvider` contract; `resendProvider` handles API communication, enabling clean swapping of providers and mock injection for testing without network side-effects `[ADR-073]`.
 - **Unified Redis Client**: All Redis operations (atomic pipeline rate limiting, OAuth state, role caching, and BullMQ queues) are consolidated onto `ioredis`, eliminating duplicate client libraries and connection divergence `[ADR-074]`.
 - **Process-Aware Secret Isolation & Least Privilege**: `src/config/env.ts` partitions configuration into `sharedConfig` (infrastructure), `apiConfig` (database, JWT, OAuth, MFA), and `workerConfig` (Resend email credentials). At startup, `APP_ROLE` determines whether the process acts as the REST API or the background worker. Zod automatically strips non-required keys, ensuring the public-facing API container never holds or requires email dispatch keys, and the background worker container never holds database credentials `[ADR-003, ADR-004, ADR-077]`.

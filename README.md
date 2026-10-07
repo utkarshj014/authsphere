@@ -7,7 +7,8 @@ Production-grade Authentication & Authorization Platform.
 ## Documentation
 
 - [System Architecture & Design](./docs/ARCHITECTURE.md) — Topology, component boundaries, database ERD, and core sequence flows.
-- [Architecture Decision Records (ADR)](./docs/Engineering-Decisions.md) — Comprehensive log of 77 architectural decisions, security trade-offs, and technical rationale.
+- [Cloud Deployment & Serverless Guide](./docs/DEPLOYMENT.md) — AWS ECS Fargate, AWS Lambda, No-Custom-Domain Vercel Proxy, and Neon pooling.
+- [Architecture Decision Records (ADR)](./docs/Engineering-Decisions.md) — Comprehensive log of 78 architectural decisions, security trade-offs, and technical rationale.
 - [OAuth 2.0 Reference](./docs/OAUTH.md) — Identity resolution matrix, anti-replay state verification, and provider integrations.
 - [Testing Architecture & Verification Reference](./docs/TESTING.md) — Hermetic test environment, 3-layer test pyramid, security invariant matrix, and execution guide.
 
@@ -23,7 +24,7 @@ authsphere/
 ├── packages/
 │   └── shared/    # Domain constants (ROLES, PERMISSIONS) & shared types
 ├── docker/        # Development infrastructure (PostgreSQL, Redis)
-└── docs/          # Architecture, ADRs, OAuth, and Testing documentation
+└── docs/          # Architecture, ADRs, Deployment, OAuth, and Testing documentation
 ```
 
 ---
@@ -39,7 +40,11 @@ authsphere/
 ### 2. Start Infrastructure
 
 ```bash
+# Full local infrastructure (PostgreSQL 16 + Redis 8)
 docker compose -f docker/docker-compose.dev.yml up -d
+
+# OR lightweight cache-only (Redis 8 only, when connecting to remote Neon DB)
+# docker compose -f docker/docker-compose.infra.yml up -d
 ```
 
 ### 3. Environment Setup
@@ -66,7 +71,7 @@ npx --prefix apps/api prisma db seed
 # Start API service (Express REST API)
 npm run dev --workspace=@authsphere/api
 
-# (Optional) Start Email Worker (BullMQ background consumer)
+# (Optional) Start Email Worker (Required when QUEUE_DRIVER=bullmq; unnecessary when QUEUE_DRIVER=inline)
 npm run dev:email-worker --workspace=@authsphere/api
 
 # Start Web application

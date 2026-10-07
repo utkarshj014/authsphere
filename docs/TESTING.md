@@ -75,7 +75,7 @@ Fast, pure-function tests executing in microseconds without external I/O, databa
 | `tests/unit/validation.test.ts`      | Zod Boundary Schemas & Duration Parsers            | Email normalization, password complexity, UUIDv7 params, pagination offsets, and human-readable time conversion `[ADR-017, ADR-026, ADR-038]`.                              |
 | `tests/unit/openapi.test.ts`         | OpenAPI 3.1 Spec & Express Route Parity            | Document generation, cookie security schemes, and 1:1 bidirectional Express router parity invariant `[ADR-071]`.                                                            |
 | `tests/unit/email-worker.test.ts`    | Email Worker Job Processing & Provider Delegation  | HTML template rendering across all email types, provider delegation, error propagation, and unrecoverable failure detection `[ADR-072, ADR-073, ADR-075]`.                  |
-| `tests/unit/email-queue.test.ts`     | BullMQ Queue Producer Operations                   | Type-safe enqueue helpers, payload contract validation, and correct job type routing `[ADR-072]`.                                                                           |
+| `tests/unit/email-queue.test.ts`     | Dual-Driver Queue Operations (BullMQ & Inline)     | Type-safe enqueue helpers, payload contract validation, and routing across BullMQ and Inline drivers `[ADR-072, ADR-078]`.                                                  |
 | `tests/unit/resend-provider.test.ts` | Resend Provider Adapter & Error Normalization      | Message ID dispatch, permanent error classification (validation/domain), transient error classification (rate limits/server), and transport exception bubbling `[ADR-073]`. |
 
 ### Layer 2: Critical Integration Tests (9 Files, 130 Tests)
@@ -176,7 +176,7 @@ export async function cleanTestState() {
 
 ### In-Memory Email Spy Outbox
 
-AuthSphere decouples automated testing from third-party email delivery services (e.g. Resend, Nodemailer, AWS SES). In `tests/setup.ts`, the asynchronous BullMQ email queue (`email.queue.js`) is globally mocked using Vitest spies `[ADR-070, ADR-072]`:
+AuthSphere decouples automated testing from third-party email delivery services (e.g. Resend, Nodemailer, AWS SES). In `tests/setup.ts`, the asynchronous email queue (`email.queue.js`) is globally mocked using Vitest spies `[ADR-070, ADR-072, ADR-078]`:
 
 ```typescript
 vi.mock("../src/modules/email/email.queue.js", async () => {

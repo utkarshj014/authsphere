@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: AuthSphere - Serverless Express 5 REST API on AWS Lambda + HTTP API v2
+
+Globals:
+  Function:
+    Timeout: 15
+    MemorySize: 512
+    Runtime: nodejs22.x
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        NODE_ENV: production
+        APP_ROLE: api
+        QUEUE_DRIVER: sync
+        TRUST_PROXY: "true"
+
+Resources:
+  # HTTP API v2 (API Gateway)
+  AuthSphereHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+      CorsConfiguration:
+        AllowOrigins:
+          - "https://authsphere.vercel.app"
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-Request-Id
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+        AllowCredentials: true
+
+  # Lambda Function running Express API
+  AuthSphereApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: authsphere-api
+      CodeUri: ../../apps/api
+      Handler: dist/lambda.handler
+      Environment:
+        Variables:
+          DATABASE_URL: "{{resolve:ssm:/authsphere/DATABASE_URL:1}}"
+          REDIS_URL: "{{resolve:ssm:/authsphere/REDIS_URL:1}}"
+          FRONTEND_URL: "{{resolve:ssm:/authsphere/FRONTEND_URL:1}}"
+          JWT_ACCESS_SECRET: "{{resolve:ssm:/authsphere/JWT_ACCESS_SECRET:1}}"
+          JWT_REFRESH_SECRET: "{{resolve:ssm:/authsphere/JWT_REFRESH_SECRET:1}}"
+          MFA_ENCRYPTION_KEY: "{{resolve:ssm:/authsphere/MFA_ENCRYPTION_KEY:1}}"
+          RESEND_API_KEY: "{{resolve:ssm:/authsphere/RESEND_API_KEY:1}}"
+          EMAIL_FROM: "{{resolve:ssm:/authsphere/EMAIL_FROM:1}}"
+          GOOGLE_CLIENT_ID: "{{resolve:ssm:/authsphere/GOOGLE_CLIENT_ID:1}}"
+          GOOGLE_CLIENT_SECRET: "{{resolve:ssm:/authsphere/GOOGLE_CLIENT_SECRET:1}}"
+          GITHUB_CLIENT_ID: "{{resolve:ssm:/authsphere/GITHUB_CLIENT_ID:1}}"
+          GITHUB_CLIENT_SECRET: "{{resolve:ssm:/authsphere/GITHUB_CLIENT_SECRET:1}}"
+          OAUTH_CALLBACK_BASE_URL: "{{resolve:ssm:/authsphere/OAUTH_CALLBACK_BASE_URL:1}}"
+      Events:
+        HttpApiCatchAll:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthSphereHttpApi
+            Path: /{proxy+}
+            Method: ANY
+        HttpApiRoot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthSphereHttpApi
+            Path: /
+            Method: ANY
+
+Outputs:
+  HttpApiEndpoint:
+    Description: HTTP API v2 Gateway Endpoint URL (Free AWS HTTPS)
+    Value: !Sub "https://${AuthSphereHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  FunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt AuthSphereApiFunction.Arn

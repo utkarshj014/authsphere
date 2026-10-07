@@ -1,0 +1,110 @@
+{
+  "family": "authsphere-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "containerDefinitions": [
+    {
+      "name": "authsphere-api",
+      "image": "authsphere-api:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "hostPort": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "APP_ROLE",
+          "value": "api"
+        },
+        {
+          "name": "QUEUE_DRIVER",
+          "value": "inline"
+        },
+        {
+          "name": "PORT",
+          "value": "3000"
+        },
+        {
+          "name": "HOST",
+          "value": "0.0.0.0"
+        },
+        {
+          "name": "TRUST_PROXY",
+          "value": "true"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/DATABASE_URL"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/REDIS_URL"
+        },
+        {
+          "name": "FRONTEND_URL",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/FRONTEND_URL"
+        },
+        {
+          "name": "JWT_ACCESS_SECRET",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/JWT_ACCESS_SECRET"
+        },
+        {
+          "name": "JWT_REFRESH_SECRET",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/JWT_REFRESH_SECRET"
+        },
+        {
+          "name": "MFA_ENCRYPTION_KEY",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/MFA_ENCRYPTION_KEY"
+        },
+        {
+          "name": "RESEND_API_KEY",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/RESEND_API_KEY"
+        },
+        {
+          "name": "EMAIL_FROM",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/EMAIL_FROM"
+        },
+        {
+          "name": "GOOGLE_CLIENT_ID",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/GOOGLE_CLIENT_ID"
+        },
+        {
+          "name": "GOOGLE_CLIENT_SECRET",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/GOOGLE_CLIENT_SECRET"
+        },
+        {
+          "name": "GITHUB_CLIENT_ID",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/GITHUB_CLIENT_ID"
+        },
+        {
+          "name": "GITHUB_CLIENT_SECRET",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/GITHUB_CLIENT_SECRET"
+        },
+        {
+          "name": "OAUTH_CALLBACK_BASE_URL",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/OAUTH_CALLBACK_BASE_URL"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/authsphere-api",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "ecs",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}

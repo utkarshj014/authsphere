@@ -18,6 +18,9 @@ const sharedConfig = z.object({
     .enum(["development", "production", "test"])
     .default("development"),
   APP_ROLE: z.enum(["api", "worker"]).default("api"),
+  QUEUE_DRIVER: z
+    .enum(["bullmq", "inline", "sync"])
+    .default(process.env.AWS_LAMBDA_FUNCTION_NAME ? "sync" : "bullmq"),
   FRONTEND_URL: z.url(),
   REDIS_URL: z.url(),
 });
@@ -62,13 +65,27 @@ const apiConfig = z.object({
   GITHUB_CLIENT_ID: z.string().min(1),
   GITHUB_CLIENT_SECRET: z.string().min(1),
   OAUTH_CALLBACK_BASE_URL: z.url(),
+  RESEND_API_KEY: z.string().min(1).optional(),
+  EMAIL_FROM: z.string().min(1).optional(),
 });
 
-const apiSchema = sharedConfig.extend(apiConfig.shape).transform((config) => ({
-  ...config,
-  JWT_ACCESS_EXPIRES_IN_MS: parseDurationToMs(config.JWT_ACCESS_EXPIRES_IN),
-  JWT_REFRESH_EXPIRES_IN_MS: parseDurationToMs(config.JWT_REFRESH_EXPIRES_IN),
-}));
+const apiSchema = sharedConfig
+  .extend(apiConfig.shape)
+  .transform((config) => ({
+    ...config,
+    JWT_ACCESS_EXPIRES_IN_MS: parseDurationToMs(config.JWT_ACCESS_EXPIRES_IN),
+    JWT_REFRESH_EXPIRES_IN_MS: parseDurationToMs(config.JWT_REFRESH_EXPIRES_IN),
+  }))
+  .refine(
+    (data) =>
+      (data.QUEUE_DRIVER !== "inline" && data.QUEUE_DRIVER !== "sync") ||
+      Boolean(data.RESEND_API_KEY && data.EMAIL_FROM),
+    {
+      message:
+        "RESEND_API_KEY and EMAIL_FROM are required when QUEUE_DRIVER is inline or sync",
+      path: ["RESEND_API_KEY"],
+    },
+  );
 
 const workerSchema = sharedConfig.extend(workerConfig.shape);
 

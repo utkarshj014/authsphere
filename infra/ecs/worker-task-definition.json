@@ -1,0 +1,60 @@
+{
+  "family": "authsphere-worker",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "containerDefinitions": [
+    {
+      "name": "authsphere-worker",
+      "image": "authsphere-worker:latest",
+      "essential": true,
+      "command": [
+        "node",
+        "--enable-source-maps",
+        "dist/workers/email.worker.js"
+      ],
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "APP_ROLE",
+          "value": "worker"
+        },
+        {
+          "name": "QUEUE_DRIVER",
+          "value": "bullmq"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/REDIS_URL"
+        },
+        {
+          "name": "FRONTEND_URL",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/FRONTEND_URL"
+        },
+        {
+          "name": "RESEND_API_KEY",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/RESEND_API_KEY"
+        },
+        {
+          "name": "EMAIL_FROM",
+          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/EMAIL_FROM"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/authsphere-worker",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "ecs",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}
