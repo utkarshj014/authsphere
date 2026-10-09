@@ -47,10 +47,14 @@ jobs:
 
     env:
       NODE_ENV: test
+      APP_ROLE: api
+      QUEUE_DRIVER: inline
       PORT: 3001
+      HOST: 0.0.0.0
+      FRONTEND_URL: http://localhost:5173
+      TRUST_PROXY: "false"
       DATABASE_URL: postgresql://postgres:test@localhost:5432/authsphere_test
       REDIS_URL: redis://localhost:6379/1
-      FRONTEND_URL: http://localhost:5173
       JWT_ACCESS_SECRET: test-access-secret-minimum-16-chars
       JWT_REFRESH_SECRET: test-refresh-secret-minimum-16-chars
       JWT_ACCESS_EXPIRES_IN: 15m
@@ -63,10 +67,8 @@ jobs:
       GITHUB_CLIENT_ID: test-github-client-id
       GITHUB_CLIENT_SECRET: test-github-client-secret
       OAUTH_CALLBACK_BASE_URL: http://localhost:3001/auth/oauth
-      TRUST_PROXY: false
       RESEND_API_KEY: resend_test_dummy_key_for_testing
       EMAIL_FROM: AuthSphere <noreply@authsphere.dev>
-      QUEUE_DRIVER: inline
 
     steps:
       - name: Checkout
@@ -75,7 +77,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
 
       - name: Install dependencies

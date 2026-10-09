@@ -37,7 +37,7 @@ const apiConfig = z.object({
   HOST: z.string().default("0.0.0.0"),
   TRUST_PROXY: z
     .string()
-    .optional()
+    .default("false")
     .transform((val): boolean | number | string | string[] => {
       if (!val || val === "false") return false;
       if (val === "true") return true;
@@ -50,8 +50,7 @@ const apiConfig = z.object({
           .filter(Boolean);
       }
       return trimmed;
-    })
-    .default("false"),
+    }),
   DATABASE_URL: z.url(),
   JWT_ACCESS_SECRET: z.string().min(1),
   JWT_REFRESH_SECRET: z.string().min(1),

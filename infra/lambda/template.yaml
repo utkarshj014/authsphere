@@ -1,12 +1,68 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: AuthSphere - Serverless Express 5 REST API on AWS Lambda + HTTP API v2
+Description: AuthSphere - Serverless Express 5 REST API on AWS Lambda + Function URL
+
+Parameters:
+  DatabaseUrl:
+    Type: String
+    NoEcho: true
+    Description: Production PostgreSQL connection string (Neon pooled)
+  RedisUrl:
+    Type: String
+    NoEcho: true
+    Description: Production Redis connection string (Upstash)
+  FrontendUrl:
+    Type: String
+    Default: "https://authsphere.vercel.app"
+    Description: Vercel frontend URL
+  JwtAccessSecret:
+    Type: String
+    NoEcho: true
+    Description: JWT Access Secret (minimum 16 characters)
+  JwtRefreshSecret:
+    Type: String
+    NoEcho: true
+    Description: JWT Refresh Secret (minimum 16 characters)
+  MfaEncryptionKey:
+    Type: String
+    NoEcho: true
+    Description: MFA AES-256-GCM encryption key (minimum 16 characters)
+  ResendApiKey:
+    Type: String
+    NoEcho: true
+    Description: Resend API Key
+  EmailFrom:
+    Type: String
+    Default: "AuthSphere <onboarding@resend.dev>"
+    Description: Outbound sender address (use onboarding@resend.dev without custom domain)
+  GoogleClientId:
+    Type: String
+    Default: ""
+    Description: Google OAuth Client ID
+  GoogleClientSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Google OAuth Client Secret
+  GithubClientId:
+    Type: String
+    Default: ""
+    Description: GitHub OAuth Client ID
+  GithubClientSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: GitHub OAuth Client Secret
+  OAuthCallbackBaseUrl:
+    Type: String
+    Default: "https://authsphere.vercel.app/api/auth/oauth"
+    Description: Base URL for OAuth callbacks routed via Vercel reverse proxy
 
 Globals:
   Function:
     Timeout: 15
     MemorySize: 512
-    Runtime: nodejs22.x
+    Runtime: nodejs24.x
     Architectures:
       - x86_64
     Environment:
@@ -15,69 +71,57 @@ Globals:
         APP_ROLE: api
         QUEUE_DRIVER: sync
         TRUST_PROXY: "true"
+        HOST: "0.0.0.0"
+        JWT_ACCESS_EXPIRES_IN: "15m"
+        JWT_REFRESH_EXPIRES_IN: "30d"
+        AUTH_REUSE_DELETION_MODE: "SESSION"
+        AUTH_REFRESH_TOKEN_LEEWAY_SECONDS: "30"
 
 Resources:
-  # HTTP API v2 (API Gateway)
-  AuthSphereHttpApi:
-    Type: AWS::Serverless::HttpApi
-    Properties:
-      StageName: $default
-      CorsConfiguration:
-        AllowOrigins:
-          - "https://authsphere.vercel.app"
-        AllowHeaders:
-          - Content-Type
-          - Authorization
-          - X-Request-Id
-        AllowMethods:
-          - GET
-          - POST
-          - PUT
-          - PATCH
-          - DELETE
-          - OPTIONS
-        AllowCredentials: true
-
-  # Lambda Function running Express API
+  # Lambda Function running Express API with Native Function URL
   AuthSphereApiFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: authsphere-api
       CodeUri: ../../apps/api
       Handler: dist/lambda.handler
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - "https://authsphere.vercel.app"
+          AllowHeaders:
+            - Content-Type
+            - Authorization
+            - X-Request-Id
+          AllowMethods:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+            - OPTIONS
+          AllowCredentials: true
       Environment:
         Variables:
-          DATABASE_URL: "{{resolve:ssm:/authsphere/DATABASE_URL:1}}"
-          REDIS_URL: "{{resolve:ssm:/authsphere/REDIS_URL:1}}"
-          FRONTEND_URL: "{{resolve:ssm:/authsphere/FRONTEND_URL:1}}"
-          JWT_ACCESS_SECRET: "{{resolve:ssm:/authsphere/JWT_ACCESS_SECRET:1}}"
-          JWT_REFRESH_SECRET: "{{resolve:ssm:/authsphere/JWT_REFRESH_SECRET:1}}"
-          MFA_ENCRYPTION_KEY: "{{resolve:ssm:/authsphere/MFA_ENCRYPTION_KEY:1}}"
-          RESEND_API_KEY: "{{resolve:ssm:/authsphere/RESEND_API_KEY:1}}"
-          EMAIL_FROM: "{{resolve:ssm:/authsphere/EMAIL_FROM:1}}"
-          GOOGLE_CLIENT_ID: "{{resolve:ssm:/authsphere/GOOGLE_CLIENT_ID:1}}"
-          GOOGLE_CLIENT_SECRET: "{{resolve:ssm:/authsphere/GOOGLE_CLIENT_SECRET:1}}"
-          GITHUB_CLIENT_ID: "{{resolve:ssm:/authsphere/GITHUB_CLIENT_ID:1}}"
-          GITHUB_CLIENT_SECRET: "{{resolve:ssm:/authsphere/GITHUB_CLIENT_SECRET:1}}"
-          OAUTH_CALLBACK_BASE_URL: "{{resolve:ssm:/authsphere/OAUTH_CALLBACK_BASE_URL:1}}"
-      Events:
-        HttpApiCatchAll:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref AuthSphereHttpApi
-            Path: /{proxy+}
-            Method: ANY
-        HttpApiRoot:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref AuthSphereHttpApi
-            Path: /
-            Method: ANY
+          DATABASE_URL: !Ref DatabaseUrl
+          REDIS_URL: !Ref RedisUrl
+          FRONTEND_URL: !Ref FrontendUrl
+          JWT_ACCESS_SECRET: !Ref JwtAccessSecret
+          JWT_REFRESH_SECRET: !Ref JwtRefreshSecret
+          MFA_ENCRYPTION_KEY: !Ref MfaEncryptionKey
+          RESEND_API_KEY: !Ref ResendApiKey
+          EMAIL_FROM: !Ref EmailFrom
+          GOOGLE_CLIENT_ID: !Ref GoogleClientId
+          GOOGLE_CLIENT_SECRET: !Ref GoogleClientSecret
+          GITHUB_CLIENT_ID: !Ref GithubClientId
+          GITHUB_CLIENT_SECRET: !Ref GithubClientSecret
+          OAUTH_CALLBACK_BASE_URL: !Ref OAuthCallbackBaseUrl
 
 Outputs:
-  HttpApiEndpoint:
-    Description: HTTP API v2 Gateway Endpoint URL (Free AWS HTTPS)
-    Value: !Sub "https://${AuthSphereHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  FunctionUrl:
+    Description: Lambda Function URL (Native Free HTTPS Ingress)
+    Value: !GetAtt AuthSphereApiFunctionUrl.FunctionUrl
   FunctionArn:
     Description: Lambda Function ARN
     Value: !GetAtt AuthSphereApiFunction.Arn

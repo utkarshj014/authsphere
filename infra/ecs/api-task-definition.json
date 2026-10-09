@@ -40,6 +40,22 @@
         {
           "name": "TRUST_PROXY",
           "value": "true"
+        },
+        {
+          "name": "JWT_ACCESS_EXPIRES_IN",
+          "value": "15m"
+        },
+        {
+          "name": "JWT_REFRESH_EXPIRES_IN",
+          "value": "30d"
+        },
+        {
+          "name": "AUTH_REUSE_DELETION_MODE",
+          "value": "SESSION"
+        },
+        {
+          "name": "AUTH_REFRESH_TOKEN_LEEWAY_SECONDS",
+          "value": "30"
         }
       ],
       "secrets": [

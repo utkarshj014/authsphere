@@ -10,4 +10,5 @@ coverage
 docs
 *.log
 npm-debug.log*
-.DS_Store
+apps/web
+apps/api/tests

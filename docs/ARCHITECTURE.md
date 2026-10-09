@@ -11,7 +11,7 @@ AuthSphere is built as a production-grade, multi-package monorepo managed via np
 ```text
 authsphere/ (Monorepo Root)
 ├── apps/
-│   ├── api/                  # Express.js REST API service (Node.js >22)
+│   ├── api/                  # Express.js REST API service (Node.js >24)
 │   │   ├── prisma/           # Database schema, migrations, and seed script
 │   │   └── src/
 │   │       ├── common/       # Global errors, utilities, responses, OpenAPI registry & schemas
@@ -41,38 +41,60 @@ authsphere/ (Monorepo Root)
 Every request traversing AuthSphere passes through a deterministic pipeline across distinct architectural boundaries:
 
 ```mermaid
-graph TD
-    Client["HTTP Client / Frontend"] -->|HTTP Request + Cookies| Express["Express.js App"]
+flowchart TD
+    Client["HTTP Client / Frontend"] -->|HTTP Request and Cookies| Express["Express.js App"]
 
     subgraph MP ["Middleware Pipeline"]
-        Express --> Helmet["Helmet & CORS"]
-        Helmet --> ReqID["Request ID (Sanitized) & Pino Logger"]
-        ReqID --> OriginGuard["Origin Validation (State Mutations)"]
-        OriginGuard --> RateLimiter["Global Rate Limiter"]
-        RateLimiter --> BodyParser["JSON (16kb Limit) & Cookie Parser"]
-        BodyParser --> RouteRL["Route-Level Rate Limiter"]
-        RouteRL --> Validate["Zod Validation Middleware"]
-        Validate --> AuthGuard["Auth Middleware (req.auth)"]
-        AuthGuard --> PermissionGuard["RequireRole / RequirePermission Guard"]
+        Helmet["Helmet and CORS"]
+        ReqID["Request ID (Sanitized) and Pino Logger"]
+        OriginGuard["Origin Validation (State Mutations)"]
+        RateLimiter["Global Rate Limiter"]
+        BodyParser["JSON (16kb Limit) and Cookie Parser"]
+        RouteRL["Route-Level Rate Limiter"]
+        Validate["Zod Validation Middleware"]
+        AuthGuard["Auth Middleware (req.auth)"]
+        PermissionGuard["RequireRole / RequirePermission Guard"]
+
+        Helmet --> ReqID
+        ReqID --> OriginGuard
+        OriginGuard --> RateLimiter
+        RateLimiter --> BodyParser
+        BodyParser --> RouteRL
+        RouteRL --> Validate
+        Validate --> AuthGuard
+        AuthGuard --> PermissionGuard
     end
 
     subgraph FML ["Feature Module Layer"]
-        PermissionGuard --> Controller["Module Controller"]
-        Controller --> Service["Module Service"]
-        Service --> Repository["Module Repository"]
+        Controller["Module Controller"]
+        Service["Module Service"]
+        Repository["Module Repository"]
+
+        Controller --> Service
+        Service --> Repository
     end
 
-    subgraph IBT ["Infrastructure & Background Tasks"]
-        RateLimiter -->|Atomic Pipeline MULTI/EXEC| Redis[("Redis (ioredis)")]
-        RouteRL -->|Atomic Pipeline MULTI/EXEC| Redis
-        Service -->|Permission Lookups / Cache| Redis
-        Service -->|Enqueue Email Jobs [ADR-072]| BullMQ[("BullMQ Email Queue")]
-        BullMQ -->|Redis Transport [ADR-074]| Redis
-        BullMQ -->|Async Job Dequeue| Worker["Email Worker Process"]
-        Worker -->|Resend Provider [ADR-073, ADR-075]| ResendAPI["Resend Email API"]
-        Service -->|AES-256-GCM / Argon2id / SHA-256| CryptoLib["Crypto Library"]
-        Repository -->|Prisma 7 ORM| Postgres[("PostgreSQL DB")]
+    subgraph IBT ["Infrastructure and Background Tasks"]
+        Redis[("Redis Cache")]
+        BullMQ[("BullMQ Email Queue")]
+        Worker["Email Worker Process"]
+        ResendAPI["Resend Email API"]
+        CryptoLib["Crypto Library"]
+        Postgres[("PostgreSQL DB")]
+
+        BullMQ -->|Redis Transport| Redis
+        BullMQ -->|Async Job Dequeue| Worker
+        Worker -->|Resend Provider| ResendAPI
     end
+
+    Express --> Helmet
+    PermissionGuard --> Controller
+    RateLimiter -->|Atomic Pipeline| Redis
+    RouteRL -->|Atomic Pipeline| Redis
+    Service -->|Permission Cache| Redis
+    Service -->|Enqueue Email Jobs| BullMQ
+    Service -->|AES-256-GCM / Argon2id| CryptoLib
+    Repository -->|Prisma 7 ORM| Postgres
 ```
 
 ### Layer Responsibilities
@@ -482,13 +504,15 @@ sequenceDiagram
         Worker->>Worker: Render responsive HTML email template
         Worker->>Resend: POST /emails (Resend API key) [ADR-073, ADR-077]
         Note over Worker, Resend: Observability Boundary
-        alt Submission Accepted by Provider
+        opt Submission Accepted by Provider
             Resend-->>Worker: HTTP 200 OK { id: "msg_xxx" }
             Worker->>Redis: Acknowledge job completion
-        else Transient Error (Rate Limit 429 / Server 5xx)
+        end
+        opt Transient Error (Rate Limit 429 / Server 5xx)
             Resend-->>Worker: HTTP 429 / 5xx
             Worker->>Redis: BullMQ exponential backoff retry (up to 4 retries across 5 total attempts) [ADR-075]
-        else Unrecoverable Error (Invalid Recipient / Domain)
+        end
+        opt Unrecoverable Error (Invalid Recipient / Domain)
             Resend-->>Worker: HTTP 422 / 400
             Worker->>Redis: UnrecoverableError: Move to failed-job retention storage [ADR-075]
         end
@@ -498,9 +522,10 @@ sequenceDiagram
         API->>API: Render responsive HTML email template
         API->>Resend: POST /emails (Resend API key) [ADR-073, ADR-078]
         Note over API, Resend: Observability Boundary
-        alt Submission Accepted by Provider
+        opt Submission Accepted by Provider
             Resend-->>API: HTTP 200 OK { id: "msg_xxx" }
-        else Delivery Failure
+        end
+        opt Delivery Failure (HTTP 4xx / 5xx)
             Resend-->>API: HTTP 4xx / 5xx Error
             API->>API: Log structured error (Pino)
         end

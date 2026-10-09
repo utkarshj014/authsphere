@@ -1,19 +1,18 @@
 # ==========================================
 # Stage 1: Base & Dependencies
 # ==========================================
-FROM node:22-alpine AS base
+FROM node:24-alpine AS base
 WORKDIR /app
 
 # Install native dependencies required by Prisma and Alpine libc
 RUN apk add --no-cache openssl libc6-compat
 
-# Copy workspace configuration and manifests for cached dependency installation
+# Copy root and backend workspace manifests (excluding apps/web to keep backend image lean)
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY apps/api/package.json apps/api/
-COPY apps/web/package.json apps/web/
 
-# Install all dependencies across workspaces
+# Install backend dependencies across workspaces
 RUN npm ci
 
 # ==========================================
@@ -36,20 +35,22 @@ RUN npm run build:shared
 # Generate Prisma Client and compile API + Worker
 RUN npm run build -w @authsphere/api
 
-# Remove devDependencies to produce a minimal runtime footprint
+# Remove devDependencies (including Prisma CLI) to produce a minimal runtime footprint
 RUN npm prune --omit=dev
 
 # ==========================================
 # Stage 3: Production Runner
 # ==========================================
-FROM node:22-alpine AS runner
+FROM node:24-alpine AS runner
 WORKDIR /app
 
 # Install runtime utilities (dumb-init for signal handling and PID 1 reaping)
 RUN apk add --no-cache openssl libc6-compat dumb-init
 
 ENV NODE_ENV=production
+ENV APP_ROLE=api
 ENV PORT=3000
+ENV HOST=0.0.0.0
 ENV PATH="/app/node_modules/.bin:${PATH}"
 
 # Copy production dependencies and compiled outputs
@@ -59,8 +60,7 @@ COPY --chown=node:node --from=builder /app/packages/shared/dist ./packages/share
 COPY --chown=node:node --from=builder /app/packages/shared/package.json ./packages/shared/package.json
 COPY --chown=node:node --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --chown=node:node --from=builder /app/apps/api/package.json ./apps/api/package.json
-COPY --chown=node:node --from=builder /app/apps/api/prisma.config.js ./apps/api/prisma.config.js
-COPY --chown=node:node --from=builder /app/apps/api/prisma ./apps/api/prisma
+COPY --chown=node:node --from=builder /app/apps/api/prisma/schema.prisma ./apps/api/prisma/schema.prisma
 
 WORKDIR /app/apps/api
 

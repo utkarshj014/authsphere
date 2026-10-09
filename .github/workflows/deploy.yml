@@ -47,10 +47,14 @@ jobs:
     env:
       IMAGE_NAME: ghcr.io/${{ github.repository }}/backend
       NODE_ENV: test
+      APP_ROLE: api
+      QUEUE_DRIVER: inline
       PORT: 3001
+      HOST: 0.0.0.0
+      FRONTEND_URL: http://localhost:5173
+      TRUST_PROXY: "false"
       DATABASE_URL: postgresql://postgres:test@localhost:5432/authsphere_test
       REDIS_URL: redis://localhost:6379/1
-      FRONTEND_URL: http://localhost:5173
       JWT_ACCESS_SECRET: test-access-secret-minimum-16-chars
       JWT_REFRESH_SECRET: test-refresh-secret-minimum-16-chars
       JWT_ACCESS_EXPIRES_IN: 15m
@@ -63,10 +67,8 @@ jobs:
       GITHUB_CLIENT_ID: test-github-client-id
       GITHUB_CLIENT_SECRET: test-github-client-secret
       OAUTH_CALLBACK_BASE_URL: http://localhost:3001/auth/oauth
-      TRUST_PROXY: false
       RESEND_API_KEY: resend_test_dummy_key_for_testing
       EMAIL_FROM: AuthSphere <noreply@authsphere.dev>
-      QUEUE_DRIVER: inline
 
     steps:
       - name: Checkout
@@ -75,7 +77,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
 
       - name: Install dependencies
@@ -128,7 +130,26 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-south-1
 
-      - name: Render ECS task definition
+      - name: Run production database migrations
+        if: ${{ secrets.DATABASE_URL_PRODUCTION != '' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_PRODUCTION }}
+        run: npm run db:migrate:deploy --workspace=@authsphere/api
+
+      - name: Deploy to AWS Lambda (SAM)
+        if: ${{ secrets.DEPLOY_TARGET != 'ecs' }}
+        continue-on-error: true
+        run: |
+          npm run build:shared
+          npm run build -w @authsphere/api
+          cd infra/lambda
+          sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
+            --stack-name authsphere-serverless \
+            --region ap-south-1 \
+            --capabilities CAPABILITY_IAM
+
+      - name: Render ECS API task definition
+        if: ${{ secrets.DEPLOY_TARGET == 'ecs' }}
         id: render-api-container
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
@@ -136,10 +157,30 @@ jobs:
           container-name: authsphere-api
           image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
 
-      - name: Deploy to Amazon ECS
+      - name: Render ECS Worker task definition
+        if: ${{ secrets.DEPLOY_TARGET == 'ecs' }}
+        id: render-worker-container
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: infra/ecs/worker-task-definition.json
+          container-name: authsphere-worker
+          image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+
+      - name: Deploy API to Amazon ECS
+        if: ${{ secrets.DEPLOY_TARGET == 'ecs' }}
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-api-container.outputs.task-definition }}
           service: authsphere-api
           cluster: authsphere-cluster
           wait-for-service-stability: true
+
+      - name: Deploy Worker to Amazon ECS (Variant 1a)
+        if: ${{ secrets.DEPLOY_TARGET == 'ecs' }}
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        continue-on-error: true
+        with:
+          task-definition: ${{ steps.render-worker-container.outputs.task-definition }}
+          service: authsphere-worker
+          cluster: authsphere-cluster
+          wait-for-service-stability: false

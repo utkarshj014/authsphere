@@ -54,10 +54,34 @@ import {
 import type { AuthTokens } from "./auth.types.js";
 import { env } from "../../config/env.js";
 import { redis } from "../../lib/redis.js";
+import { logger } from "../../lib/logger.js";
 
 // ==========================================
 // Private Helpers
 // ==========================================
+
+const getLeewayCache = async (key: string): Promise<string | null> => {
+  if (redis.status !== "ready") return null;
+  try {
+    return await redis.get(key);
+  } catch (err) {
+    logger.warn({ err, key }, "Failed reading leeway cache from Redis");
+    return null;
+  }
+};
+
+const setLeewayCache = async (
+  key: string,
+  value: string,
+  ttlSeconds: number,
+): Promise<void> => {
+  if (redis.status !== "ready" || ttlSeconds <= 0) return;
+  try {
+    await redis.set(key, value, "EX", ttlSeconds);
+  } catch (err) {
+    logger.warn({ err, key }, "Failed writing leeway cache to Redis");
+  }
+};
 
 export const recordSecurityEvent = async (
   userId: string,
@@ -317,7 +341,7 @@ const refreshToken = async (
   const leewayKey = `auth:refresh-leeway:${payload.sid}:${oldTokenHash}`;
 
   // 1. Leeway Window: Return cached tokens if recently rotated within grace period (SPA concurrency)
-  const cached = await redis.get(leewayKey);
+  const cached = await getLeewayCache(leewayKey);
   if (cached) {
     return JSON.parse(cached) as AuthTokens;
   }
@@ -345,22 +369,19 @@ const refreshToken = async (
   });
 
   if (rotated) {
-    if (env.AUTH_REFRESH_TOKEN_LEEWAY_SECONDS > 0) {
-      await redis.set(
-        leewayKey,
-        JSON.stringify(tokens),
-        "EX",
-        env.AUTH_REFRESH_TOKEN_LEEWAY_SECONDS,
-      );
-    }
+    await setLeewayCache(
+      leewayKey,
+      JSON.stringify(tokens),
+      env.AUTH_REFRESH_TOKEN_LEEWAY_SECONDS,
+    );
     return tokens;
   }
 
   // 4. CAS failed: check if a concurrent request won the race and populated leeway cache
-  let concurrentTokens = await redis.get(leewayKey);
+  let concurrentTokens = await getLeewayCache(leewayKey);
   if (!concurrentTokens) {
     await new Promise((resolve) => setTimeout(resolve, 150));
-    concurrentTokens = await redis.get(leewayKey);
+    concurrentTokens = await getLeewayCache(leewayKey);
   }
   if (concurrentTokens) {
     return JSON.parse(concurrentTokens) as AuthTokens;

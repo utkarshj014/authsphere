@@ -20,12 +20,32 @@ let serverlessHandler: ((event: any, context: any) => Promise<any>) | null =
  * Database (Neon pooled) and Cache (Upstash) singletons connect eagerly upon cold start
  * and persist across warm Lambda invocations.
  */
-export const handler = async (event: unknown, context: unknown) => {
+export const handler = async (event: unknown, context: any) => {
+  if (context && typeof context === "object") {
+    context.callbackWaitsForEmptyEventLoop = false;
+  }
+
   if (!serverlessHandler) {
     logger.info("Initializing serverless Express runtime (cold start)...");
 
-    // Eager connection initialization for fail-fast behavior
-    await Promise.all([prisma.$connect(), redis.connect()]);
+    // Warm up database and cache connections; allow graceful fallback if Redis is temporarily unavailable
+    try {
+      await prisma.$connect();
+    } catch (err) {
+      logger.warn(
+        { err },
+        "Database connection deferred to first query during cold start",
+      );
+    }
+
+    try {
+      await redis.connect();
+    } catch (err) {
+      logger.warn(
+        { err },
+        "Redis handshake deferred or unavailable during cold start; proceeding in degraded mode",
+      );
+    }
 
     serverlessHandler = configureServerless({ app });
   }

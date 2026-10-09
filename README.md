@@ -8,7 +8,7 @@ Production-grade Authentication & Authorization Platform.
 
 - [System Architecture & Design](./docs/ARCHITECTURE.md) — Topology, component boundaries, database ERD, and core sequence flows.
 - [Cloud Deployment & Serverless Guide](./docs/DEPLOYMENT.md) — AWS ECS Fargate, AWS Lambda, No-Custom-Domain Vercel Proxy, and Neon pooling.
-- [Architecture Decision Records (ADR)](./docs/Engineering-Decisions.md) — Comprehensive log of 78 architectural decisions, security trade-offs, and technical rationale.
+- [Architecture Decision Records (ADR)](./docs/Engineering-Decisions.md) — Comprehensive log of 79 architectural decisions, security trade-offs, and technical rationale.
 - [OAuth 2.0 Reference](./docs/OAUTH.md) — Identity resolution matrix, anti-replay state verification, and provider integrations.
 - [Testing Architecture & Verification Reference](./docs/TESTING.md) — Hermetic test environment, 3-layer test pyramid, security invariant matrix, and execution guide.
 
@@ -19,7 +19,7 @@ Production-grade Authentication & Authorization Platform.
 ```text
 authsphere/
 ├── apps/
-│   ├── api/       # Express.js REST API (Node.js >22, TypeScript, Prisma 7)
+│   ├── api/       # Express.js REST API (Node.js >24, TypeScript, Prisma 7)
 │   └── web/       # React & Vite frontend application
 ├── packages/
 │   └── shared/    # Domain constants (ROLES, PERMISSIONS) & shared types
@@ -33,7 +33,7 @@ authsphere/
 
 ### 1. Prerequisites
 
-- Node.js >= 22
+- Node.js >= 24
 - Docker & Docker Compose
 - npm >= 10
 
@@ -49,10 +49,11 @@ docker compose -f docker/docker-compose.dev.yml up -d
 
 ### 3. Environment Setup
 
-Copy the example environment file and configure your variables:
+Copy the example environment files and configure your variables:
 
 ```bash
 cp apps/api/.env.example apps/api/.env
+cp apps/web/.env.example apps/web/.env
 ```
 
 ### 4. Database Setup & Seeding

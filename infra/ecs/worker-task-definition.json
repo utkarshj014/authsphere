@@ -7,7 +7,7 @@
   "containerDefinitions": [
     {
       "name": "authsphere-worker",
-      "image": "authsphere-worker:latest",
+      "image": "authsphere-api:latest",
       "essential": true,
       "command": [
         "node",

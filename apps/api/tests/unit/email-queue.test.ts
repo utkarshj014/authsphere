@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.unmock("../../src/modules/email/email.queue.js");
 
@@ -28,10 +28,19 @@ import {
   EMAIL_JOB_TYPES,
   SECURITY_NOTIFICATION_EVENTS,
 } from "../../src/modules/email/email.types.js";
+import { env } from "../../src/config/env.js";
 
 describe("Email Queue Enqueue Operations", () => {
+  let originalDriver: string;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    originalDriver = env.QUEUE_DRIVER;
+    (env as any).QUEUE_DRIVER = "bullmq";
+  });
+
+  afterEach(() => {
+    (env as any).QUEUE_DRIVER = originalDriver;
   });
 
   it("enqueueVerificationEmail adds a verification job with correct data", async () => {
