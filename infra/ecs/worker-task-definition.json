@@ -31,19 +31,19 @@
       "secrets": [
         {
           "name": "REDIS_URL",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/REDIS_URL"
+          "valueFrom": "/authsphere/REDIS_URL"
         },
         {
           "name": "FRONTEND_URL",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/FRONTEND_URL"
+          "valueFrom": "/authsphere/FRONTEND_URL"
         },
         {
           "name": "RESEND_API_KEY",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/RESEND_API_KEY"
+          "valueFrom": "/authsphere/RESEND_API_KEY"
         },
         {
           "name": "EMAIL_FROM",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/EMAIL_FROM"
+          "valueFrom": "/authsphere/EMAIL_FROM"
         }
       ],
       "logConfiguration": {

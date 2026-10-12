@@ -47,8 +47,12 @@ export function getOpenApiDocument(): OpenAPIObject {
     },
     servers: [
       {
+        url: "/",
+        description: "Current Host / Reverse Proxy (Production & Local)",
+      },
+      {
         url: "http://localhost:{port}",
-        description: "Development",
+        description: "Direct Local Development",
         variables: {
           port: { default: "3000" },
         },

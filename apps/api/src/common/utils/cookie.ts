@@ -11,7 +11,7 @@ export const accessTokenCookieOptions: CookieOptions = {
 };
 
 export const refreshTokenCookieOptions: CookieOptions = {
-  path: "/auth",
+  path: "/",
   httpOnly: true,
   secure: env.NODE_ENV === "production",
   sameSite: "lax",

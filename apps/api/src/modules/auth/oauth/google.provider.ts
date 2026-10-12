@@ -28,20 +28,26 @@ interface GoogleUserInfo {
 
 export class GoogleOAuthProvider implements OAuthProviderStrategy {
   private getRedirectUri(): string {
-    return `${env.OAUTH_CALLBACK_BASE_URL.replace(/\/$/, "")}/google/callback`;
+    const base =
+      env.OAUTH_CALLBACK_BASE_URL || `${env.FRONTEND_URL}/api/auth/oauth`;
+    return `${base.replace(/\/$/, "")}/google/callback`;
   }
 
-  private validateConfig(): void {
+  private validateConfig(): { clientId: string; clientSecret: string } {
     if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
       throw new AppError("Google OAuth is not configured on this server", 500);
     }
+    return {
+      clientId: env.GOOGLE_CLIENT_ID,
+      clientSecret: env.GOOGLE_CLIENT_SECRET,
+    };
   }
 
   public async getAuthorizationUrl(state: string): Promise<URL> {
-    this.validateConfig();
+    const { clientId } = this.validateConfig();
 
     const url = new URL(GOOGLE_AUTH_URL);
-    url.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
+    url.searchParams.set("client_id", clientId);
     url.searchParams.set("redirect_uri", this.getRedirectUri());
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", "openid email profile");
@@ -53,7 +59,7 @@ export class GoogleOAuthProvider implements OAuthProviderStrategy {
   }
 
   public async getUserProfile(code: string): Promise<OAuthProfile> {
-    this.validateConfig();
+    const { clientId, clientSecret } = this.validateConfig();
 
     // Defense-in-depth: Validate authorization code independently of caller
     if (!code || typeof code !== "string" || code.trim().length === 0) {
@@ -69,8 +75,8 @@ export class GoogleOAuthProvider implements OAuthProviderStrategy {
       },
       body: new URLSearchParams({
         code,
-        client_id: env.GOOGLE_CLIENT_ID,
-        client_secret: env.GOOGLE_CLIENT_SECRET,
+        client_id: clientId,
+        client_secret: clientSecret,
         redirect_uri: this.getRedirectUri(),
         grant_type: "authorization_code",
       }).toString(),

@@ -33,20 +33,26 @@ interface GitHubEmailResponse {
 
 export class GitHubOAuthProvider implements OAuthProviderStrategy {
   private getRedirectUri(): string {
-    return `${env.OAUTH_CALLBACK_BASE_URL.replace(/\/$/, "")}/github/callback`;
+    const base =
+      env.OAUTH_CALLBACK_BASE_URL || `${env.FRONTEND_URL}/api/auth/oauth`;
+    return `${base.replace(/\/$/, "")}/github/callback`;
   }
 
-  private validateConfig(): void {
+  private validateConfig(): { clientId: string; clientSecret: string } {
     if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
       throw new AppError("GitHub OAuth is not configured on this server", 500);
     }
+    return {
+      clientId: env.GITHUB_CLIENT_ID,
+      clientSecret: env.GITHUB_CLIENT_SECRET,
+    };
   }
 
   public async getAuthorizationUrl(state: string): Promise<URL> {
-    this.validateConfig();
+    const { clientId } = this.validateConfig();
 
     const url = new URL(GITHUB_AUTH_URL);
-    url.searchParams.set("client_id", env.GITHUB_CLIENT_ID);
+    url.searchParams.set("client_id", clientId);
     url.searchParams.set("redirect_uri", this.getRedirectUri());
     url.searchParams.set("scope", "read:user user:email");
     url.searchParams.set("state", state);
@@ -55,7 +61,7 @@ export class GitHubOAuthProvider implements OAuthProviderStrategy {
   }
 
   public async getUserProfile(code: string): Promise<OAuthProfile> {
-    this.validateConfig();
+    const { clientId, clientSecret } = this.validateConfig();
 
     // Defense-in-depth: Validate authorization code independently of caller
     if (!code || typeof code !== "string" || code.trim().length === 0) {
@@ -71,8 +77,8 @@ export class GitHubOAuthProvider implements OAuthProviderStrategy {
       },
       body: new URLSearchParams({
         code,
-        client_id: env.GITHUB_CLIENT_ID,
-        client_secret: env.GITHUB_CLIENT_SECRET,
+        client_id: clientId,
+        client_secret: clientSecret,
         redirect_uri: this.getRedirectUri(),
       }).toString(),
     });

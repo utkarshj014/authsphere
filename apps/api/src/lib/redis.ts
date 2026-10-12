@@ -3,5 +3,8 @@ import { env } from "../config/env.js";
 
 export const redis = new Redis(env.REDIS_URL, {
   lazyConnect: true,
-  maxRetriesPerRequest: null,
+  maxRetriesPerRequest: 1,
+  enableOfflineQueue: false,
+  connectTimeout: 2000,
+  commandTimeout: 1000,
 });

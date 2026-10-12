@@ -10,5 +10,6 @@ export const DEFAULT_CLIENT_IP = "127.0.0.1";
  * For local development or CI/CD pipelines where req.ip might not be populated,
  * this function provides a safe default to prevent runtime errors.
  */
-export const getClientIp = (req: Request): string =>
-  req.ip || DEFAULT_CLIENT_IP;
+export const getClientIp = (req: Request): string => {
+  return req.ip || req.socket?.remoteAddress || DEFAULT_CLIENT_IP;
+};

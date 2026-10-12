@@ -215,8 +215,13 @@ export const rateLimiter = (policy: RateLimitPolicy) => {
         .expire(redisKey, secondsRemainingInWindow, "NX")
         .exec();
 
-      if (!results || results[0]?.[0]) {
-        throw results?.[0]?.[0] || new Error("Rate limit transaction failed");
+      const incrError = results?.[0]?.[0];
+      const expireError = results?.[1]?.[0];
+
+      if (!results || incrError || expireError) {
+        throw (
+          incrError || expireError || new Error("Rate limit transaction failed")
+        );
       }
 
       const count = Number(results?.[0]?.[1] ?? 0);

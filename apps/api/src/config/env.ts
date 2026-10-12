@@ -52,6 +52,7 @@ const apiConfig = z.object({
       return trimmed;
     }),
   DATABASE_URL: z.url(),
+  DATABASE_POOL_MAX: z.coerce.number().int().positive().optional(),
   JWT_ACCESS_SECRET: z.string().min(1),
   JWT_REFRESH_SECRET: z.string().min(1),
   JWT_ACCESS_EXPIRES_IN: z.string().default("15m"),
@@ -59,13 +60,13 @@ const apiConfig = z.object({
   AUTH_REUSE_DELETION_MODE: z.enum(["SESSION", "GLOBAL"]).default("SESSION"),
   AUTH_REFRESH_TOKEN_LEEWAY_SECONDS: z.coerce.number().int().min(0).default(30),
   MFA_ENCRYPTION_KEY: z.string().min(16),
-  GOOGLE_CLIENT_ID: z.string().min(1),
-  GOOGLE_CLIENT_SECRET: z.string().min(1),
-  GITHUB_CLIENT_ID: z.string().min(1),
-  GITHUB_CLIENT_SECRET: z.string().min(1),
-  OAUTH_CALLBACK_BASE_URL: z.url(),
-  RESEND_API_KEY: z.string().min(1).optional(),
-  EMAIL_FROM: z.string().min(1).optional(),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GITHUB_CLIENT_ID: z.string().optional(),
+  GITHUB_CLIENT_SECRET: z.string().optional(),
+  OAUTH_CALLBACK_BASE_URL: z.string().optional(), //keep string because url validation will fail on empty strings provided during deployment
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().optional(),
 });
 
 const apiSchema = sharedConfig

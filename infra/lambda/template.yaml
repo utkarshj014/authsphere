@@ -1,5 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Transform: AWS::Serverless-2016-10-31
+Transform:
+  - AWS::LanguageExtensions
+  - AWS::Serverless-2016-10-31
 Description: AuthSphere - Serverless Express 5 REST API on AWS Lambda + Function URL
 
 Parameters:
@@ -14,7 +16,7 @@ Parameters:
   FrontendUrl:
     Type: String
     Default: "https://authsphere.vercel.app"
-    Description: Vercel frontend URL
+    Description: Vercel frontend URL for CORS and origin validation
   JwtAccessSecret:
     Type: String
     NoEcho: true
@@ -30,11 +32,12 @@ Parameters:
   ResendApiKey:
     Type: String
     NoEcho: true
-    Description: Resend API Key
+    Default: ""
+    Description: Resend API Key for transactional emails
   EmailFrom:
     Type: String
-    Default: "AuthSphere <onboarding@resend.dev>"
-    Description: Outbound sender address (use onboarding@resend.dev without custom domain)
+    Default: "AuthSphere <noreply@authsphere.dev>"
+    Description: Outbound sender email address
   GoogleClientId:
     Type: String
     Default: ""
@@ -55,7 +58,7 @@ Parameters:
     Description: GitHub OAuth Client Secret
   OAuthCallbackBaseUrl:
     Type: String
-    Default: "https://authsphere.vercel.app/api/auth/oauth"
+    Default: ""
     Description: Base URL for OAuth callbacks routed via Vercel reverse proxy
 
 Globals:
@@ -70,7 +73,7 @@ Globals:
         NODE_ENV: production
         APP_ROLE: api
         QUEUE_DRIVER: sync
-        TRUST_PROXY: "true"
+        TRUST_PROXY: "1"
         HOST: "0.0.0.0"
         JWT_ACCESS_EXPIRES_IN: "15m"
         JWT_REFRESH_EXPIRES_IN: "30d"
@@ -85,11 +88,14 @@ Resources:
       FunctionName: authsphere-api
       CodeUri: ../../apps/api
       Handler: dist/lambda.handler
+      AutoPublishAlias: live
+      AutoPublishAliasAllProperties: true
+      ReservedConcurrentExecutions: 10
       FunctionUrlConfig:
         AuthType: NONE
         Cors:
           AllowOrigins:
-            - "https://authsphere.vercel.app"
+            - !Ref FrontendUrl
           AllowHeaders:
             - Content-Type
             - Authorization
@@ -117,6 +123,24 @@ Resources:
           GITHUB_CLIENT_ID: !Ref GithubClientId
           GITHUB_CLIENT_SECRET: !Ref GithubClientSecret
           OAUTH_CALLBACK_BASE_URL: !Ref OAuthCallbackBaseUrl
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "node24"
+        Sourcemap: true
+        EntryPoints:
+          - src/lambda.ts
+        External:
+          - argon2
+          - "@prisma/client"
+
+  # CloudWatch Log Group with 7-day retention guardrail
+  AuthSphereApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AuthSphereApiFunction}"
+      RetentionInDays: 7
 
 Outputs:
   FunctionUrl:

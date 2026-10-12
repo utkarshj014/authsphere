@@ -39,7 +39,7 @@
         },
         {
           "name": "TRUST_PROXY",
-          "value": "true"
+          "value": "2"
         },
         {
           "name": "JWT_ACCESS_EXPIRES_IN",
@@ -61,55 +61,55 @@
       "secrets": [
         {
           "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/DATABASE_URL"
+          "valueFrom": "/authsphere/DATABASE_URL"
         },
         {
           "name": "REDIS_URL",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/REDIS_URL"
+          "valueFrom": "/authsphere/REDIS_URL"
         },
         {
           "name": "FRONTEND_URL",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/FRONTEND_URL"
+          "valueFrom": "/authsphere/FRONTEND_URL"
         },
         {
           "name": "JWT_ACCESS_SECRET",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/JWT_ACCESS_SECRET"
+          "valueFrom": "/authsphere/JWT_ACCESS_SECRET"
         },
         {
           "name": "JWT_REFRESH_SECRET",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/JWT_REFRESH_SECRET"
+          "valueFrom": "/authsphere/JWT_REFRESH_SECRET"
         },
         {
           "name": "MFA_ENCRYPTION_KEY",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/MFA_ENCRYPTION_KEY"
+          "valueFrom": "/authsphere/MFA_ENCRYPTION_KEY"
         },
         {
           "name": "RESEND_API_KEY",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/RESEND_API_KEY"
+          "valueFrom": "/authsphere/RESEND_API_KEY"
         },
         {
           "name": "EMAIL_FROM",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/EMAIL_FROM"
+          "valueFrom": "/authsphere/EMAIL_FROM"
         },
         {
           "name": "GOOGLE_CLIENT_ID",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/GOOGLE_CLIENT_ID"
+          "valueFrom": "/authsphere/GOOGLE_CLIENT_ID"
         },
         {
           "name": "GOOGLE_CLIENT_SECRET",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/GOOGLE_CLIENT_SECRET"
+          "valueFrom": "/authsphere/GOOGLE_CLIENT_SECRET"
         },
         {
           "name": "GITHUB_CLIENT_ID",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/GITHUB_CLIENT_ID"
+          "valueFrom": "/authsphere/GITHUB_CLIENT_ID"
         },
         {
           "name": "GITHUB_CLIENT_SECRET",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/GITHUB_CLIENT_SECRET"
+          "valueFrom": "/authsphere/GITHUB_CLIENT_SECRET"
         },
         {
           "name": "OAUTH_CALLBACK_BASE_URL",
-          "valueFrom": "arn:aws:ssm:ap-south-1:<ACCOUNT_ID>:parameter/authsphere/OAUTH_CALLBACK_BASE_URL"
+          "valueFrom": "/authsphere/OAUTH_CALLBACK_BASE_URL"
         }
       ],
       "logConfiguration": {

@@ -15,10 +15,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release & Deploy
+  validate:
+    name: Typecheck, Test & Build
     runs-on: ubuntu-latest
-    environment: production
 
     services:
       postgres:
@@ -45,7 +44,6 @@ jobs:
           --health-retries 10
 
     env:
-      IMAGE_NAME: ghcr.io/${{ github.repository }}/backend
       NODE_ENV: test
       APP_ROLE: api
       QUEUE_DRIVER: inline
@@ -95,10 +93,83 @@ jobs:
       - name: Build
         run: npm run build
 
+  deploy:
+    name: Release & Deploy
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+
+    env:
+      IMAGE_NAME: ghcr.io/${{ github.repository }}/backend
+      DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET || 'serverless' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-south-1' }}
+
+      - name: Run production database migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: npm run db:migrate:deploy --workspace=@authsphere/api
+
+      - name: Deploy to AWS Lambda (SAM)
+        if: env.DEPLOY_TARGET != 'ecs'
+        run: |
+          npm run build:shared
+          npm run build -w @authsphere/api
+          cd infra/lambda
+          sam build --use-container
+          sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
+            --region ${{ vars.AWS_REGION || 'ap-south-1' }} \
+            --parameter-overrides \
+              DatabaseUrl="${{ secrets.DATABASE_URL_POOLED }}" \
+              RedisUrl="${{ secrets.REDIS_URL }}" \
+              FrontendUrl="${{ vars.FRONTEND_URL || 'https://authsphere.vercel.app' }}" \
+              JwtAccessSecret="${{ secrets.JWT_ACCESS_SECRET }}" \
+              JwtRefreshSecret="${{ secrets.JWT_REFRESH_SECRET }}" \
+              MfaEncryptionKey="${{ secrets.MFA_ENCRYPTION_KEY }}" \
+              ResendApiKey="${{ secrets.RESEND_API_KEY }}" \
+              EmailFrom="${{ secrets.EMAIL_FROM || 'AuthSphere <noreply@authsphere.dev>' }}" \
+              GoogleClientId="${{ vars.GOOGLE_CLIENT_ID }}" \
+              GoogleClientSecret="${{ secrets.GOOGLE_CLIENT_SECRET }}" \
+              GithubClientId="${{ vars.GITHUB_CLIENT_ID }}" \
+              GithubClientSecret="${{ secrets.GITHUB_CLIENT_SECRET }}" \
+              OAuthCallbackBaseUrl="${{ vars.OAUTH_CALLBACK_BASE_URL }}"
+
+          FUNCTION_URL=$(aws cloudformation describe-stacks \
+            --stack-name authsphere-serverless \
+            --region ${{ vars.AWS_REGION || 'ap-south-1' }} \
+            --query "Stacks[0].Outputs[?OutputKey=='FunctionUrl'].OutputValue" \
+            --output text)
+          echo "FUNCTION_URL=$FUNCTION_URL" >> $GITHUB_ENV
+
+      - name: Smoke test Lambda deployment
+        if: env.DEPLOY_TARGET != 'ecs'
+        run: |
+          echo "Verifying healthcheck at: ${FUNCTION_URL}health/live"
+          curl --fail --retry 3 --retry-delay 5 --max-time 15 "${FUNCTION_URL}health/live"
+
       - name: Set up Docker Buildx
+        if: env.DEPLOY_TARGET == 'ecs'
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
+        if: env.DEPLOY_TARGET == 'ecs'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -106,6 +177,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract Docker metadata
+        if: env.DEPLOY_TARGET == 'ecs'
         id: meta
         uses: docker/metadata-action@v6
         with:
@@ -115,6 +187,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push Docker image
+        if: env.DEPLOY_TARGET == 'ecs'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -124,32 +197,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ap-south-1
-
-      - name: Run production database migrations
-        if: ${{ secrets.DATABASE_URL_PRODUCTION != '' }}
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL_PRODUCTION }}
-        run: npm run db:migrate:deploy --workspace=@authsphere/api
-
-      - name: Deploy to AWS Lambda (SAM)
-        if: ${{ secrets.DEPLOY_TARGET != 'ecs' }}
-        continue-on-error: true
-        run: |
-          npm run build:shared
-          npm run build -w @authsphere/api
-          cd infra/lambda
-          sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
-            --stack-name authsphere-serverless \
-            --region ap-south-1 \
-            --capabilities CAPABILITY_IAM
-
       - name: Render ECS API task definition
-        if: ${{ secrets.DEPLOY_TARGET == 'ecs' }}
+        if: env.DEPLOY_TARGET == 'ecs'
         id: render-api-container
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
@@ -158,7 +207,7 @@ jobs:
           image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
 
       - name: Render ECS Worker task definition
-        if: ${{ secrets.DEPLOY_TARGET == 'ecs' }}
+        if: env.DEPLOY_TARGET == 'ecs'
         id: render-worker-container
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
@@ -167,7 +216,7 @@ jobs:
           image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
 
       - name: Deploy API to Amazon ECS
-        if: ${{ secrets.DEPLOY_TARGET == 'ecs' }}
+        if: env.DEPLOY_TARGET == 'ecs'
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-api-container.outputs.task-definition }}
@@ -176,9 +225,8 @@ jobs:
           wait-for-service-stability: true
 
       - name: Deploy Worker to Amazon ECS (Variant 1a)
-        if: ${{ secrets.DEPLOY_TARGET == 'ecs' }}
+        if: env.DEPLOY_TARGET == 'ecs'
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-        continue-on-error: true
         with:
           task-definition: ${{ steps.render-worker-container.outputs.task-definition }}
           service: authsphere-worker
