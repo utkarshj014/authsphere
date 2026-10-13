@@ -377,25 +377,23 @@ Regardless of the compute model or ingress path, Express enforces multi-layered 
 
 ### 4.3. Vercel Configuration & Reverse Proxy ([apps/web/vercel.json](../apps/web/vercel.json))
 
-The reverse proxy rewrite in `apps/web/vercel.json` routes `/api/*` requests from your frontend domain directly to your backend compute:
+The reverse proxy rewrite in [`apps/web/vercel.ts`](../apps/web/vercel.ts) dynamically routes `/api/*` requests from your frontend domain directly to your backend compute using the programmatic `@vercel/config` configuration:
 
-```json
-{
-  "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "<BACKEND_URL>/:path*"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
-    }
-  ]
-}
+```typescript
+import { deploymentEnv, routes, type VercelConfig } from "@vercel/config/v1";
+
+const backendUrl = deploymentEnv("BACKEND_URL");
+
+export const config: VercelConfig = {
+  rewrites: [
+    routes.rewrite("/api/:path*", `${backendUrl}/:path*`),
+    routes.rewrite("/(.*)", "/index.html"),
+  ],
+};
 ```
 
 1. In the Vercel dashboard, connect your GitHub repository and set the **Root Directory** to `apps/web`.
-2. In `apps/web/vercel.json`, ensure the `/api/:path*` rewrite destination points to your live backend endpoint (`https://<LAMBDA_FUNCTION_URL_HOST>/:path*` for Lambda, or `http://<ALB_DNS>/:path*` for ECS without a custom domain).
+2. In Vercel Project Settings → **Environment Variables**, add `BACKEND_URL` set to your live backend endpoint base URL without a trailing slash (`https://<LAMBDA_FUNCTION_URL_HOST>` for Lambda, or `http://<ALB_DNS>` for ECS). Do not prefix it with `VITE_` so it is not exposed in the client bundle.
 3. Leave `VITE_API_URL` empty in `apps/web` environment variables! This ensures the client browser sends API requests to same-origin `/api/*`, giving you first-party HttpOnly cookies and zero cross-origin CORS preflights.
 4. Every push to `main` automatically triggers an optimized production build and deployment on Vercel.
 
