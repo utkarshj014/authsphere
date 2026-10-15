@@ -27,8 +27,13 @@ const sharedConfig = z.object({
 
 // 2. Email Worker Config (Only required by BullMQ background worker)
 const workerConfig = z.object({
-  RESEND_API_KEY: z.string().min(1),
-  EMAIL_FROM: z.string().min(1),
+  EMAIL_PROVIDER: z.enum(["resend", "gmail"]).optional(),
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().optional(),
+  GMAIL_USER: z.string().optional(),
+  GMAIL_REFRESH_TOKEN: z.string().optional(),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
 });
 
 // 3. API Server, Database & Auth Config (Only required by Express API)
@@ -65,8 +70,14 @@ const apiConfig = z.object({
   GITHUB_CLIENT_ID: z.string().optional(),
   GITHUB_CLIENT_SECRET: z.string().optional(),
   OAUTH_CALLBACK_BASE_URL: z.string().optional(), //keep string because url validation will fail on empty strings provided during deployment
+  // ---------------------------------------
+  // Email config, added later for inline or sync mode,
+  // ---------------------------------------
+  EMAIL_PROVIDER: z.enum(["resend", "gmail"]).optional(),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().optional(),
+  GMAIL_USER: z.string().optional(),
+  GMAIL_REFRESH_TOKEN: z.string().optional(),
 });
 
 const apiSchema = sharedConfig
@@ -77,13 +88,23 @@ const apiSchema = sharedConfig
     JWT_REFRESH_EXPIRES_IN_MS: parseDurationToMs(config.JWT_REFRESH_EXPIRES_IN),
   }))
   .refine(
-    (data) =>
-      (data.QUEUE_DRIVER !== "inline" && data.QUEUE_DRIVER !== "sync") ||
-      Boolean(data.RESEND_API_KEY && data.EMAIL_FROM),
+    (data) => {
+      if (data.QUEUE_DRIVER !== "inline" && data.QUEUE_DRIVER !== "sync") {
+        return true;
+      }
+      const hasResend = Boolean(data.RESEND_API_KEY && data.EMAIL_FROM);
+      const hasGmail = Boolean(
+        data.GMAIL_USER &&
+        data.GOOGLE_CLIENT_ID &&
+        data.GOOGLE_CLIENT_SECRET &&
+        data.GMAIL_REFRESH_TOKEN,
+      );
+      return hasResend || hasGmail;
+    },
     {
       message:
-        "RESEND_API_KEY and EMAIL_FROM are required when QUEUE_DRIVER is inline or sync",
-      path: ["RESEND_API_KEY"],
+        "Either Resend (RESEND_API_KEY, EMAIL_FROM) or Gmail OAuth2 (GMAIL_USER, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GMAIL_REFRESH_TOKEN) credentials are required when QUEUE_DRIVER is inline or sync",
+      path: ["EMAIL_PROVIDER"],
     },
   );
 

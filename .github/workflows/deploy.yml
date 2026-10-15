@@ -65,6 +65,7 @@ jobs:
       GITHUB_CLIENT_ID: test-github-client-id
       GITHUB_CLIENT_SECRET: test-github-client-secret
       OAUTH_CALLBACK_BASE_URL: http://localhost:3001/auth/oauth
+      EMAIL_PROVIDER: resend
       RESEND_API_KEY: resend_test_dummy_key_for_testing
       EMAIL_FROM: AuthSphere <noreply@authsphere.dev>
 
@@ -145,6 +146,9 @@ jobs:
               MfaEncryptionKey="${{ secrets.MFA_ENCRYPTION_KEY }}" \
               ResendApiKey="${{ secrets.RESEND_API_KEY }}" \
               EmailFrom="${{ secrets.EMAIL_FROM || 'AuthSphere <noreply@authsphere.dev>' }}" \
+              EmailProvider="${{ vars.EMAIL_PROVIDER }}" \
+              GmailUser="${{ secrets.GMAIL_USER }}" \
+              GmailRefreshToken="${{ secrets.GMAIL_REFRESH_TOKEN }}" \
               GoogleClientId="${{ vars.GOOGLE_CLIENT_ID }}" \
               GoogleClientSecret="${{ secrets.GOOGLE_CLIENT_SECRET }}" \
               GithubClientId="${{ vars.GITHUB_CLIENT_ID }}" \

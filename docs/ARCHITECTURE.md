@@ -78,13 +78,13 @@ flowchart TD
         Redis[("Redis Cache")]
         BullMQ[("BullMQ Email Queue")]
         Worker["Email Worker Process"]
-        ResendAPI["Resend Email API"]
+        EmailGateway["Email Gateway (Gmail OAuth2 / Resend)"]
         CryptoLib["Crypto Library"]
         Postgres[("PostgreSQL DB")]
 
         BullMQ -->|Redis Transport| Redis
         BullMQ -->|Async Job Dequeue| Worker
-        Worker -->|Resend Provider| ResendAPI
+        Worker -->|Email Provider Strategy| EmailGateway
     end
 
     Express --> Helmet
@@ -601,9 +601,9 @@ sequenceDiagram
 - **Dual-Driver Background Queue**: Outbound email delivery is decoupled from the synchronous HTTP request-response cycle via a configurable dual-driver architecture (`QUEUE_DRIVER=bullmq | inline`). In clustered production, BullMQ backed by Redis provides asynchronous execution with exponential backoff (up to 4 retries across 5 attempts) and failed-job retention. In single-container cloud deployments or demos, the inline driver asynchronously offloads delivery via `setImmediate()`, eliminating 100% of idle Redis commands on serverless tiers (Upstash) while guaranteeing sub-second delivery (<500ms) `[ADR-072, ADR-075, ADR-078]`.
 - **Cloud Migration Roadmap (AWS SQS + Lambda)**: When traffic demands multi-AZ elasticity and autoscaling from zero, the background queue migrates to native AWS SQS and AWS Lambda, providing true zero-idle compute billing, push-based trigger invocation, and automated Dead-Letter Queues without continuous polling overhead `[ADR-078]`.
 - **Redis Security Transit Perimeter**: Sensitive raw authentication credentials (verification tokens, password-reset tokens, and magic links) traverse Redis when `QUEUE_DRIVER=bullmq`. Consequently, Redis is classified as a sensitive data perimeter requiring TLS in transit, authenticated access, and network isolation `[ADR-072, ADR-078]`.
-- **Provider-Agnostic Email System**: The application interacts exclusively with the `EmailProvider` contract; `resendProvider` handles API communication, enabling clean swapping of providers and mock injection for testing without network side-effects `[ADR-073]`.
+- **Provider-Agnostic Email System**: The application interacts exclusively with the `EmailProvider` contract (`emailService.processJob`), dynamically resolving `gmailOAuthProvider` (Google OAuth2 via Nodemailer for zero-domain portfolio delivery to arbitrary recipients) or `resendProvider` (for custom-domain enterprise SaaS) via `getEmailProvider()`, enabling clean swapping and mock injection for testing without network side-effects `[ADR-073]`.
 - **Unified Redis Client**: All Redis operations (atomic pipeline rate limiting, OAuth state, role caching, and BullMQ queues) are consolidated onto `ioredis`, eliminating duplicate client libraries and connection divergence `[ADR-074]`.
-- **Process-Aware Secret Isolation & Least Privilege**: `src/config/env.ts` partitions configuration into `sharedConfig` (infrastructure), `apiConfig` (database, JWT, OAuth, MFA), and `workerConfig` (Resend email credentials). At startup, `APP_ROLE` determines whether the process acts as the REST API or the background worker. Zod automatically strips non-required keys, ensuring the public-facing API container never holds or requires email dispatch keys, and the background worker container never holds database credentials `[ADR-003, ADR-004, ADR-077]`.
+- **Process-Aware Secret Isolation & Least Privilege**: `src/config/env.ts` partitions configuration into `sharedConfig` (infrastructure), `apiConfig` (database, JWT, OAuth, MFA, optional email), and `workerConfig` (optional email delivery credentials). At startup, `APP_ROLE` determines whether the process acts as the REST API or the background worker. Zod automatically strips non-required keys, ensuring the public-facing API container never holds or requires email dispatch keys in queue mode, and the background worker container never holds database credentials `[ADR-003, ADR-004, ADR-077]`.
 
 ---
 

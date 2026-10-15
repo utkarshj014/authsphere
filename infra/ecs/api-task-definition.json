@@ -110,6 +110,18 @@
         {
           "name": "OAUTH_CALLBACK_BASE_URL",
           "valueFrom": "/authsphere/OAUTH_CALLBACK_BASE_URL"
+        },
+        {
+          "name": "EMAIL_PROVIDER",
+          "valueFrom": "/authsphere/EMAIL_PROVIDER"
+        },
+        {
+          "name": "GMAIL_USER",
+          "valueFrom": "/authsphere/GMAIL_USER"
+        },
+        {
+          "name": "GMAIL_REFRESH_TOKEN",
+          "valueFrom": "/authsphere/GMAIL_REFRESH_TOKEN"
         }
       ],
       "logConfiguration": {

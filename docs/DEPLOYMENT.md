@@ -260,14 +260,17 @@ ECS containers resolve secrets natively from **AWS SSM Parameter Store** via the
   - `/authsphere/JWT_ACCESS_SECRET`: Signing secret for access JWTs (min 16 chars)
   - `/authsphere/JWT_REFRESH_SECRET`: Signing secret for refresh JWTs (min 16 chars)
   - `/authsphere/MFA_ENCRYPTION_KEY`: AES-256-GCM encryption key for TOTP secrets (min 16 chars)
-  - `/authsphere/RESEND_API_KEY`: Email delivery service API key
-  - `/authsphere/GOOGLE_CLIENT_SECRET`: Google OAuth client secret (optional)
+  - `/authsphere/RESEND_API_KEY`: Email delivery service API key (Option B)
+  - `/authsphere/GMAIL_REFRESH_TOKEN`: Gmail OAuth2 Refresh Token (Option A)
+  - `/authsphere/GOOGLE_CLIENT_SECRET`: Google OAuth client secret (shared for Sign-In & Gmail sending)
   - `/authsphere/GITHUB_CLIENT_SECRET`: GitHub OAuth client secret (optional)
 
 - **String Parameters:**
   - `/authsphere/FRONTEND_URL`: Hosted frontend origin (e.g. `https://<YOUR_PROJECT>.vercel.app`)
-  - `/authsphere/EMAIL_FROM`: Transactional sender identity (e.g. `AuthSphere <noreply@<YOUR_DOMAIN>>`)
-  - `/authsphere/GOOGLE_CLIENT_ID`: Google OAuth client ID (optional)
+  - `/authsphere/EMAIL_PROVIDER`: Email strategy selection (`gmail` or `resend`)
+  - `/authsphere/EMAIL_FROM`: Transactional sender identity (Option B, e.g. `AuthSphere <noreply@<YOUR_DOMAIN>>`)
+  - `/authsphere/GMAIL_USER`: Gmail account address for OAuth2 sending (Option A)
+  - `/authsphere/GOOGLE_CLIENT_ID`: Google OAuth client ID (shared for Sign-In & Gmail sending)
   - `/authsphere/GITHUB_CLIENT_ID`: GitHub OAuth client ID (optional)
   - `/authsphere/OAUTH_CALLBACK_BASE_URL`: OAuth callback base URL (optional)
 
@@ -375,7 +378,7 @@ Regardless of the compute model or ingress path, Express enforces multi-layered 
 - **Payload & Memory Protections:** Strict 16kb body limits (`express.json({ limit: "16kb" })`) defend against JSON nested payload attacks and memory exhaustion.
 - **Cryptographic Access Control:** Authenticated routes require signed, tamper-proof RS256/HS256 JWTs with database-backed session revocation, constant-time timing-attack defenses, and RBAC permission checks.
 
-### 4.3. Vercel Configuration & Reverse Proxy ([apps/web/vercel.json](../apps/web/vercel.json))
+### 4.3. Vercel Configuration & Reverse Proxy ([apps/web/vercel.ts](../apps/web/vercel.ts))
 
 The reverse proxy rewrite in [`apps/web/vercel.ts`](../apps/web/vercel.ts) dynamically routes `/api/*` requests from your frontend domain directly to your backend compute using the programmatic `@vercel/config` configuration:
 
@@ -430,20 +433,22 @@ DATABASE_URL="<DIRECT_DATABASE_URL>" npm run db:seed --workspace=@authsphere/api
 - **Background Bleed Elimination:** Under the Primary Serverless Architecture (Lambda) or Variant 1b (Inline), BullMQ polling loops are inactive, completely eliminating the continuous background command consumption of idle queue polling.
 - **Active Traffic Command Scaling:** Active API requests consume atomic Redis commands for fixed-window rate limiting, RBAC permission lookup caching, and refresh token leeway verification, scaling strictly with incoming request volume rather than elapsed time.
 
-### 5.3. Transactional Email: Provider Constraints & Arbitrary Recipient Strategy
+### 5.3. Transactional Email: Multi-Provider Strategy & Arbitrary Recipient Delivery
 
-Modern email services enforce strict anti-abuse and anti-phishing policies (DMARC, SPF, and DKIM):
+AuthSphere implements a provider-agnostic Strategy Pattern (`EmailProvider`) supporting two delivery models:
 
-- **Production Mode (Verified Custom Domain):**
-  - Add and verify your domain DNS records in Resend (3 TXT records).
-  - Configure `EMAIL_FROM: AuthSphere <noreply@yourdomain.com>`.
-  - Delivers emails to arbitrary users across all mail providers.
-- **Sandbox Mode (`onboarding@resend.dev`):**
-  - When no custom domain is configured, Resend provides the default test sender `onboarding@resend.dev`.
-  - **Constraint:** Resend restricts delivery exclusively to the single email address registered with your Resend developer account. Attempting to send to arbitrary third-party recipients throws `403 validation_error: You can only send testing emails to your own email address`.
-- **Showcase vs. Production Alignment:**
-  - **Showcase Demo:** The default Resend sandbox operates out-of-the-box with zero domain setup, sending transactional emails to the registered account owner.
-  - **Production:** Delivering transactional emails to arbitrary external recipients requires adding and verifying a custom sender domain in Resend.
+- **Option A: Google Gmail OAuth2 (Recommended for Portfolio & Live Demonstrations):**
+  - **No Custom Domain Required:** Sends authenticated emails from a personal Gmail address (`@gmail.com`) to **any arbitrary recipient** across the web.
+  - **Mechanics:** Uses `nodemailer` with Google OAuth 2.0 (`clientId`, `clientSecret`, `refreshToken`), dynamically imported to preserve lean cold starts.
+  - **Sender Display:** Fixed as `"AuthSphere" <${GMAIL_USER}>`.
+  - **Ideal For:** Recruiters, reviewers, and live portfolio testing where arbitrary test emails must receive real verification links without paying for or configuring custom domain DNS.
+
+- **Option B: Resend (Enterprise SaaS with Custom Domain):**
+  - **Production Mode:** Requires adding and verifying custom domain DNS records (SPF, DKIM, DMARC) in Resend. Delivers high-volume transactional emails to arbitrary recipients with dedicated reputation.
+  - **Sandbox Mode (`onboarding@resend.dev`):** Without a custom domain, Resend restricts delivery exclusively to the single email address registered with your Resend account. Attempting to send to arbitrary third-party recipients throws `403 validation_error: You can only send testing emails to your own email address`.
+
+- **Strategy Selection (`EMAIL_PROVIDER`):**
+  - Configurable as `"gmail"` or `"resend"`. If unset, automatically defaults to `"gmail"` if `GMAIL_REFRESH_TOKEN` is present, otherwise falls back to `"resend"`.
 
 ---
 
@@ -453,38 +458,48 @@ All environment variables follow a unified schema validated at startup via Zod i
 
 ### 6.1. Runtime Infrastructure Configuration (Plain Text)
 
-| Variable                            | Target Location               | Default / Value                  | Description                                                                                           |
-| :---------------------------------- | :---------------------------- | :------------------------------- | :---------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                          | Task Definition / SAM Globals | `production`                     | Application environment mode (`development`, `production`, `test`)                                    |
-| `APP_ROLE`                          | Task Definition / SAM Globals | `api`                            | Process execution role (`api` or `worker`)                                                            |
-| `QUEUE_DRIVER`                      | Task Definition / SAM Globals | `sync` (Lambda) / `inline` (ECS) | Delivery mode (`sync` for Lambda, `inline` or `bullmq` for ECS)                                       |
-| `PORT`                              | Task Definition / SAM Globals | `3000`                           | API listening port                                                                                    |
-| `HOST`                              | Task Definition / SAM Globals | `0.0.0.0`                        | API listening host binding                                                                            |
-| `TRUST_PROXY`                       | Task Definition / SAM Globals | `1` (Lambda) / `2` (ECS)         | Proxy hops: 1 for Vercel $\rightarrow$ Lambda, 2 for Vercel $\rightarrow$ ALB $\rightarrow$ Container |
-| `JWT_ACCESS_EXPIRES_IN`             | Task Definition / SAM Globals | `15m`                            | Access token expiration duration                                                                      |
-| `JWT_REFRESH_EXPIRES_IN`            | Task Definition / SAM Globals | `30d`                            | Refresh token expiration duration                                                                     |
-| `AUTH_REUSE_DELETION_MODE`          | Task Definition / SAM Globals | `SESSION`                        | Refresh token compromise policy (`SESSION` or `GLOBAL`)                                               |
-| `AUTH_REFRESH_TOKEN_LEEWAY_SECONDS` | Task Definition / SAM Globals | `30`                             | Multi-tab concurrent token rotation grace period (seconds)                                            |
+| Variable                            | Target Location                              | Default / Value                                              | Description                                                                                               |
+| :---------------------------------- | :------------------------------------------- | :----------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                          | Task Definition / SAM Globals                | `production`                                                 | Application environment mode (`development`, `production`, `test`)                                        |
+| `APP_ROLE`                          | Task Definition / SAM Globals                | `api`                                                        | Process execution role (`api` or `worker`)                                                                |
+| `QUEUE_DRIVER`                      | Task Definition / SAM Globals                | `sync` (Lambda) / `inline` (ECS API) / `bullmq` (ECS Worker) | Delivery mode (`sync` for serverless Lambda, `inline` for single-container ECS, `bullmq` for worker)      |
+| `PORT`                              | Task Definition / Not needed on Lambda       | `3000`                                                       | API listening port (Lambda executes in-process via `@vendia/serverless-express`; defaults to 3000 in env) |
+| `HOST`                              | Task Definition / SAM Globals                | `0.0.0.0`                                                    | API listening host binding                                                                                |
+| `TRUST_PROXY`                       | Task Definition / SAM Globals                | `1` (Lambda) / `2` (ECS)                                     | Proxy hops: 1 for Vercel $\rightarrow$ Lambda, 2 for Vercel $\rightarrow$ ALB $\rightarrow$ Container     |
+| `DATABASE_POOL_MAX`                 | Task Definition / SAM Globals (Optional)     | `2` (Lambda) / `10` (ECS)                                    | Maximum Prisma PostgreSQL connection pool size per compute instance                                       |
+| `JWT_ACCESS_EXPIRES_IN`             | Task Definition / SAM Globals                | `15m`                                                        | Access token expiration duration                                                                          |
+| `JWT_REFRESH_EXPIRES_IN`            | Task Definition / SAM Globals                | `30d`                                                        | Refresh token expiration duration                                                                         |
+| `AUTH_REUSE_DELETION_MODE`          | Task Definition / SAM Globals                | `SESSION`                                                    | Refresh token compromise policy (`SESSION` or `GLOBAL`)                                                   |
+| `AUTH_REFRESH_TOKEN_LEEWAY_SECONDS` | Task Definition / SAM Globals                | `30`                                                         | Multi-tab concurrent token rotation grace period (seconds)                                                |
+| `EMAIL_PROVIDER`                    | SAM Parameter (`vars`) / SSM Parameter Store | `gmail` / `resend`                                           | Delivery strategy (defaults to `gmail` if `GMAIL_REFRESH_TOKEN` present, else `resend`)                   |
 
 ### 6.2. Sensitive Secrets & Service Credentials
 
-| Variable                  | Primary Serverless (Lambda)                         | Reference Containers (ECS)                 | Sensitivity        | Description                                                            |
-| :------------------------ | :-------------------------------------------------- | :----------------------------------------- | :----------------- | :--------------------------------------------------------------------- |
-| `DATABASE_URL_DIRECT`     | GitHub Encrypted Secret `DATABASE_URL_DIRECT`       | GitHub Encrypted Secret                    | `Encrypted Secret` | PostgreSQL direct unpooled URL (strictly for CI/CD migrations)         |
-| `DATABASE_URL`            | SAM Parameter (`NoEcho`) from `DATABASE_URL_POOLED` | SSM `/authsphere/DATABASE_URL` (KMS)       | `Encrypted Secret` | PostgreSQL pooled connection URL (for runtime API compute)             |
-| `REDIS_URL`               | SAM Parameter (`NoEcho`) from `REDIS_URL`           | SSM `/authsphere/REDIS_URL` (KMS)          | `Encrypted Secret` | Upstash Redis connection URL                                           |
-| `FRONTEND_URL`            | SAM Parameter from Variable / Default               | SSM `/authsphere/FRONTEND_URL`             | `Plaintext Config` | Hosted frontend origin (e.g. `https://<YOUR_PROJECT>.vercel.app`)      |
-| `JWT_ACCESS_SECRET`       | SAM Parameter (`NoEcho`) from `JWT_ACCESS_SECRET`   | SSM `/authsphere/JWT_ACCESS_SECRET` (KMS)  | `Encrypted Secret` | Signing secret for access JWTs (256-bit entropy recommended)           |
-| `JWT_REFRESH_SECRET`      | SAM Parameter (`NoEcho`) from `JWT_REFRESH_SECRET`  | SSM `/authsphere/JWT_REFRESH_SECRET` (KMS) | `Encrypted Secret` | Signing secret for refresh JWTs (256-bit entropy recommended)          |
-| `MFA_ENCRYPTION_KEY`      | SAM Parameter (`NoEcho`) from `MFA_ENCRYPTION_KEY`  | SSM `/authsphere/MFA_ENCRYPTION_KEY` (KMS) | `Encrypted Secret` | Passphrase used to derive 32-byte AES-256 key via SHA-256              |
-| `RESEND_API_KEY`          | SAM Parameter (`NoEcho`) from `RESEND_API_KEY`      | SSM `/authsphere/RESEND_API_KEY` (KMS)     | `Encrypted Secret` | Resend email API key                                                   |
-| `EMAIL_FROM`              | SAM Parameter from Secret / Default                 | SSM `/authsphere/EMAIL_FROM`               | `Plaintext Config` | Transactional sender identity (e.g. `AuthSphere <noreply@<DOMAIN>>`)   |
-| `GOOGLE_CLIENT_ID`        | SAM Parameter / Optional                            | SSM `/authsphere/GOOGLE_CLIENT_ID`         | `Plaintext Config` | Google OAuth 2.0 Client ID (optional)                                  |
-| `GOOGLE_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional                 | SSM `/authsphere/GOOGLE_CLIENT_SECRET`     | `Encrypted Secret` | Google OAuth 2.0 Client Secret (optional)                              |
-| `GITHUB_CLIENT_ID`        | SAM Parameter / Optional                            | SSM `/authsphere/GITHUB_CLIENT_ID`         | `Plaintext Config` | GitHub OAuth 2.0 Client ID (optional)                                  |
-| `GITHUB_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional                 | SSM `/authsphere/GITHUB_CLIENT_SECRET`     | `Encrypted Secret` | GitHub OAuth 2.0 Client Secret (optional)                              |
-| `OAUTH_CALLBACK_BASE_URL` | SAM Parameter / Optional                            | SSM `/authsphere/OAUTH_CALLBACK_BASE_URL`  | `Plaintext Config` | Base URL for OAuth callbacks routed via Vercel reverse proxy           |
-| `VITE_API_URL`            | `apps/web/.env`                                     | `apps/web/.env`                            | `Client-Public`    | Web client API target (leave empty for Vite proxy / Vercel Edge proxy) |
+| Variable                  | Primary Serverless (Lambda)                         | Reference Containers (ECS)                   | Sensitivity        | Description                                                         |
+| :------------------------ | :-------------------------------------------------- | :------------------------------------------- | :----------------- | :------------------------------------------------------------------ |
+| `DATABASE_URL_DIRECT`     | GitHub Encrypted Secret `DATABASE_URL_DIRECT`       | GitHub Encrypted Secret                      | `Encrypted Secret` | PostgreSQL direct unpooled URL (strictly for CI/CD migrations)      |
+| `DATABASE_URL`            | SAM Parameter (`NoEcho`) from `DATABASE_URL_POOLED` | SSM `/authsphere/DATABASE_URL` (KMS)         | `Encrypted Secret` | PostgreSQL pooled connection URL (for runtime API compute)          |
+| `REDIS_URL`               | SAM Parameter (`NoEcho`) from `REDIS_URL`           | SSM `/authsphere/REDIS_URL` (KMS)            | `Encrypted Secret` | Upstash Redis connection URL                                        |
+| `FRONTEND_URL`            | SAM Parameter from Variable / Default               | SSM `/authsphere/FRONTEND_URL`               | `Plaintext Config` | Hosted frontend origin (e.g. `https://<YOUR_PROJECT>.vercel.app`)   |
+| `JWT_ACCESS_SECRET`       | SAM Parameter (`NoEcho`) from `JWT_ACCESS_SECRET`   | SSM `/authsphere/JWT_ACCESS_SECRET` (KMS)    | `Encrypted Secret` | Signing secret for access JWTs (256-bit entropy recommended)        |
+| `JWT_REFRESH_SECRET`      | SAM Parameter (`NoEcho`) from `JWT_REFRESH_SECRET`  | SSM `/authsphere/JWT_REFRESH_SECRET` (KMS)   | `Encrypted Secret` | Signing secret for refresh JWTs (256-bit entropy recommended)       |
+| `MFA_ENCRYPTION_KEY`      | SAM Parameter (`NoEcho`) from `MFA_ENCRYPTION_KEY`  | SSM `/authsphere/MFA_ENCRYPTION_KEY` (KMS)   | `Encrypted Secret` | Passphrase used to derive 32-byte AES-256 key via SHA-256           |
+| `GMAIL_USER`              | SAM Parameter / Optional                            | SSM `/authsphere/GMAIL_USER`                 | `Plaintext Config` | Gmail account address for OAuth2 sending (Option A)                 |
+| `GMAIL_REFRESH_TOKEN`     | SAM Parameter (`NoEcho`) / Optional                 | SSM `/authsphere/GMAIL_REFRESH_TOKEN` (KMS)  | `Encrypted Secret` | Gmail OAuth2 Refresh Token (Option A)                               |
+| `RESEND_API_KEY`          | SAM Parameter (`NoEcho`) / Optional                 | SSM `/authsphere/RESEND_API_KEY` (KMS)       | `Encrypted Secret` | Resend email API key (Option B)                                     |
+| `EMAIL_FROM`              | SAM Parameter / Optional                            | SSM `/authsphere/EMAIL_FROM`                 | `Plaintext Config` | Resend sender identity (e.g. `AuthSphere <noreply@<DOMAIN>>`)       |
+| `GOOGLE_CLIENT_ID`        | SAM Parameter / Optional                            | SSM `/authsphere/GOOGLE_CLIENT_ID`           | `Plaintext Config` | Google OAuth 2.0 Client ID (shared for Sign-In & Gmail sending)     |
+| `GOOGLE_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional                 | SSM `/authsphere/GOOGLE_CLIENT_SECRET` (KMS) | `Encrypted Secret` | Google OAuth 2.0 Client Secret (shared for Sign-In & Gmail sending) |
+| `GITHUB_CLIENT_ID`        | SAM Parameter / Optional                            | SSM `/authsphere/GITHUB_CLIENT_ID`           | `Plaintext Config` | GitHub OAuth 2.0 Sign-In Client ID (optional)                       |
+| `GITHUB_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional                 | SSM `/authsphere/GITHUB_CLIENT_SECRET` (KMS) | `Encrypted Secret` | GitHub OAuth 2.0 Sign-In Client Secret (optional)                   |
+| `OAUTH_CALLBACK_BASE_URL` | SAM Parameter / Optional                            | SSM `/authsphere/OAUTH_CALLBACK_BASE_URL`    | `Plaintext Config` | Base URL for OAuth callbacks routed via Vercel reverse proxy        |
+
+### 6.3. Frontend & Edge Reverse Proxy Configuration (Vercel & Web Client)
+
+| Variable       | Target Location                                 | Sensitivity        | Description                                                                                                                                                  |
+| :------------- | :---------------------------------------------- | :----------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BACKEND_URL`  | Vercel Project Settings → Environment Variables | `Plaintext Config` | Live backend base URL without trailing slash (`https://<LAMBDA_URL>` or `http://<ALB_DNS>`). Used server-side by `apps/web/vercel.ts` for Edge rewrites.     |
+| `VITE_API_URL` | `apps/web/.env` / Vercel Environment Variables  | `Client-Public`    | Web client API base URL. **Leave empty** in production to route through Vercel's same-origin proxy (`/api/*`), preserving HttpOnly cookies and zeroing CORS. |
 
 ---
 

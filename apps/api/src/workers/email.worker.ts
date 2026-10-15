@@ -1,7 +1,7 @@
 import { Worker, type Job, UnrecoverableError } from "bullmq";
 import { EMAIL_QUEUE_NAME, createBullMQConnection } from "../lib/queue.js";
 import { emailService } from "../modules/email/email.service.js";
-import { resendProvider } from "../modules/email/resend.provider.js";
+import { getEmailProvider } from "../modules/email/email.factory.js";
 import {
   EmailDeliveryError,
   type EmailJobData,
@@ -16,7 +16,8 @@ export const emailWorker = new Worker<EmailJobData>(
     const { id, data, attemptsMade } = job;
 
     try {
-      await emailService.processJob(data, resendProvider);
+      const provider = await getEmailProvider();
+      await emailService.processJob(data, provider);
       logger.info(
         { jobId: id, jobType: data.type, email: data.email },
         "Email submission accepted by provider",

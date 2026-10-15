@@ -14,8 +14,9 @@ export const enqueueEmailJob = async (data: EmailJobData): Promise<void> => {
     );
 
     const { emailService } = await import("./email.service.js");
-    const { resendProvider } = await import("./resend.provider.js");
-    await emailService.processJob(data, resendProvider);
+    const { getEmailProvider } = await import("./email.factory.js");
+    const provider = await getEmailProvider();
+    await emailService.processJob(data, provider);
     return;
   }
 
@@ -28,8 +29,9 @@ export const enqueueEmailJob = async (data: EmailJobData): Promise<void> => {
     setImmediate(async () => {
       try {
         const { emailService } = await import("./email.service.js");
-        const { resendProvider } = await import("./resend.provider.js");
-        await emailService.processJob(data, resendProvider);
+        const { getEmailProvider } = await import("./email.factory.js");
+        const provider = await getEmailProvider();
+        await emailService.processJob(data, provider);
       } catch (err) {
         logger.error(
           { err, jobType: data.type, email: data.email },

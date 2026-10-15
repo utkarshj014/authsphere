@@ -44,6 +44,26 @@
         {
           "name": "EMAIL_FROM",
           "valueFrom": "/authsphere/EMAIL_FROM"
+        },
+        {
+          "name": "EMAIL_PROVIDER",
+          "valueFrom": "/authsphere/EMAIL_PROVIDER"
+        },
+        {
+          "name": "GMAIL_USER",
+          "valueFrom": "/authsphere/GMAIL_USER"
+        },
+        {
+          "name": "GOOGLE_CLIENT_ID",
+          "valueFrom": "/authsphere/GOOGLE_CLIENT_ID"
+        },
+        {
+          "name": "GOOGLE_CLIENT_SECRET",
+          "valueFrom": "/authsphere/GOOGLE_CLIENT_SECRET"
+        },
+        {
+          "name": "GMAIL_REFRESH_TOKEN",
+          "valueFrom": "/authsphere/GMAIL_REFRESH_TOKEN"
         }
       ],
       "logConfiguration": {

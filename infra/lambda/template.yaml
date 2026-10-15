@@ -56,6 +56,19 @@ Parameters:
     NoEcho: true
     Default: ""
     Description: GitHub OAuth Client Secret
+  EmailProvider:
+    Type: String
+    Default: ""
+    Description: Email provider strategy ("gmail" or "resend")
+  GmailUser:
+    Type: String
+    Default: ""
+    Description: Gmail account address for OAuth2 sending
+  GmailRefreshToken:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Gmail OAuth2 Refresh Token
   OAuthCallbackBaseUrl:
     Type: String
     Default: ""
@@ -118,6 +131,9 @@ Resources:
           MFA_ENCRYPTION_KEY: !Ref MfaEncryptionKey
           RESEND_API_KEY: !Ref ResendApiKey
           EMAIL_FROM: !Ref EmailFrom
+          EMAIL_PROVIDER: !Ref EmailProvider
+          GMAIL_USER: !Ref GmailUser
+          GMAIL_REFRESH_TOKEN: !Ref GmailRefreshToken
           GOOGLE_CLIENT_ID: !Ref GoogleClientId
           GOOGLE_CLIENT_SECRET: !Ref GoogleClientSecret
           GITHUB_CLIENT_ID: !Ref GithubClientId
