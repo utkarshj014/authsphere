@@ -430,7 +430,10 @@ DATABASE_URL="<DIRECT_DATABASE_URL>" npm run db:seed --workspace=@authsphere/api
 ### 5.2. Upstash Redis: Operational Profile & Command Budget
 
 - **Responsibilities:** Powers fixed-window rate limiting, OAuth 2.0 PKCE state verification, token leeway grace periods, and BullMQ queue transport.
-- **Background Bleed Elimination:** Under the Primary Serverless Architecture (Lambda) or Variant 1b (Inline), BullMQ polling loops are inactive, completely eliminating the continuous background command consumption of idle queue polling.
+- **Background Bleed Elimination (Lambda & Inline):** Under the Primary Serverless Architecture (Lambda) or Variant 1b (Inline), BullMQ polling loops are inactive, completely eliminating background command consumption from idle queue polling.
+- **Decoupled Worker Calibration (Variant 1a):** When running a standalone BullMQ worker daemon ([apps/api/src/workers/email.worker.ts](../apps/api/src/workers/email.worker.ts)), connection settings are tuned to prevent idle command exhaustion on serverless Redis:
+  - `drainDelay: 30`: Establishes a 30-second long-poll timeout when the queue is empty, remaining safely below cloud TCP socket drop timeouts while eliminating tight polling loops. Enqueued jobs and scheduled backoff retries unblock and execute dynamically without waiting for this delay.
+  - `stalledInterval: 300000`: Sets the stalled job recovery sweep to every 5 minutes, ensuring orphaned in-flight tasks are rescued following abrupt container terminations while minimizing background inspection overhead.
 - **Active Traffic Command Scaling:** Active API requests consume atomic Redis commands for fixed-window rate limiting, RBAC permission lookup caching, and refresh token leeway verification, scaling strictly with incoming request volume rather than elapsed time.
 
 ### 5.3. Transactional Email: Multi-Provider Strategy & Arbitrary Recipient Delivery

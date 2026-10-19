@@ -53,6 +53,10 @@ export const emailWorker = new Worker<EmailJobData>(
   {
     connection,
     concurrency: 5,
+    // Idle poll timeout: waits 30s when queue is empty, safely below cloud TCP drop timeouts
+    drainDelay: 30,
+    // Stalled job check: rescues crashed in-flight jobs every 5m at minimal Redis command cost
+    stalledInterval: 300000,
   },
 );
 
