@@ -7,13 +7,13 @@ import {
 
 const router = Router();
 
-// Root alias for backward compatibility (delegates to liveness)
-router.get("/", rateLimiter(RATE_LIMIT_POLICIES.HEALTH), getHealth);
+// Root alias for backward compatibility (delegates to liveness: zero external I/O)
+router.get("/", getHealth);
 
-// ALB liveness probe: lightweight, in-memory, zero external I/O
-router.get("/live", rateLimiter(RATE_LIMIT_POLICIES.HEALTH), getLiveness);
+// Liveness probe: lightweight, in-memory, zero external I/O
+router.get("/live", getLiveness);
 
-// Dependency readiness probe: checks PostgreSQL and Redis availability
+// Dependency readiness probe: checks PostgreSQL and Redis availability (rate-limited against abuse)
 router.get("/ready", rateLimiter(RATE_LIMIT_POLICIES.HEALTH), getReadiness);
 
 export default router;

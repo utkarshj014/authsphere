@@ -180,6 +180,20 @@ export const RATE_LIMIT_POLICIES = {
   },
 } as const satisfies Record<string, RateLimitPolicy>;
 
+/**
+ * Atomic fixed-window rate limiter Lua script.
+ * Atomically increments the window bucket counter and sets the expiration TTL on the
+ * first request of the window (count == 1). Executes as a single atomic command in Redis,
+ * cutting Upstash command charges by 75% compared to MULTI/EXEC while eliminating race conditions.
+ */
+const RATE_LIMIT_LUA_SCRIPT = `
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+`;
+
 /** Reusable Express middleware factory for enforcing Redis-backed fixed-window rate limits */
 export const rateLimiter = (policy: RateLimitPolicy) => {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -208,23 +222,15 @@ export const rateLimiter = (policy: RateLimitPolicy) => {
       const nextWindowMs = (bucket + 1) * policy.windowMs;
       const secondsRemainingInWindow = Math.ceil((nextWindowMs - now) / 1000);
 
-      // 4. Atomic execution of counter increment and window expiration via Redis transaction
-      const results = await redis
-        .multi()
-        .incr(redisKey)
-        .expire(redisKey, secondsRemainingInWindow, "NX")
-        .exec();
+      // 4. Atomic execution of counter increment and window expiration via Redis Lua script (1 billed command)
+      const result = await redis.eval(
+        RATE_LIMIT_LUA_SCRIPT,
+        1,
+        redisKey,
+        secondsRemainingInWindow,
+      );
 
-      const incrError = results?.[0]?.[0];
-      const expireError = results?.[1]?.[0];
-
-      if (!results || incrError || expireError) {
-        throw (
-          incrError || expireError || new Error("Rate limit transaction failed")
-        );
-      }
-
-      const count = Number(results?.[0]?.[1] ?? 0);
+      const count = Number(result ?? 0);
       const resetSec = Math.max(1, secondsRemainingInWindow);
       const remaining = Math.max(0, policy.limit - count);
 

@@ -370,7 +370,7 @@ Vercel overwrites incoming `X-Forwarded-For` headers with the caller's verified 
 Regardless of the compute model or ingress path, Express enforces multi-layered defense controls. Each control provides distinct protections with explicit trade-offs:
 
 - **CSRF & Origin Validation:** The [`originValidation`](../apps/api/src/middlewares/origin-validation.ts) middleware intercepts mutations (`POST`, `PUT`, `PATCH`, `DELETE`), verifying W3C Fetch Metadata (`Sec-Fetch-Site: same-origin | same-site`) and matching `Origin`/`Referer` against `FRONTEND_URL` to block unauthorized cross-site requests before body parsing.
-- **Distributed Fixed-Window Rate Limiting:** Enforced via atomic Upstash Redis transactions (`INCR` + `EXPIRE NX`). Mitigates credential stuffing and brute-force attempts.
+- **Distributed Fixed-Window Rate Limiting:** Enforced via atomic Redis Lua scripting (`INCR` + conditional `EXPIRE` in 1 command). Mitigates credential stuffing and brute-force attempts while reducing Redis command consumption by 75% compared to multi-command transactions.
   - _Fail-Open Trade-off:_ If Redis is unreachable, rate limiting fails open to maintain login availability for legitimate users, accepting that endpoints are temporarily unthrottled during cache outages.
 - **Resource Sizing & Concurrency Ceilings:**
   - _Argon2id Password Hashing:_ Protects stored passwords against offline dictionary and GPU cracking. Because it deliberately consumes CPU (~180ms) and memory (64MB), it increases compute load under high-volume online request floods.
@@ -430,6 +430,8 @@ DATABASE_URL="<DIRECT_DATABASE_URL>" npm run db:seed --workspace=@authsphere/api
 ### 5.2. Upstash Redis: Operational Profile & Command Budget
 
 - **Responsibilities:** Powers fixed-window rate limiting, OAuth 2.0 PKCE state verification, token leeway grace periods, and BullMQ queue transport.
+- **Zero-I/O Infrastructure Health Probes:** ALB target group health checks (`/health/live`) are routed ahead of the rate-limiting middleware pipeline and execute purely in-memory with zero PostgreSQL and zero Redis I/O. This ensures container liveness stability during Redis latency or downtime (preventing cascading ECS container restarts) and completely eliminates heartbeat command churn against Upstash.
+- **Single-Command Atomic Rate Limiting:** Protected application routes enforce rate limits via an atomic Redis Lua script (`eval`) executing `INCR` and conditional `EXPIRE` in 1 single Redis command. Compared to 4-command `MULTI`/`EXEC` transaction blocks, this cuts rate-limiting command consumption on Upstash by 75% on every protected request.
 - **Background Bleed Elimination (Lambda & Inline):** Under the Primary Serverless Architecture (Lambda) or Variant 1b (Inline), BullMQ polling loops are inactive, completely eliminating background command consumption from idle queue polling.
 - **Decoupled Worker Calibration (Variant 1a):** When running a standalone BullMQ worker daemon ([apps/api/src/workers/email.worker.ts](../apps/api/src/workers/email.worker.ts)), connection settings are tuned to prevent idle command exhaustion on serverless Redis:
   - `drainDelay: 30`: Establishes a 30-second long-poll timeout when the queue is empty, remaining safely below cloud TCP socket drop timeouts while eliminating tight polling loops. Enqueued jobs and scheduled backoff retries unblock and execute dynamically without waiting for this delay.

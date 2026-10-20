@@ -85,7 +85,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-035: Redis Permission Caching with Fail-Safe Bypass](#adr-035--redis-permission-caching-with-fail-safe-bypass)
 - [ADR-036: Middleware-Based Authorization Guards](#adr-036--middleware-based-authorization-guards)
 - [ADR-038: Validation-Layer Input Normalization via Zod Transforms](#adr-038--validation-layer-input-normalization-via-zod-transforms)
-- [ADR-050: Redis-Backed Fixed-Window Rate Limiting via Atomic Transactions (MULTI/EXEC)](#adr-050--redis-backed-fixed-window-rate-limiting-via-atomic-transactions-multiexec)
+- [ADR-050: Redis-Backed Fixed-Window Rate Limiting via Atomic Lua Scripting](#adr-050--redis-backed-fixed-window-rate-limiting-via-atomic-lua-scripting)
 - [ADR-051: Centralized Rate Limit Policy Dictionary](#adr-051--centralized-rate-limit-policy-dictionary)
 - [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
@@ -190,7 +190,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-047: SHA-256 Hashed Recovery Codes with Atomic Single-Use Consumption](#adr-047--sha-256-hashed-recovery-codes-with-atomic-single-use-consumption)
 - [ADR-048: Dual-Factor Enforcement on Sensitive Credential Mutations](#adr-048--dual-factor-enforcement-on-sensitive-credential-mutations)
 - [ADR-049: Proactive Low Recovery Code Warning Threshold](#adr-049--proactive-low-recovery-code-warning-threshold)
-- [ADR-050: Redis-Backed Fixed-Window Rate Limiting via Atomic Transactions (MULTI/EXEC)](#adr-050--redis-backed-fixed-window-rate-limiting-via-atomic-transactions-multiexec)
+- [ADR-050: Redis-Backed Fixed-Window Rate Limiting via Atomic Lua Scripting](#adr-050--redis-backed-fixed-window-rate-limiting-via-atomic-lua-scripting)
 - [ADR-051: Centralized Rate Limit Policy Dictionary](#adr-051--centralized-rate-limit-policy-dictionary)
 - [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
@@ -1416,33 +1416,46 @@ When an authentication request (`mfaVerifyLogin`) succeeds via a recovery code, 
 
 ---
 
-## ADR-050 — Redis-Backed Fixed-Window Rate Limiting via Atomic Transactions (MULTI/EXEC)
+## ADR-050 — Redis-Backed Fixed-Window Rate Limiting via Atomic Lua Scripting
 
 **Status:** Accepted
 
 ### Context
 
-HTTP-level rate limiting requires atomic counter management in a shared store. Performing `INCR` and `EXPIRE` as disconnected Redis commands introduces race conditions where a key could be incremented without an expiration being set, causing permanent counter leaks.
+HTTP-level rate limiting requires atomic counter management in a shared store. Performing `INCR` and `EXPIRE` as disconnected Redis commands introduces race conditions where a key could be incremented without an expiration being set, causing permanent counter leaks. Furthermore, executing rate limiting via multi-command `MULTI/EXEC` transaction blocks bills 4 discrete Redis commands (`MULTI`, `INCR`, `EXPIRE`, `EXEC`) per request on serverless providers like Upstash, rapidly exhausting command quotas under high traffic or automated load balancer health check heartbeats.
 
 ### Decision
 
-Atomically execute counter increment and window expiration in a single Redis transaction block using `redis.multi().incr(redisKey).expire(redisKey, secondsRemainingInWindow, "NX").exec()` within `src/middlewares/rate-limit.ts`. The `"NX"` flag on `EXPIRE` ensures TTL is set only on the initial request of the window, while fixed-window bucket keys (`rl:${policy.name}:${identifier}:${bucket}`) ensure mathematical window boundaries without TTL drift.
+Atomically execute counter increment and conditional window expiration in a single Redis command using an embedded Lua script (`redis.eval(RATE_LIMIT_LUA_SCRIPT, 1, redisKey, secondsRemainingInWindow)`) within `src/middlewares/rate-limit.ts`. The script sets the expiration TTL strictly on the first request of the window (`if count == 1`), preserving mathematical window boundaries without TTL drift or redundant command execution.
 
 ```typescript
-const results = await redis
-  .multi()
-  .incr(redisKey)
-  .expire(redisKey, secondsRemainingInWindow, "NX")
-  .exec();
+const RATE_LIMIT_LUA_SCRIPT = `
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+`;
 
-const count = Number(results?.[0]?.[1] ?? 0);
+const result = await redis.eval(
+  RATE_LIMIT_LUA_SCRIPT,
+  1,
+  redisKey,
+  secondsRemainingInWindow,
+);
+
+const count = Number(result ?? 0);
 ```
+
+Additionally, AWS Application Load Balancer (ALB) liveness probes (`/health/live`) are routed before the rate-limiter middleware pipeline in `src/app.ts` and executed purely in-memory with zero external I/O, completely eliminating health check command churn and preventing cascading ECS container restarts during Redis maintenance.
 
 ### Rationale
 
-- **Strict Atomicity:** `MULTI / EXEC` ensures `INCR` and `EXPIRE` are executed together without intermediate operations.
-- **Single Roundtrip:** Commands are pipelined across the network in a single request-response cycle.
-- **Pure Infrastructure Decoupling:** Eliminates custom Lua scripts and module augmentation from `src/lib/redis.ts`, keeping the Redis client generic and standard.
+- **75% Command Reduction on Upstash:** Replaces a 4-command `MULTI`/`EXEC` transaction block with a single atomic `EVAL` command, directly cutting Redis command billing by 75% across all rate-limited routes.
+- **Strict Atomicity:** Redis executes Lua scripts as a single atomic unit, eliminating race conditions between counter incrementation and TTL expiration without client-side locking.
+- **Identical Window Mathematics:** Setting TTL only when `count == 1` replicates `EXPIRE ... NX` behavior with millisecond precision, ensuring the window duration is locked at inception without drift on subsequent requests.
+- **Zero Client Augmentation:** Native `ioredis` `redis.eval()` consumes the inline Lua script directly, requiring no monkey-patching, client wrappers, or external SHA management.
+- **Liveness Decoupling & Stability:** Exempting `/health/live` ensures infrastructure health checks never consume Redis commands or fail when Redis is degraded, preserving container stability.
 
 ---
 
@@ -2211,7 +2224,7 @@ The application initially utilized `redis` (node-redis v6) for fixed-window rate
 Migrate all Redis operations across the codebase to `ioredis` and uninstall `redis` (node-redis):
 
 1. **Unified Client Instance (`src/lib/redis.ts`)**: A single lightweight `ioredis` instance manages application-level operations, configured with `lazyConnect: true` and `maxRetriesPerRequest: null`, completely decoupled from specific middleware scripts.
-2. **Atomic Middleware Transactions:** Rate limiting counter increments and window expirations execute via `redis.multi().incr().expire(..., "NX").exec()` directly within middleware [ADR-050], eliminating custom Lua scripts and interface augmentation.
+2. **Atomic Middleware Rate Limiting:** Counter increments and window expirations execute via atomic Lua scripting (`redis.eval`) directly within middleware [ADR-050], cutting Upstash command charges by 75% compared to multi-command transactions while eliminating external script maintenance.
 3. **Dedicated Queue & Worker Connections (`src/lib/queue.ts`)**: BullMQ Workers and Queues spawn dedicated `ioredis` connections via `createBullMQConnection()`, isolating blocking queue operations (e.g. `BRPOPLPUSH`/`BLMOVE`) from general caching and rate limiting requests.
 4. **Lifecycle & Status Alignment:** Leverage native `redis.status === "ready"` directly for fail-safe connectivity checks across rate limiter middleware and cache access layers, ensuring fail-open resilience without custom wrapper properties.
 

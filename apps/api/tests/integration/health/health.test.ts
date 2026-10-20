@@ -13,7 +13,8 @@ describe("Health Module Integration (/health, /health/live, /health/ready)", () 
   describe("GET /health/live (Lightweight ALB Liveness Probe)", () => {
     it("returns 200 OK with UP status and ISO timestamp with zero external I/O", async () => {
       const dbSpy = vi.spyOn(prisma, "$queryRaw");
-      const redisSpy = vi.spyOn(redis, "ping");
+      const redisPingSpy = vi.spyOn(redis, "ping");
+      const redisEvalSpy = vi.spyOn(redis, "eval");
 
       const res = await request(app).get("/health/live");
 
@@ -28,7 +29,8 @@ describe("Health Module Integration (/health, /health/live, /health/ready)", () 
 
       // Invariant: zero external I/O on liveness probe
       expect(dbSpy).not.toHaveBeenCalled();
-      expect(redisSpy).not.toHaveBeenCalled();
+      expect(redisPingSpy).not.toHaveBeenCalled();
+      expect(redisEvalSpy).not.toHaveBeenCalled();
     });
 
     it("still returns 200 OK even if database and Redis are completely unreachable", async () => {

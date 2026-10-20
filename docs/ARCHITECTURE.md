@@ -573,7 +573,7 @@ sequenceDiagram
    - Explicit `16kb` body size limit on `express.json()` protects against payload memory consumption `[ADR-044]`.
    - `X-Request-Id` header sanitization strips control/newline characters (`\r\n`) and caps length at 128 chars while preserving distributed trace context `[ADR-043]`.
 10. **Rate Limiting & Anti-Abuse**:
-    - Multi-tiered Redis-backed rate limiting using atomic Lua scripting (`INCR` + conditional `EXPIRE` + `TTL` in a single `EVALSHA` roundtrip) `[ADR-050]`.
+    - Multi-tiered Redis-backed rate limiting using an atomic Lua script (`INCR` + conditional `EXPIRE` in 1 command via `redis.eval`), cutting Redis command charges by 75% compared to multi-command transactions `[ADR-050]`. Health checks (`/health/live`) are routed ahead of rate limiting for zero-I/O execution.
     - Centralized `RATE_LIMIT_POLICIES` dictionary defines per-endpoint quotas and windows. Global layer (100 req/min per IP) protects all routes; route-level policies protect sensitive endpoints (`LOGIN`, `MFA_VERIFY`, `OAUTH_INITIATE`, `OAUTH_CALLBACK`, `MAGIC_LINK_REQUEST`, `MAGIC_LINK_VERIFY`, `SESSIONS_READ`, `SESSION_REVOKE`, `SECURITY_EVENTS_READ`) individually `[ADR-051, ADR-066]`.
     - Dual-key strategy: IP-based keys for unauthenticated endpoints, authenticated `userId`-based keys for protected endpoints to prevent shared-network false positives `[ADR-052]`.
     - IETF-compliant `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` headers on all responses.

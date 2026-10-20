@@ -54,6 +54,10 @@ app.use(requestLogger);
 // Guards state-changing requests against untrusted browser origins
 app.use(originValidation);
 
+// Health Check Routes
+// Mounted ahead of rate limiting & body parsing: ALB liveness probes require pure in-memory zero-I/O execution
+app.use("/health", healthRouter);
+
 // Global Rate Limiter Middleware
 // Defends against API-wide flooding
 app.use(rateLimiter(RATE_LIMIT_POLICIES.GLOBAL));
@@ -64,7 +68,6 @@ app.use(express.json({ limit: "16kb" }));
 app.use(cookieParser());
 
 // Application Routes
-app.use("/health", healthRouter);
 app.use("/auth", authRouter);
 app.use("/sessions", sessionsRouter);
 app.use("/users", usersRouter);

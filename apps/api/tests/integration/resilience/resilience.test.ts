@@ -235,11 +235,11 @@ describe("Resilience & Invariants (Concurrency, Fail-Open, Constraints)", () => 
 
   describe("Redis Failure & Graceful Degradation", () => {
     it("rateLimiter fails-open when Redis throws an unexpected error", async () => {
-      vi.spyOn(redis, "multi").mockImplementation(() => {
-        throw new Error("Redis connection timed out / socket closed");
-      });
+      vi.spyOn(redis, "eval").mockRejectedValue(
+        new Error("Redis connection timed out / socket closed"),
+      );
 
-      const res = await request(app).get("/health");
+      const res = await request(app).get("/openapi.json");
       expect(res.status).toBe(200);
     });
 
