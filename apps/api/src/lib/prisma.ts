@@ -13,7 +13,7 @@ const isLambdaRuntime = Boolean(
 const poolConfig: PoolConfig = {
   connectionString: env.DATABASE_URL,
   max: env.DATABASE_POOL_MAX ?? (isLambdaRuntime ? 2 : 10),
-  connectionTimeoutMillis: isLambdaRuntime ? 3000 : 5000,
+  connectionTimeoutMillis: 5000,
   idleTimeoutMillis: isLambdaRuntime ? 15000 : 30000,
   allowExitOnIdle: true,
 };

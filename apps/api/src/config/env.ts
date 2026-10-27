@@ -18,9 +18,7 @@ const sharedConfig = z.object({
     .enum(["development", "production", "test"])
     .default("development"),
   APP_ROLE: z.enum(["api", "worker"]).default("api"),
-  QUEUE_DRIVER: z
-    .enum(["bullmq", "inline", "sync"])
-    .default(process.env.AWS_LAMBDA_FUNCTION_NAME ? "sync" : "bullmq"),
+  QUEUE_DRIVER: z.enum(["bullmq", "inline", "sync"]).default("bullmq"),
   FRONTEND_URL: z.url(),
   REDIS_URL: z.url(),
 });

@@ -92,6 +92,7 @@ Globals:
         JWT_REFRESH_EXPIRES_IN: "30d"
         AUTH_REUSE_DELETION_MODE: "SESSION"
         AUTH_REFRESH_TOKEN_LEEWAY_SECONDS: "30"
+        DATABASE_POOL_MAX: "2"
 
 Resources:
   # Lambda Function running Express API with Native Function URL
@@ -99,8 +100,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: authsphere-api
-      CodeUri: ../../apps/api
-      Handler: dist/lambda.handler
+      CodeUri: authsphere-api.zip
+      Handler: lambda.handler
       AutoPublishAlias: live
       AutoPublishAliasAllProperties: true
       ReservedConcurrentExecutions: 10
@@ -139,17 +140,6 @@ Resources:
           GITHUB_CLIENT_ID: !Ref GithubClientId
           GITHUB_CLIENT_SECRET: !Ref GithubClientSecret
           OAUTH_CALLBACK_BASE_URL: !Ref OAuthCallbackBaseUrl
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: true
-        Target: "node24"
-        Sourcemap: true
-        EntryPoints:
-          - src/lambda.ts
-        External:
-          - argon2
-          - "@prisma/client"
 
   # CloudWatch Log Group with 7-day retention guardrail
   AuthSphereApiLogGroup:

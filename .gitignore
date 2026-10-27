@@ -8,6 +8,8 @@ dist/
 build/
 out/
 *.tsbuildinfo
+infra/lambda/lambda.mjs*
+*.zip
 
 # Environment configurations
 .env

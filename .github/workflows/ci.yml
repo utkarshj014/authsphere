@@ -81,7 +81,9 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npm --prefix infra/lambda ci --omit=dev
 
       - name: Typecheck
         run: npm run typecheck
@@ -94,6 +96,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Build Lambda package
+        run: npm run build:lambda
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

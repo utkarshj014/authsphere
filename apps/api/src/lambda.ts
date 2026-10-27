@@ -1,6 +1,5 @@
 import serverlessExpressModule from "@codegenie/serverless-express";
 import app from "./app.js";
-import { prisma } from "./lib/prisma.js";
 import { redis } from "./lib/redis.js";
 import { logger } from "./lib/logger.js";
 
@@ -28,23 +27,16 @@ export const handler = async (event: unknown, context: any) => {
   if (!serverlessHandler) {
     logger.info("Initializing serverless Express runtime (cold start)...");
 
-    // Warm up database and cache connections; allow graceful fallback if Redis is temporarily unavailable
-    try {
-      await prisma.$connect();
-    } catch (err) {
-      logger.warn(
-        { err },
-        "Database connection deferred to first query during cold start",
-      );
-    }
-
-    try {
-      await redis.connect();
-    } catch (err) {
-      logger.warn(
-        { err },
-        "Redis handshake deferred or unavailable during cold start; proceeding in degraded mode",
-      );
+    // Eagerly connect Redis cache; database connects lazily on first query
+    if (redis.status === "wait") {
+      try {
+        await redis.connect();
+      } catch (err) {
+        logger.warn(
+          { err },
+          "Redis handshake deferred or unavailable during cold start; proceeding in degraded mode",
+        );
+      }
     }
 
     serverlessHandler = configureServerless({ app });

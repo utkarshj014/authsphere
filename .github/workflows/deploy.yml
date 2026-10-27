@@ -115,7 +115,9 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npm --prefix infra/lambda ci --omit=dev
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v6
@@ -131,10 +133,8 @@ jobs:
       - name: Deploy to AWS Lambda (SAM)
         if: env.DEPLOY_TARGET != 'ecs'
         run: |
-          npm run build:shared
-          npm run build -w @authsphere/api
+          npm run build:lambda
           cd infra/lambda
-          sam build --use-container
           sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
             --region ${{ vars.AWS_REGION || 'ap-south-1' }} \
             --parameter-overrides \
@@ -167,6 +167,13 @@ jobs:
         run: |
           echo "Verifying healthcheck at: ${FUNCTION_URL}health/live"
           curl --fail --retry 3 --retry-delay 5 --max-time 15 "${FUNCTION_URL}health/live"
+
+      - name: Scale down ECS services to 0 (Idle cost optimization)
+        if: env.DEPLOY_TARGET != 'ecs'
+        run: |
+          echo "Optimizing idle compute: Ensuring ECS tasks are scaled to 0 while Lambda is active..."
+          aws ecs update-service --cluster authsphere-cluster --service authsphere-api --desired-count 0 --region ${{ vars.AWS_REGION || 'ap-south-1' }} > /dev/null 2>&1 || true
+          aws ecs update-service --cluster authsphere-cluster --service authsphere-worker --desired-count 0 --region ${{ vars.AWS_REGION || 'ap-south-1' }} > /dev/null 2>&1 || true
 
       - name: Set up Docker Buildx
         if: env.DEPLOY_TARGET == 'ecs'
@@ -218,6 +225,12 @@ jobs:
           task-definition: infra/ecs/worker-task-definition.json
           container-name: authsphere-worker
           image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+
+      - name: Ensure ECS API service is active (desired-count: 1)
+        if: env.DEPLOY_TARGET == 'ecs'
+        run: |
+          echo "Ensuring ECS API service is active (desired-count: 1)..."
+          aws ecs update-service --cluster authsphere-cluster --service authsphere-api --desired-count 1 --region ${{ vars.AWS_REGION || 'ap-south-1' }} > /dev/null 2>&1 || true
 
       - name: Deploy API to Amazon ECS
         if: env.DEPLOY_TARGET == 'ecs'

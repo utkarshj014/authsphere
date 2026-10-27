@@ -1,0 +1,9 @@
+{
+  "name": "authsphere-lambda",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "argon2": "^0.45.1"
+  }
+}

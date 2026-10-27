@@ -150,15 +150,15 @@ Lambda runtime secrets are defined in [`infra/lambda/template.yaml`](../infra/la
 
 Non-sensitive deployment defaults (stack name, region, IAM capabilities, S3 resolution) are saved in [`infra/lambda/samconfig.toml`](../infra/lambda/samconfig.toml).
 
-- **Automated Deploy (GitHub Actions):** Push code to `main`. The `deploy.yml` workflow automatically runs Prisma migrations, compiles TypeScript, runs `sam build`, and executes `sam deploy` with parameter overrides.
+- **Automated Deploy (GitHub Actions):** Push code to `main`. The `deploy.yml` workflow automatically runs Prisma migrations, compiles the unified Lambda package (`npm run build:lambda`), and executes `sam deploy` with parameter overrides.
 - **Manual CLI Deploy:**
+
   ```bash
-  npm run build:shared
-  npm run build -w @authsphere/api
+  # 1. Build and package the production Lambda artifact (self-contained, with prebuilt argon2)
+  npm run build:lambda
+
+  # 2. Deploy directly via AWS SAM (reads template.yaml pointing to authsphere-api.zip)
   cd infra/lambda
-  # Note: Use --use-container when building locally from Windows or macOS
-  # to compile native C++ bindings (argon2) for Amazon Linux 2023
-  sam build --use-container
   sam deploy --parameter-overrides \
     DatabaseUrl="<POOLED_DB_URL>" \
     RedisUrl="<REDIS_URL>" \
