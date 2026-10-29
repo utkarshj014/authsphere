@@ -8,13 +8,18 @@ const isLambdaRuntime = Boolean(
   process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT,
 );
 
-// Bound pool dynamically: Lambda microVMs handle 1 request at a time (max 2 sockets);
-// ECS / long-running servers handle concurrent event loop requests (max 10 sockets)
 const poolConfig: PoolConfig = {
   connectionString: env.DATABASE_URL,
+  // Hard ceiling protects database: Lambda (max 2 sockets), ECS (max 10 sockets)
   max: env.DATABASE_POOL_MAX ?? (isLambdaRuntime ? 2 : 10),
+  // 5s headroom accommodates Neon serverless compute cold resume when waking from auto-suspend
   connectionTimeoutMillis: 5000,
-  idleTimeoutMillis: isLambdaRuntime ? 15000 : 30000,
+  // 0 disables client-side timer eviction: lets Neon PgBouncer manage idle socket lifecycle
+  // without artificial reconnect penalties during warm pauses (15s - 60s)
+  idleTimeoutMillis: 0,
+  // Unrefs idle sockets in libuv: allows CLI scripts (seed/migrate) and test runners to exit cleanly
+  // without hanging. (In Lambda, callbackWaitsForEmptyEventLoop=false already handles freeze/exit;
+  // in ECS, server.ts explicitly calls prisma.$disconnect() on SIGTERM).
   allowExitOnIdle: true,
 };
 

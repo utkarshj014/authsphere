@@ -21,6 +21,7 @@ let serverlessHandler: ((event: any, context: any) => Promise<any>) | null =
  */
 export const handler = async (event: unknown, context: any) => {
   if (context && typeof context === "object") {
+    // Freeze vCPU immediately when response resolves; do not wait for idle pool sockets to drain
     context.callbackWaitsForEmptyEventLoop = false;
   }
 
