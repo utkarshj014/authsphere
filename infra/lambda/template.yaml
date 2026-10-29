@@ -15,7 +15,7 @@ Parameters:
     Description: Production Redis connection string (Upstash)
   FrontendUrl:
     Type: String
-    Default: "https://authsphere.vercel.app"
+    Default: "https://authsphere-iota.vercel.app"
     Description: Vercel frontend URL for CORS and origin validation
   JwtAccessSecret:
     Type: String
@@ -150,7 +150,7 @@ Resources:
 
 Outputs:
   FunctionUrl:
-    Description: Lambda Function URL (Native Free HTTPS Ingress)
+    Description: Lambda Function URL (HTTPS endpoint)
     Value: !GetAtt AuthSphereApiFunctionUrl.FunctionUrl
   FunctionArn:
     Description: Lambda Function ARN

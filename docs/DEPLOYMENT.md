@@ -150,6 +150,10 @@ Lambda runtime secrets are defined in [`infra/lambda/template.yaml`](../infra/la
 
 Non-sensitive deployment defaults (stack name, region, IAM capabilities, S3 resolution) are saved in [`infra/lambda/samconfig.toml`](../infra/lambda/samconfig.toml).
 
+> [!WARNING]
+> **Credential Security with `samconfig.toml`:**
+> If deploying interactively via `sam deploy --guided`, answer **`N`** when prompted to save arguments to the configuration file. While CloudFormation's `NoEcho: true` masks secrets on-screen, SAM CLI persists guided values in plaintext to `samconfig.toml`. Never commit secret parameter overrides to version control.
+
 - **Automated Deploy (GitHub Actions):** Push code to `main`. The `deploy.yml` workflow automatically runs Prisma migrations, compiles the unified Lambda package (`npm run build:lambda`), and executes `sam deploy` with parameter overrides.
 - **Manual CLI Deploy:**
 

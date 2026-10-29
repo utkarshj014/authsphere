@@ -140,7 +140,7 @@ jobs:
             --parameter-overrides \
               DatabaseUrl="${{ secrets.DATABASE_URL_POOLED }}" \
               RedisUrl="${{ secrets.REDIS_URL }}" \
-              FrontendUrl="${{ vars.FRONTEND_URL || 'https://authsphere.vercel.app' }}" \
+              FrontendUrl="${{ vars.FRONTEND_URL || 'https://authsphere-iota.vercel.app' }}" \
               JwtAccessSecret="${{ secrets.JWT_ACCESS_SECRET }}" \
               JwtRefreshSecret="${{ secrets.JWT_REFRESH_SECRET }}" \
               MfaEncryptionKey="${{ secrets.MFA_ENCRYPTION_KEY }}" \
@@ -226,7 +226,7 @@ jobs:
           container-name: authsphere-worker
           image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
 
-      - name: Ensure ECS API service is active (desired-count: 1)
+      - name: "Ensure ECS API service is active (desired-count: 1)"
         if: env.DEPLOY_TARGET == 'ecs'
         run: |
           echo "Ensuring ECS API service is active (desired-count: 1)..."
