@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import serverlessExpressModule from "@codegenie/serverless-express";
 import app from "./app.js";
 import { redis } from "./lib/redis.js";
@@ -41,6 +42,14 @@ export const handler = async (event: unknown, context: any) => {
     }
 
     serverlessHandler = configureServerless({ app });
+  } else if (redis.status !== "ready") {
+    // Warm invocation: if Redis was severed while frozen, give it up to 100ms to complete TLS
+    if (redis.status === "end") {
+      redis.connect().catch(() => {});
+    }
+    await once(redis, "ready", { signal: AbortSignal.timeout(100) }).catch(
+      () => {},
+    );
   }
 
   return serverlessHandler(event, context);
