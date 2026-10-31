@@ -1,22 +1,35 @@
 {
   "family": "authsphere-api",
+  "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/AuthSphereEcsTaskExecutionRole",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "256",
   "memory": "512",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
   "containerDefinitions": [
     {
       "name": "authsphere-api",
       "image": "authsphere-api:latest",
+      "cpu": 256,
+      "memory": 512,
       "essential": true,
       "portMappings": [
         {
           "containerPort": 3000,
           "hostPort": 3000,
-          "protocol": "tcp"
+          "protocol": "tcp",
+          "name": "authsphere-api-3000-tcp",
+          "appProtocol": "http"
         }
       ],
       "environment": [
+        {
+          "name": "DATABASE_POOL_MAX",
+          "value": "10"
+        },
         {
           "name": "NODE_ENV",
           "value": "production"
@@ -61,67 +74,67 @@
       "secrets": [
         {
           "name": "DATABASE_URL",
-          "valueFrom": "/authsphere/DATABASE_URL"
+          "valueFrom": "/authsphere/prod/DATABASE_URL"
         },
         {
           "name": "REDIS_URL",
-          "valueFrom": "/authsphere/REDIS_URL"
+          "valueFrom": "/authsphere/prod/REDIS_URL"
         },
         {
           "name": "FRONTEND_URL",
-          "valueFrom": "/authsphere/FRONTEND_URL"
+          "valueFrom": "/authsphere/prod/FRONTEND_URL"
         },
         {
           "name": "JWT_ACCESS_SECRET",
-          "valueFrom": "/authsphere/JWT_ACCESS_SECRET"
+          "valueFrom": "/authsphere/prod/JWT_ACCESS_SECRET"
         },
         {
           "name": "JWT_REFRESH_SECRET",
-          "valueFrom": "/authsphere/JWT_REFRESH_SECRET"
+          "valueFrom": "/authsphere/prod/JWT_REFRESH_SECRET"
         },
         {
           "name": "MFA_ENCRYPTION_KEY",
-          "valueFrom": "/authsphere/MFA_ENCRYPTION_KEY"
+          "valueFrom": "/authsphere/prod/MFA_ENCRYPTION_KEY"
         },
         {
           "name": "RESEND_API_KEY",
-          "valueFrom": "/authsphere/RESEND_API_KEY"
+          "valueFrom": "/authsphere/prod/RESEND_API_KEY"
         },
         {
           "name": "EMAIL_FROM",
-          "valueFrom": "/authsphere/EMAIL_FROM"
+          "valueFrom": "/authsphere/prod/EMAIL_FROM"
         },
         {
           "name": "GOOGLE_CLIENT_ID",
-          "valueFrom": "/authsphere/GOOGLE_CLIENT_ID"
+          "valueFrom": "/authsphere/prod/GOOGLE_CLIENT_ID"
         },
         {
           "name": "GOOGLE_CLIENT_SECRET",
-          "valueFrom": "/authsphere/GOOGLE_CLIENT_SECRET"
+          "valueFrom": "/authsphere/prod/GOOGLE_CLIENT_SECRET"
         },
         {
           "name": "GITHUB_CLIENT_ID",
-          "valueFrom": "/authsphere/GITHUB_CLIENT_ID"
+          "valueFrom": "/authsphere/prod/GITHUB_CLIENT_ID"
         },
         {
           "name": "GITHUB_CLIENT_SECRET",
-          "valueFrom": "/authsphere/GITHUB_CLIENT_SECRET"
+          "valueFrom": "/authsphere/prod/GITHUB_CLIENT_SECRET"
         },
         {
           "name": "OAUTH_CALLBACK_BASE_URL",
-          "valueFrom": "/authsphere/OAUTH_CALLBACK_BASE_URL"
+          "valueFrom": "/authsphere/prod/OAUTH_CALLBACK_BASE_URL"
         },
         {
           "name": "EMAIL_PROVIDER",
-          "valueFrom": "/authsphere/EMAIL_PROVIDER"
+          "valueFrom": "/authsphere/prod/EMAIL_PROVIDER"
         },
         {
           "name": "GMAIL_USER",
-          "valueFrom": "/authsphere/GMAIL_USER"
+          "valueFrom": "/authsphere/prod/GMAIL_USER"
         },
         {
           "name": "GMAIL_REFRESH_TOKEN",
-          "valueFrom": "/authsphere/GMAIL_REFRESH_TOKEN"
+          "valueFrom": "/authsphere/prod/GMAIL_REFRESH_TOKEN"
         }
       ],
       "logConfiguration": {

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -162,18 +163,13 @@ jobs:
             --output text)
           echo "FUNCTION_URL=$FUNCTION_URL" >> $GITHUB_ENV
 
-      - name: Smoke test Lambda deployment
+      - name: Smoke test Lambda deployment (Liveness & Readiness)
         if: env.DEPLOY_TARGET != 'ecs'
         run: |
-          echo "Verifying healthcheck at: ${FUNCTION_URL}health/live"
+          echo "Verifying process liveness at: ${FUNCTION_URL}health/live"
           curl --fail --retry 3 --retry-delay 5 --max-time 15 "${FUNCTION_URL}health/live"
-
-      - name: Scale down ECS services to 0 (Idle cost optimization)
-        if: env.DEPLOY_TARGET != 'ecs'
-        run: |
-          echo "Optimizing idle compute: Ensuring ECS tasks are scaled to 0 while Lambda is active..."
-          aws ecs update-service --cluster authsphere-cluster --service authsphere-api --desired-count 0 --region ${{ vars.AWS_REGION || 'ap-south-1' }} > /dev/null 2>&1 || true
-          aws ecs update-service --cluster authsphere-cluster --service authsphere-worker --desired-count 0 --region ${{ vars.AWS_REGION || 'ap-south-1' }} > /dev/null 2>&1 || true
+          echo "Verifying dependency readiness at: ${FUNCTION_URL}health/ready"
+          curl --fail --retry 3 --retry-delay 5 --max-time 15 "${FUNCTION_URL}health/ready"
 
       - name: Set up Docker Buildx
         if: env.DEPLOY_TARGET == 'ecs'
@@ -208,6 +204,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Inject AWS Account ID into ECS task definitions
+        if: env.DEPLOY_TARGET == 'ecs'
+        run: |
+          ACCOUNT_ID="${{ vars.AWS_ACCOUNT_ID }}"
+          if [ -z "$ACCOUNT_ID" ]; then
+            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          fi
+          sed -i "s|<ACCOUNT_ID>|${ACCOUNT_ID}|g" infra/ecs/api-task-definition.json infra/ecs/worker-task-definition.json
+
       - name: Render ECS API task definition
         if: env.DEPLOY_TARGET == 'ecs'
         id: render-api-container
@@ -216,21 +221,6 @@ jobs:
           task-definition: infra/ecs/api-task-definition.json
           container-name: authsphere-api
           image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-
-      - name: Render ECS Worker task definition
-        if: env.DEPLOY_TARGET == 'ecs'
-        id: render-worker-container
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: infra/ecs/worker-task-definition.json
-          container-name: authsphere-worker
-          image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-
-      - name: "Ensure ECS API service is active (desired-count: 1)"
-        if: env.DEPLOY_TARGET == 'ecs'
-        run: |
-          echo "Ensuring ECS API service is active (desired-count: 1)..."
-          aws ecs update-service --cluster authsphere-cluster --service authsphere-api --desired-count 1 --region ${{ vars.AWS_REGION || 'ap-south-1' }} > /dev/null 2>&1 || true
 
       - name: Deploy API to Amazon ECS
         if: env.DEPLOY_TARGET == 'ecs'
@@ -241,8 +231,17 @@ jobs:
           cluster: authsphere-cluster
           wait-for-service-stability: true
 
-      - name: Deploy Worker to Amazon ECS (Variant 1a)
-        if: env.DEPLOY_TARGET == 'ecs'
+      - name: Render ECS Worker task definition
+        if: env.DEPLOY_TARGET == 'ecs' && vars.DEPLOY_ECS_WORKER == 'true'
+        id: render-worker-container
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: infra/ecs/worker-task-definition.json
+          container-name: authsphere-worker
+          image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+
+      - name: Deploy Background Worker to Amazon ECS
+        if: env.DEPLOY_TARGET == 'ecs' && vars.DEPLOY_ECS_WORKER == 'true'
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-worker-container.outputs.task-definition }}
