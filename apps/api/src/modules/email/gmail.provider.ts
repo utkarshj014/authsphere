@@ -28,7 +28,7 @@ export const gmailOAuthProvider: EmailProvider = {
       service: "gmail",
       connectionTimeout: 5000,
       greetingTimeout: 5000,
-      socketTimeout: 8000,
+      socketTimeout: 5000,
       auth: {
         type: "OAuth2",
         user: env.GMAIL_USER,
