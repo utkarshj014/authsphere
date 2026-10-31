@@ -22,8 +22,12 @@ export const gmailOAuthProvider: EmailProvider = {
     }
 
     // Lazy singleton: preserves OAuth2 token cache and SMTP connection pool across dispatches without eager top-level initialization
+    // Explicit timeouts bound SMTP duration within Lambda's 15s execution ceiling
     transporter ??= nodemailer.createTransport({
       service: "gmail",
+      connectionTimeout: 5000,
+      greetingTimeout: 5000,
+      socketTimeout: 8000,
       auth: {
         type: "OAuth2",
         user: env.GMAIL_USER,
