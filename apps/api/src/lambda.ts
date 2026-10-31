@@ -21,11 +21,6 @@ let serverlessHandler: ((event: any, context: any) => Promise<any>) | null =
  * and persist across warm Lambda invocations.
  */
 export const handler = async (event: unknown, context: any) => {
-  if (context && typeof context === "object") {
-    // Freeze vCPU immediately when response resolves; do not wait for idle pool sockets to drain
-    context.callbackWaitsForEmptyEventLoop = false;
-  }
-
   if (!serverlessHandler) {
     logger.info("Initializing serverless Express runtime (cold start)...");
 
