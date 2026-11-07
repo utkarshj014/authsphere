@@ -104,7 +104,6 @@ Resources:
       Handler: lambda.handler
       AutoPublishAlias: live
       AutoPublishAliasAllProperties: true
-      ReservedConcurrentExecutions: 10
       FunctionUrlConfig:
         AuthType: NONE
       Environment:
