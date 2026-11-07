@@ -107,21 +107,6 @@ Resources:
       ReservedConcurrentExecutions: 10
       FunctionUrlConfig:
         AuthType: NONE
-        Cors:
-          AllowOrigins:
-            - !Ref FrontendUrl
-          AllowHeaders:
-            - Content-Type
-            - Authorization
-            - X-Request-Id
-          AllowMethods:
-            - GET
-            - POST
-            - PUT
-            - PATCH
-            - DELETE
-            - OPTIONS
-          AllowCredentials: true
       Environment:
         Variables:
           DATABASE_URL: !Ref DatabaseUrl

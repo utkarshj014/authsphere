@@ -353,6 +353,7 @@ flowchart LR
 - **Why Express CORS is Retained:** The Express backend maintains `cors({ origin: env.FRONTEND_URL, credentials: true })` for two reasons:
   1. **Local Development:** Allows the local Vite dev server (`http://localhost:5173`) to communicate directly with the Express API (`http://localhost:3000`).
   2. **Direct Browser Defense:** If an external browser or third-party web app attempts to query the backend endpoint directly, Express CORS rejects ambient cross-origin reads.
+- **Lambda Function URL CORS Omission:** Native Function URL CORS is omitted from `template.yaml` to maintain architectural parity with ECS Fargate and keep Express CORS as the single source of truth. While Function URL CORS can terminate `OPTIONS` preflights at the AWS edge without invoking compute in direct browser-to-Lambda setups, it is redundant here because Vercel's same-origin reverse proxy (`/api/*`) already eliminates browser preflights before requests reach AWS.
 
 #### 3. Proxy Hop Calibration, Reverse Proxying & Direct Ingress Realities:
 
