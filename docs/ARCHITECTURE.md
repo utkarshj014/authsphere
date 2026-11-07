@@ -1,6 +1,6 @@
 # Architecture & System Design — AuthSphere
 
-This document provides a comprehensive overview of **AuthSphere's** system architecture, data models, component interactions, and end-to-end data/user flows. For specific architectural trade-offs, historical context, and design decisions, refer to [Engineering-Decisions.md](./Engineering-Decisions.md).
+This document provides a comprehensive overview of **AuthSphere's** system architecture, data models, component interactions, and end-to-end data/user flows. For deployment topologies (ECS Fargate vs. AWS Lambda) and cloud infrastructure, see [DEPLOYMENT.md](./DEPLOYMENT.md). For specific architectural trade-offs, historical context, and design decisions, refer to [Engineering-Decisions.md](./Engineering-Decisions.md).
 
 ---
 
@@ -11,7 +11,7 @@ AuthSphere is built as a production-grade, multi-package monorepo managed via np
 ```text
 authsphere/ (Monorepo Root)
 ├── apps/
-│   ├── api/                  # Express.js REST API service (Node.js >22)
+│   ├── api/                  # Express.js REST API service (Node.js >24)
 │   │   ├── prisma/           # Database schema, migrations, and seed script
 │   │   └── src/
 │   │       ├── common/       # Global errors, utilities, responses, OpenAPI registry & schemas
@@ -21,11 +21,17 @@ authsphere/ (Monorepo Root)
 │   │       ├── middlewares/  # Global & request-level middlewares
 │   │       ├── modules/      # Domain feature modules (auth, sessions, roles, users, health, email) & co-located *.openapi.ts
 │   │       ├── types/        # Global Express ambient declarations
-│   │       └── workers/      # Standalone background worker processes (email.worker.ts)
-│   └── web/                  # React & Vite frontend application
+│   │       ├── workers/      # Standalone background worker processes (email.worker.ts)
+│   │       ├── app.ts        # Pure Express application setup
+│   │       ├── server.ts     # HTTP server entrypoint (ECS Fargate container)
+│   │       └── lambda.ts     # AWS Lambda serverless entrypoint (@codegenie/serverless-express)
+│   └── web/                  # React & Vite frontend application (Vercel edge proxy)
 ├── packages/
 │   └── shared/               # Shared domain constants (ROLES, PERMISSIONS, OAUTH_PROVIDERS, SECURITY_EVENT_TYPES) & types
-└── docker/                   # Development infrastructure (PostgreSQL, Redis Compose configurations)
+├── infra/                    # Infrastructure as Code
+│   ├── ecs/                  # AWS ECS Task Definitions (API & Worker)
+│   └── lambda/               # AWS SAM / CloudFormation Template
+└── docker/                   # Container configurations (Local dev & infra compose)
 ```
 
 ---
@@ -35,49 +41,71 @@ authsphere/ (Monorepo Root)
 Every request traversing AuthSphere passes through a deterministic pipeline across distinct architectural boundaries:
 
 ```mermaid
-graph TD
-    Client["HTTP Client / Frontend"] -->|HTTP Request + Cookies| Express["Express.js App"]
+flowchart TD
+    Client["HTTP Client / Frontend"] -->|HTTP Request and Cookies| Express["Express.js App"]
 
-    subgraph Middleware Pipeline
-        Express --> Helmet["Helmet & CORS"]
-        Helmet --> ReqID["Request ID (Sanitized) & Pino Logger"]
-        ReqID --> OriginGuard["Origin Validation (State Mutations)"]
-        OriginGuard --> RateLimiter["Global Rate Limiter"]
-        RateLimiter --> BodyParser["JSON (16kb Limit) & Cookie Parser"]
-        BodyParser --> RouteRL["Route-Level Rate Limiter"]
-        RouteRL --> Validate["Zod Validation Middleware"]
-        Validate --> AuthGuard["Auth Middleware (req.auth)"]
-        AuthGuard --> PermissionGuard["RequireRole / RequirePermission Guard"]
+    subgraph MP ["Middleware Pipeline"]
+        Helmet["Helmet and CORS"]
+        ReqID["Request ID (Sanitized) and Pino Logger"]
+        OriginGuard["Origin Validation (State Mutations)"]
+        RateLimiter["Global Rate Limiter"]
+        BodyParser["JSON (16kb Limit) and Cookie Parser"]
+        RouteRL["Route-Level Rate Limiter"]
+        Validate["Zod Validation Middleware"]
+        AuthGuard["Auth Middleware (req.auth)"]
+        PermissionGuard["RequireRole / RequirePermission Guard"]
+
+        Helmet --> ReqID
+        ReqID --> OriginGuard
+        OriginGuard --> RateLimiter
+        RateLimiter --> BodyParser
+        BodyParser --> RouteRL
+        RouteRL --> Validate
+        Validate --> AuthGuard
+        AuthGuard --> PermissionGuard
     end
 
-    subgraph Feature Module Layer
-        PermissionGuard --> Controller["Module Controller"]
-        Controller --> Service["Module Service"]
-        Service --> Repository["Module Repository"]
+    subgraph FML ["Feature Module Layer"]
+        Controller["Module Controller"]
+        Service["Module Service"]
+        Repository["Module Repository"]
+
+        Controller --> Service
+        Service --> Repository
     end
 
-    subgraph Infrastructure & Background Tasks
-        RateLimiter -->|Atomic Pipeline MULTI/EXEC| Redis[("Redis (ioredis)")]
-        RouteRL -->|Atomic Pipeline MULTI/EXEC| Redis
-        Service -->|Permission Lookups / Cache| Redis
-        Service -->|Enqueue Email Jobs [ADR-072]| BullMQ[("BullMQ Email Queue")]
-        BullMQ -->|Redis Transport [ADR-074]| Redis
-        BullMQ -->|Async Job Dequeue| Worker["Email Worker Process"]
-        Worker -->|Resend Provider [ADR-073, ADR-075]| ResendAPI["Resend Email API"]
-        Service -->|AES-256-GCM / Argon2id / SHA-256| CryptoLib["Crypto Library"]
-        Repository -->|Prisma 7 ORM| Postgres[("PostgreSQL DB")]
+    subgraph IBT ["Infrastructure and Background Tasks"]
+        Redis[("Redis Cache")]
+        BullMQ[("BullMQ Email Queue")]
+        Worker["Email Worker Process"]
+        EmailGateway["Email Gateway (Gmail OAuth2 / Resend)"]
+        CryptoLib["Crypto Library"]
+        Postgres[("PostgreSQL DB")]
+
+        BullMQ -->|Redis Transport| Redis
+        BullMQ -->|Async Job Dequeue| Worker
+        Worker -->|Email Provider Strategy| EmailGateway
     end
+
+    Express --> Helmet
+    PermissionGuard --> Controller
+    RateLimiter -->|Atomic Pipeline| Redis
+    RouteRL -->|Atomic Pipeline| Redis
+    Service -->|Permission Cache| Redis
+    Service -->|Enqueue Email Jobs| BullMQ
+    Service -->|AES-256-GCM / Argon2id| CryptoLib
+    Repository -->|Prisma 7 ORM| Postgres
 ```
 
 ### Layer Responsibilities
 
-| Layer                   | Primary Responsibility                                                                                                                                          | Architectural Rule                                                                                                         |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Middleware Pipeline** | Request tracing, origin validation on mutations, global and route rate limiting, input parsing (16kb limit), schema validation, token verification, RBAC guards | Rejects malformed, oversized, untrusted-origin, rate-limited, or unauthorized requests before reaching domain controllers. |
-| **Controller**          | HTTP orchestration, extracting pre-validated input, setting/clearing cookies, returning standard JSON DTOs                                                      | Must contain zero business logic or SQL queries. Calls services.                                                           |
-| **Service**             | Core domain logic, cross-module orchestration, security decisions, MFA verification, session generation, cache invalidation                                     | Independent of Express `req`/`res`. Throws `AppError` subclasses.                                                          |
-| **Repository**          | Data access layer using Prisma 7 ORM and database transactions                                                                                                  | Encapsulates all SQL/Prisma operations. Handles `P2002` duplicate errors and executes atomic queries.                      |
-| **Infrastructure**      | Singletons for Database (Prisma + `pg`), Cache & Task Queues (`ioredis` + `BullMQ` [ADR-072, ADR-074]), Logging (Pino), Crypto (Argon2id, AES-256-GCM)          | Instantiated inside `src/lib/` and shared across modules. Worker process operates independently in `src/workers/`.         |
+| Layer                   | Primary Responsibility                                                                                                                                                     | Architectural Rule                                                                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Middleware Pipeline** | Request tracing, origin validation on mutations, global and route rate limiting, input parsing (16kb limit), schema validation, token verification, RBAC guards            | Rejects malformed, oversized, untrusted-origin, rate-limited, or unauthorized requests before reaching domain controllers.                    |
+| **Controller**          | HTTP orchestration, extracting pre-validated input, setting/clearing cookies, returning standard JSON DTOs                                                                 | Must contain zero business logic or SQL queries. Calls services.                                                                              |
+| **Service**             | Core domain logic, cross-module orchestration, security decisions, MFA verification, session generation, cache invalidation                                                | Independent of Express `req`/`res`. Throws `AppError` subclasses.                                                                             |
+| **Repository**          | Data access layer using Prisma 7 ORM and database transactions                                                                                                             | Encapsulates all SQL/Prisma operations. Handles `P2002` duplicate errors and executes atomic queries.                                         |
+| **Infrastructure**      | Singletons for Database (Prisma + `pg`), Cache & Task Queues (`ioredis` + `BullMQ` / `Inline` [ADR-072, ADR-074, ADR-078]), Logging (Pino), Crypto (Argon2id, AES-256-GCM) | Instantiated inside `src/lib/` and shared across modules. Worker process operates independently in `src/workers/` when `QUEUE_DRIVER=bullmq`. |
 
 ---
 
@@ -243,16 +271,22 @@ sequenceDiagram
     API->>API: Attach req.auth = { userId, role, sid, permissions }
     API-->>Client: 200 OK User DTO
 
-    Note over User, Client: 3. Token Refresh Phase (RTR)
+    Note over User, Client: 3. Token Refresh Phase (Atomic CAS + Leeway Window)
     Client->>API: POST /auth/refresh-token (refreshToken cookie)
-    API->>API: Verify Refresh Token JWT & sid
-    API->>DB: Find & Rotate active Session by sid
-    alt Token Valid
-        API->>DB: Update Session (same sid, new SHA-256 tokenHash, new expiresAt)
-        API-->>Client: Set rotated HTTP-Only Cookies
-    else Reuse / Invalid Token Detected
-        API->>DB: Revoke sessions (Hard Delete via SESSION/GLOBAL mode)
-        API-->>Client: Clear Auth Cookies & Return 401 Unauthorized
+    API->>API: Verify Refresh Token JWT & SHA-256 oldTokenHash
+    API->>Redis: GET auth:refresh-leeway:{sid}:{oldTokenHash}
+    opt Leeway Window Hit (Concurrent Tab Grace Period)
+        Redis-->>API: Cached AuthTokens
+        API-->>Client: 200 OK (Return synchronized token pair)
+    end
+    API->>DB: Find Session by sid & Verify Ownership
+    API->>DB: Atomic CAS: updateMany(id=sid, tokenHash=oldTokenHash)
+    alt CAS Succeeded (Winner)
+        API->>Redis: SET auth:refresh-leeway:{sid}:{oldTokenHash} (EX 30s)
+        API-->>Client: 200 OK (Set rotated HTTP-Only cookies)
+    else CAS Failed (Replay Attack Detected)
+        API->>DB: Delete session(s) (Hard delete via SESSION/GLOBAL mode)
+        API-->>Client: 401 Unauthorized ("Compromised session detected")
     end
 ```
 
@@ -281,12 +315,8 @@ sequenceDiagram
         API-->>Client: 400 Bad Request ("Invalid or expired MFA challenge")
     else Challenge Valid
         API->>API: Decrypt mfaSecret (AES-256-GCM)
-        alt Code is TOTP (6 Digits)
-            API->>API: Verify TOTP (otplib) -> matchedWindow
-            API->>DB: Atomic updateMany (mfaLastUsedWindow < matchedWindow)
-        else Code is Backup Recovery Code (XXXXX-XXXXX)
-            API->>DB: Atomic updateMany (codeHash matches & usedAt is null) -> mark usedAt
-        end
+        Note over API, DB: Factor Verification: TOTP window check OR recovery code single-use burn
+        API->>DB: Atomic updateMany (monotonic window advancement OR single-use codeHash burn)
         API->>DB: Delete MfaChallenge (deleteMfaChallenge)
         API->>DB: Create Session via generateAuthTokensAndSession()
         API-->>Client: Set HTTP-Only Cookies (accessToken, refreshToken)
@@ -353,15 +383,18 @@ sequenceDiagram
     API->>Provider: Exchange authorization code for access token & profile
     Provider-->>API: Normalized OAuthProfile (verified email, providerId)
     API->>DB: Query OAuthAccount(provider, providerId) & User by email
-    alt Returning Linked User with MFA Enabled
+    alt Returning User with MFA Enabled
         API->>DB: Create MfaChallenge (UUIDv7 mfaToken, 5m TTL)
         API-->>User: 200 OK { mfaRequired: true, mfaToken }
-    else Returning User (MFA Disabled) / Authenticated Link / New User Registration
-        alt Authenticated Account Link (state.userId present)
-            API->>DB: Create OAuthAccount linked to current user
-        else New User Registration
-            API->>DB: Atomic Transaction: Create User (isEmailVerified: true) + OAuthAccount
-        end
+    else Authenticated Account Link (state.userId present)
+        API->>DB: Create OAuthAccount linked to current user
+        API->>DB: Create Session via generateAuthTokensAndSession()
+        API-->>User: Set-Cookie: accessToken, refreshToken + 200 OK
+    else New User Registration
+        API->>DB: Atomic Transaction: Create User (isEmailVerified: true) + OAuthAccount
+        API->>DB: Create Session via generateAuthTokensAndSession()
+        API-->>User: Set-Cookie: accessToken, refreshToken + 200 OK
+    else Returning User (MFA Disabled)
         API->>DB: Create Session via generateAuthTokensAndSession()
         API-->>User: Set-Cookie: accessToken, refreshToken + 200 OK
     else Unauthenticated Existing Email Conflict
@@ -434,13 +467,67 @@ sequenceDiagram
         API-->>User: 404 Not Found ("Session not found")
     else Session Belongs to Another User (session.userId !== req.auth.userId)
         API-->>User: 403 Forbidden ("You cannot revoke another user's session")
-    else Ownership Verified
+    else Current Active Session Revoked (isCurrentSession is True)
         API->>DB: deleteSessionByIdAndUserId(sessionId, userId)
-        API->>DB: createSecurityEvent(LOGOUT, { revokedSessionId, isCurrentSession })
-        alt isCurrentSession is True
-            API-->>User: Clear Auth Cookies & 200 OK "Session revoked successfully"
-        else Remote Session Revoked
-            API-->>User: 200 OK "Session revoked successfully"
+        API->>DB: createSecurityEvent(LOGOUT, { revokedSessionId, isCurrentSession: true })
+        API-->>User: Clear Auth Cookies & 200 OK "Session revoked successfully"
+    else Remote Session Revoked (isCurrentSession is False)
+        API->>DB: deleteSessionByIdAndUserId(sessionId, userId)
+        API->>DB: createSecurityEvent(LOGOUT, { revokedSessionId, isCurrentSession: false })
+        API-->>User: 200 OK "Session revoked successfully"
+    end
+```
+
+### 4.7 Asynchronous Background Email Processing Flow
+
+Outbound emails are structurally decoupled from the synchronous HTTP request-response cycle via a configurable dual-driver architecture (`QUEUE_DRIVER=bullmq | inline`) `[ADR-072, ADR-074, ADR-075, ADR-078]`:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Client Browser
+    participant API as AuthSphere API (APP_ROLE=api)
+    participant Redis as Redis (Transit Perimeter)
+    participant Worker as Email Worker (APP_ROLE=worker)
+    participant Resend as Resend Email Gateway
+
+    Note over Client, API: Step 1: Request Processing & DB Commit
+    Client->>API: POST /auth/signup (or forgot-password / magic-link)
+    API->>API: Execute & commit database transaction
+    API-->>Client: 201 Created (Instant HTTP response, no email latency)
+
+    alt QUEUE_DRIVER == bullmq (Dedicated Worker Mode) [ADR-072, ADR-075]
+        Note over API, Redis: Step 2A: BullMQ Queue Publication
+        API->>Redis: emailQueue.add(jobType, payload) [ADR-072]
+        Worker->>Redis: BullMQ worker polling / job dequeue [ADR-074]
+        Redis-->>Worker: EmailJob payload { type, to, data }
+        Worker->>Worker: Render responsive HTML email template
+        Worker->>Resend: POST /emails (Resend API key) [ADR-073, ADR-077]
+        Note over Worker, Resend: Observability Boundary
+        opt Submission Accepted by Provider
+            Resend-->>Worker: HTTP 200 OK { id: "msg_xxx" }
+            Worker->>Redis: Acknowledge job completion
+        end
+        opt Transient Error (Rate Limit 429 / Server 5xx)
+            Resend-->>Worker: HTTP 429 / 5xx
+            Worker->>Redis: BullMQ exponential backoff retry (up to 4 retries across 5 total attempts) [ADR-075]
+        end
+        opt Unrecoverable Error (Invalid Recipient / Domain)
+            Resend-->>Worker: HTTP 422 / 400
+            Worker->>Redis: UnrecoverableError: Move to failed-job retention storage [ADR-075]
+        end
+    else QUEUE_DRIVER == inline (In-Process Asynchronous Mode) [ADR-078]
+        Note over API, Resend: Step 2B: Event Loop Offload (Zero Redis Commands)
+        API->>API: setImmediate(async () => emailService.processJob())
+        API->>API: Render responsive HTML email template
+        API->>Resend: POST /emails (Resend API key) [ADR-073, ADR-078]
+        Note over API, Resend: Observability Boundary
+        opt Submission Accepted by Provider
+            Resend-->>API: HTTP 200 OK { id: "msg_xxx" }
+        end
+        opt Delivery Failure (HTTP 4xx / 5xx)
+            Resend-->>API: HTTP 4xx / 5xx Error
+            API->>API: Log structured error (Pino)
         end
     end
 ```
@@ -461,7 +548,7 @@ sequenceDiagram
 4. **Token Security & Transport**:
    - Short-lived JWT Access Tokens (15m) carrying `sub`, `sid`, `role`.
    - Long-lived Refresh Tokens (30d) tied to database sessions. Store only `SHA-256` token hashes `[ADR-012]`.
-   - **Refresh Token Rotation (RTR)** with reuse detection revokes sessions immediately upon detecting token replay `[ADR-014]`.
+   - **Refresh Token Rotation (RTR) with Atomic CAS & Leeway Window**: Employs single-statement PostgreSQL Compare-And-Swap (`updateMany`) paired with an ephemeral Redis leeway cache (`auth:refresh-leeway:{sid}:{tokenHash}`, 30s TTL) to collapse concurrent SPA refresh queries without race conditions while revoking compromised sessions on replay `[ADR-014, ADR-076]`.
    - Delivered via `httpOnly`, `secure`, `sameSite: "lax"` cookies. Refresh token cookie scoped to path `/auth` (covering `/auth/refresh-token` and `/auth/logout`) `[ADR-033, ADR-042]`.
 5. **Active Session Management & Revocation**:
    - Exposes safe session metadata (`id`, `ipAddress`, `userAgent`, `createdAt`, `expiresAt`, `isCurrent`) via `GET /sessions`, strictly omitting sensitive token hashes `[ADR-068]`.
@@ -486,7 +573,7 @@ sequenceDiagram
    - Explicit `16kb` body size limit on `express.json()` protects against payload memory consumption `[ADR-044]`.
    - `X-Request-Id` header sanitization strips control/newline characters (`\r\n`) and caps length at 128 chars while preserving distributed trace context `[ADR-043]`.
 10. **Rate Limiting & Anti-Abuse**:
-    - Multi-tiered Redis-backed rate limiting using atomic Lua scripting (`INCR` + conditional `EXPIRE` + `TTL` in a single `EVALSHA` roundtrip) `[ADR-050]`.
+    - Multi-tiered Redis-backed rate limiting using an atomic Lua script (`INCR` + conditional `EXPIRE` in 1 command via `redis.eval`), cutting Redis command charges by 75% compared to multi-command transactions `[ADR-050]`. Health checks (`/health/live`) are routed ahead of rate limiting for zero-I/O execution.
     - Centralized `RATE_LIMIT_POLICIES` dictionary defines per-endpoint quotas and windows. Global layer (100 req/min per IP) protects all routes; route-level policies protect sensitive endpoints (`LOGIN`, `MFA_VERIFY`, `OAUTH_INITIATE`, `OAUTH_CALLBACK`, `MAGIC_LINK_REQUEST`, `MAGIC_LINK_VERIFY`, `SESSIONS_READ`, `SESSION_REVOKE`, `SECURITY_EVENTS_READ`) individually `[ADR-051, ADR-066]`.
     - Dual-key strategy: IP-based keys for unauthenticated endpoints, authenticated `userId`-based keys for protected endpoints to prevent shared-network false positives `[ADR-052]`.
     - IETF-compliant `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`, and `Retry-After` headers on all responses.
@@ -509,12 +596,14 @@ sequenceDiagram
 - **Graceful Shutdown**: Intercepts `SIGINT`/`SIGTERM` to close HTTP listeners, drain active connections with a 10s timeout, and disconnect Prisma and Redis concurrently `[ADR-010]`.
 - **Fail-Safe Caching**: `redis.status === "ready"` checks ensure that Redis network outages transparently fallback to PostgreSQL DB queries without crashing requests `[ADR-035, ADR-074]`.
 - **Structured Logging**: Pino emits structured JSON logs with correlated `X-Request-Id` headers across request lifecycles `[ADR-009]`.
-- **Health Checks**: `/health` actively verifies database and Redis connectivity, returning `200 OK` or `503 Service Unavailable` for container orchestrator probes `[ADR-011]`.
+- **Health Checks**: Decoupled liveness and readiness probes following AWS best practices. `/health/live` (and root alias `/health`) provides an in-memory, zero-I/O probe for AWS ALB target groups (returning `200 OK`), preventing cascading target group deregulation during transient dependency blips. `/health/ready` concurrently evaluates PostgreSQL (`prisma.$queryRaw`) and Redis (`redis.ping()`) connectivity, returning `200 OK` or `503 Service Unavailable` `[ADR-011]`.
 - **OpenAPI 3.1 & Swagger UI**: Code-first API specification derived from active Zod validation schemas via `@asteasolutions/zod-to-openapi`, served dynamically at `GET /openapi.json` and rendered at `GET /docs` via Swagger UI. Documentation declarations are isolated from request handlers in co-located `*.openapi.ts` files, with Express ↔ OpenAPI route synchronization enforced via automated parity tests. Document generation is memoized in production to avoid repeated schema traversal on subsequent requests while bypassing caching in development for live hot-reload feedback `[ADR-071]`.
-- **Asynchronous Email Task Queue**: Outbound email delivery is decoupled from the synchronous HTTP request-response cycle into a BullMQ queue backed by Redis with exponential backoff retries (up to 4 retries across 5 total attempts) and fast-failing unrecoverable error detection. Jobs are dispatched post-commit with best-effort publication, intentionally accepting an asynchronous failure window in exchange for operational simplicity, with failed jobs retained in Redis for inspection `[ADR-072, ADR-075]`.
-- **Redis Security Transit Perimeter**: Sensitive raw authentication credentials (verification tokens, password-reset tokens, and magic links) traverse Redis in background queue payloads. Consequently, Redis is classified as a sensitive data perimeter requiring TLS in transit, authenticated access, and network isolation `[ADR-072]`.
-- **Provider-Agnostic Email System**: The application interacts exclusively with the `EmailProvider` contract; `resendProvider` handles API communication, enabling clean swapping of providers and mock injection for testing without network side-effects `[ADR-073]`.
+- **Dual-Driver Background Queue**: Outbound email delivery is decoupled from the synchronous HTTP request-response cycle via a configurable dual-driver architecture (`QUEUE_DRIVER=bullmq | inline`). In clustered production, BullMQ backed by Redis provides asynchronous execution with exponential backoff (up to 4 retries across 5 attempts) and failed-job retention. In single-container cloud deployments or demos, the inline driver asynchronously offloads delivery via `setImmediate()`, eliminating 100% of idle Redis commands on serverless tiers (Upstash) while guaranteeing sub-second delivery (<500ms) `[ADR-072, ADR-075, ADR-078]`.
+- **Cloud Migration Roadmap (AWS SQS + Lambda)**: When traffic demands multi-AZ elasticity and autoscaling from zero, the background queue migrates to native AWS SQS and AWS Lambda, providing true zero-idle compute billing, push-based trigger invocation, and automated Dead-Letter Queues without continuous polling overhead `[ADR-078]`.
+- **Redis Security Transit Perimeter**: Sensitive raw authentication credentials (verification tokens, password-reset tokens, and magic links) traverse Redis when `QUEUE_DRIVER=bullmq`. Consequently, Redis is classified as a sensitive data perimeter requiring TLS in transit, authenticated access, and network isolation `[ADR-072, ADR-078]`.
+- **Provider-Agnostic Email System**: The application interacts exclusively with the `EmailProvider` contract (`emailService.processJob`), dynamically resolving `gmailOAuthProvider` (Google OAuth2 via Nodemailer for zero-domain portfolio delivery to arbitrary recipients) or `resendProvider` (for custom-domain enterprise SaaS) via `getEmailProvider()`, enabling clean swapping and mock injection for testing without network side-effects `[ADR-073]`.
 - **Unified Redis Client**: All Redis operations (atomic pipeline rate limiting, OAuth state, role caching, and BullMQ queues) are consolidated onto `ioredis`, eliminating duplicate client libraries and connection divergence `[ADR-074]`.
+- **Process-Aware Secret Isolation & Least Privilege**: `src/config/env.ts` partitions configuration into `sharedConfig` (infrastructure), `apiConfig` (database, JWT, OAuth, MFA, optional email), and `workerConfig` (optional email delivery credentials). At startup, `APP_ROLE` determines whether the process acts as the REST API or the background worker. Zod automatically strips non-required keys, ensuring the public-facing API container never holds or requires email dispatch keys in queue mode, and the background worker container never holds database credentials `[ADR-003, ADR-004, ADR-077]`.
 
 ---
 
@@ -526,7 +615,7 @@ AuthSphere enforces a hermetic, 3-layer test pyramid combining **Vitest** and **
 graph TD
     subgraph TP ["Test Pyramid"]
         E2E["Layer 3: E2E User Journeys (3 files, 6 tests)"]
-        INT["Layer 2: Critical Integration Tests (8 files, 116 tests)"]
+        INT["Layer 2: Critical Integration Tests (9 files, 130 tests)"]
         UNIT["Layer 1: Focused Unit Tests (7 files, 49 tests)"]
     end
 

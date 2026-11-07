@@ -1,0 +1,14 @@
+node_modules
+.github
+.git
+.gitignore
+.env
+.env.*
+dist
+coverage
+.agents
+docs
+*.log
+npm-debug.log*
+apps/web
+apps/api/tests

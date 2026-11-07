@@ -75,7 +75,7 @@ describe("Security Middleware Integration (Headers, CSRF, Rate Limiting, Errors)
 
   describe("Rate Limiting", () => {
     it("sets standard RateLimit headers and decrements remaining count", async () => {
-      const res = await request(app).get("/health");
+      const res = await request(app).get("/openapi.json");
 
       expect(res.status).toBe(200);
       expect(res.headers["ratelimit-limit"]).toBeDefined();

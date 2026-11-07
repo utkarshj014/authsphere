@@ -11,6 +11,7 @@ const updateRolePermissions = async (
     const role = await prisma.role.update({
       where: { name: roleName },
       data: {
+        updatedAt: new Date(),
         rolePermissions: {
           deleteMany: {},
           create: permissionNames.map((permissionName) => ({

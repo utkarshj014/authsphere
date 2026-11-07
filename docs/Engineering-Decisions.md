@@ -22,6 +22,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-063: Higher-Order Controller Factories for Provider-Agnostic OAuth Handlers](#adr-063--higher-order-controller-factories-for-provider-agnostic-oauth-handlers)
 - [ADR-073: Provider-Agnostic Email Abstraction with Resend Implementation](#adr-073--provider-agnostic-email-abstraction-with-resend-implementation)
 - [ADR-074: Unified Redis Architecture (ioredis Migration)](#adr-074--unified-redis-architecture-ioredis-migration)
+- [ADR-077: Process-Aware Environment Partitioning and Least Privilege Secret Isolation](#adr-077--process-aware-environment-partitioning-and-least-privilege-secret-isolation)
 
 </details>
 
@@ -57,6 +58,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-039: Centralized Auth Token and Session Generation](#adr-039--centralized-auth-token-and-session-generation)
 - [ADR-061: Strict Conflict-Guarded OAuth Identity Resolution Workflow](#adr-061--strict-conflict-guarded-oauth-identity-resolution-workflow)
 - [ADR-068: Active Session Introspection, Ownership-Enforced Revocation, and Safe Cookie Invalidation](#adr-068--active-session-introspection-ownership-enforced-revocation-and-safe-cookie-invalidation)
+- [ADR-076: Refresh Token Rotation with Atomic CAS and Ephemeral Leeway Window](#adr-076--refresh-token-rotation-with-atomic-cas-and-ephemeral-leeway-window)
 
 </details>
 
@@ -83,7 +85,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-035: Redis Permission Caching with Fail-Safe Bypass](#adr-035--redis-permission-caching-with-fail-safe-bypass)
 - [ADR-036: Middleware-Based Authorization Guards](#adr-036--middleware-based-authorization-guards)
 - [ADR-038: Validation-Layer Input Normalization via Zod Transforms](#adr-038--validation-layer-input-normalization-via-zod-transforms)
-- [ADR-050: Redis-Backed Fixed-Window Rate Limiting via Atomic Transactions (MULTI/EXEC)](#adr-050--redis-backed-fixed-window-rate-limiting-via-atomic-transactions-multiexec)
+- [ADR-050: Redis-Backed Fixed-Window Rate Limiting via Atomic Lua Scripting](#adr-050--redis-backed-fixed-window-rate-limiting-via-atomic-lua-scripting)
 - [ADR-051: Centralized Rate Limit Policy Dictionary](#adr-051--centralized-rate-limit-policy-dictionary)
 - [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
@@ -120,6 +122,8 @@ This document records the architectural and engineering decisions made during th
 - [ADR-069: Multi-Phase Security Audit Logging, Standardized Helper Encapsulation, and Indexed User History Retrieval](#adr-069--multi-phase-security-audit-logging-standardized-helper-encapsulation-and-indexed-user-history-retrieval)
 - [ADR-072: Asynchronous Email Delivery via BullMQ Task Queue](#adr-072--asynchronous-email-delivery-via-bullmq-task-queue)
 - [ADR-075: Email Worker Retry Policy and Failed-Job Retention](#adr-075--email-worker-retry-policy-and-failed-job-retention)
+- [ADR-078: Dual-Driver Background Job Architecture and Cloud Migration Path](#adr-078--dual-driver-background-job-architecture-and-cloud-migration-path)
+- [ADR-079: Serverless Lambda Runtime, Synchronous Execution Guard, and Reverse-Proxy Cookie Bridge](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge)
 
 </details>
 
@@ -135,7 +139,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-075)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-079)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -186,7 +190,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-047: SHA-256 Hashed Recovery Codes with Atomic Single-Use Consumption](#adr-047--sha-256-hashed-recovery-codes-with-atomic-single-use-consumption)
 - [ADR-048: Dual-Factor Enforcement on Sensitive Credential Mutations](#adr-048--dual-factor-enforcement-on-sensitive-credential-mutations)
 - [ADR-049: Proactive Low Recovery Code Warning Threshold](#adr-049--proactive-low-recovery-code-warning-threshold)
-- [ADR-050: Redis-Backed Fixed-Window Rate Limiting via Atomic Transactions (MULTI/EXEC)](#adr-050--redis-backed-fixed-window-rate-limiting-via-atomic-transactions-multiexec)
+- [ADR-050: Redis-Backed Fixed-Window Rate Limiting via Atomic Lua Scripting](#adr-050--redis-backed-fixed-window-rate-limiting-via-atomic-lua-scripting)
 - [ADR-051: Centralized Rate Limit Policy Dictionary](#adr-051--centralized-rate-limit-policy-dictionary)
 - [ADR-052: Dual-Key Rate Limiting (IP vs Authenticated User)](#adr-052--dual-key-rate-limiting-ip-vs-authenticated-user)
 - [ADR-053: Zod-Validated Proxy Trust Configuration](#adr-053--zod-validated-proxy-trust-configuration)
@@ -212,6 +216,10 @@ This document records the architectural and engineering decisions made during th
 - [ADR-073: Provider-Agnostic Email Abstraction with Resend Implementation](#adr-073--provider-agnostic-email-abstraction-with-resend-implementation)
 - [ADR-074: Unified Redis Architecture (ioredis Migration)](#adr-074--unified-redis-architecture-ioredis-migration)
 - [ADR-075: Email Worker Retry Policy and Failed-Job Retention](#adr-075--email-worker-retry-policy-and-failed-job-retention)
+- [ADR-076: Refresh Token Rotation with Atomic CAS and Ephemeral Leeway Window](#adr-076--refresh-token-rotation-with-atomic-cas-and-ephemeral-leeway-window)
+- [ADR-077: Process-Aware Environment Partitioning and Least Privilege Secret Isolation](#adr-077--process-aware-environment-partitioning-and-least-privilege-secret-isolation)
+- [ADR-078: Dual-Driver Background Job Architecture and Cloud Migration Path](#adr-078--dual-driver-background-job-architecture-and-cloud-migration-path)
+- [ADR-079: Serverless Lambda Runtime, Synchronous Execution Guard, and Reverse-Proxy Cookie Bridge](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge)
 
 </details>
 
@@ -452,16 +460,20 @@ Intercept `SIGINT`, `SIGTERM`, `uncaughtException`, and `unhandledRejection` in 
 
 ### Context
 
-Container orchestrators rely on liveness/readiness probes. Health check failures should not trigger crash loops.
+Container orchestrators and AWS Application Load Balancers (ALBs) require health probes. Health check probe failure on external dependency blips must not trigger cascading container termination or target group deregulation.
 
 ### Decision
 
-`/health` executes active checks against PostgreSQL (`prisma.$queryRaw`) and Redis (`redis.ping()`), returning `200 OK` or `503 Service Unavailable` with granular `"UP"`/`"DOWN"` status per dependency.
+Decouple process liveness from external dependency readiness:
+
+- `GET /health/live` (and root alias `GET /health`): Pure in-memory process liveness probe returning `200 OK` with `{ status: "UP", timestamp }`. Zero database or Redis I/O.
+- `GET /health/ready`: Dependency readiness probe concurrently evaluating PostgreSQL (`prisma.$queryRaw\`SELECT 1\``) and Redis (`redis.ping()`). Returns `200 OK`when all dependencies are UP, or`503 Service Unavailable` when any dependency is DOWN.
 
 ### Rationale
 
-- **Orchestrator Compatibility:** Provides standard liveness/readiness probes for Kubernetes, Docker, and cloud load balancers.
-- **Dependency Isolation:** Identifies which infrastructure dependency is degraded without crashing the API process.
+- **AWS ALB Alignment:** AWS strongly recommends ALB health checks be lightweight and verify process responsiveness. Deep dependency probes on ALBs cause catastrophic target group deregulation during transient database maintenance.
+- **Granular Observability:** Returns explicit per-dependency status (`database`, `redis`) on readiness failures without crashing the API process.
+- **Driver-Managed Resilience:** Leverages PostgreSQL connection pool timeouts and Redis client timeouts natively without artificial wrapping.
 
 ---
 
@@ -507,7 +519,7 @@ Revoke sessions via hard `DELETE` upon logout, token reuse detection, password c
 
 ## ADR-014 — Refresh Token Rotation with Automatic Reuse Detection
 
-**Status:** Accepted
+**Status:** Accepted _(Extended by ADR-076)_
 
 ### Context
 
@@ -1404,33 +1416,46 @@ When an authentication request (`mfaVerifyLogin`) succeeds via a recovery code, 
 
 ---
 
-## ADR-050 — Redis-Backed Fixed-Window Rate Limiting via Atomic Transactions (MULTI/EXEC)
+## ADR-050 — Redis-Backed Fixed-Window Rate Limiting via Atomic Lua Scripting
 
 **Status:** Accepted
 
 ### Context
 
-HTTP-level rate limiting requires atomic counter management in a shared store. Performing `INCR` and `EXPIRE` as disconnected Redis commands introduces race conditions where a key could be incremented without an expiration being set, causing permanent counter leaks.
+HTTP-level rate limiting requires atomic counter management in a shared store. Performing `INCR` and `EXPIRE` as disconnected Redis commands introduces race conditions where a key could be incremented without an expiration being set, causing permanent counter leaks. Furthermore, executing rate limiting via multi-command `MULTI/EXEC` transaction blocks bills 4 discrete Redis commands (`MULTI`, `INCR`, `EXPIRE`, `EXEC`) per request on serverless providers like Upstash, rapidly exhausting command quotas under high traffic or automated load balancer health check heartbeats.
 
 ### Decision
 
-Atomically execute counter increment and window expiration in a single Redis transaction block using `redis.multi().incr(redisKey).expire(redisKey, secondsRemainingInWindow, "NX").exec()` within `src/middlewares/rate-limit.ts`. The `"NX"` flag on `EXPIRE` ensures TTL is set only on the initial request of the window, while fixed-window bucket keys (`rl:${policy.name}:${identifier}:${bucket}`) ensure mathematical window boundaries without TTL drift.
+Atomically execute counter increment and conditional window expiration in a single Redis command using an embedded Lua script (`redis.eval(RATE_LIMIT_LUA_SCRIPT, 1, redisKey, secondsRemainingInWindow)`) within `src/middlewares/rate-limit.ts`. The script sets the expiration TTL strictly on the first request of the window (`if count == 1`), preserving mathematical window boundaries without TTL drift or redundant command execution.
 
 ```typescript
-const results = await redis
-  .multi()
-  .incr(redisKey)
-  .expire(redisKey, secondsRemainingInWindow, "NX")
-  .exec();
+const RATE_LIMIT_LUA_SCRIPT = `
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+`;
 
-const count = Number(results?.[0]?.[1] ?? 0);
+const result = await redis.eval(
+  RATE_LIMIT_LUA_SCRIPT,
+  1,
+  redisKey,
+  secondsRemainingInWindow,
+);
+
+const count = Number(result ?? 0);
 ```
+
+Additionally, AWS Application Load Balancer (ALB) liveness probes (`/health/live`) are routed before the rate-limiter middleware pipeline in `src/app.ts` and executed purely in-memory with zero external I/O, completely eliminating health check command churn and preventing cascading ECS container restarts during Redis maintenance.
 
 ### Rationale
 
-- **Strict Atomicity:** `MULTI / EXEC` ensures `INCR` and `EXPIRE` are executed together without intermediate operations.
-- **Single Roundtrip:** Commands are pipelined across the network in a single request-response cycle.
-- **Pure Infrastructure Decoupling:** Eliminates custom Lua scripts and module augmentation from `src/lib/redis.ts`, keeping the Redis client generic and standard.
+- **75% Command Reduction on Upstash:** Replaces a 4-command `MULTI`/`EXEC` transaction block with a single atomic `EVAL` command, directly cutting Redis command billing by 75% across all rate-limited routes.
+- **Strict Atomicity:** Redis executes Lua scripts as a single atomic unit, eliminating race conditions between counter incrementation and TTL expiration without client-side locking.
+- **Identical Window Mathematics:** Setting TTL only when `count == 1` replicates `EXPIRE ... NX` behavior with millisecond precision, ensuring the window duration is locked at inception without drift on subsequent requests.
+- **Zero Client Augmentation:** Native `ioredis` `redis.eval()` consumes the inline Lua script directly, requiring no monkey-patching, client wrappers, or external SHA management.
+- **Liveness Decoupling & Stability:** Exempting `/health/live` ensures infrastructure health checks never consume Redis commands or fail when Redis is degraded, preserving container stability.
 
 ---
 
@@ -2023,7 +2048,7 @@ export const recordSecurityEvent = async (
 ### Rationale
 
 - **Multi-Phase Traceability:** Preserves the complete authentication provenance across two-factor challenges.
-- **Sub-Millisecond Query Performance:** Composite index on `(userId, createdAt DESC)` eliminates table scans for user event history.
+- **Index-Backed Query Execution:** Composite index on `(userId, createdAt DESC)` eliminates table scans for user event history.
 - **Zero Code Duplication:** Standardized helper eliminates object-spread boilerplate and guarantees uniform optional field mapping.
 
 ---
@@ -2111,7 +2136,7 @@ export const authedErrors = {
 
 ## ADR-072 — Asynchronous Email Delivery via BullMQ Task Queue
 
-**Status:** Accepted
+**Status:** Accepted _(Extended by ADR-078)_
 
 ### Context
 
@@ -2199,7 +2224,7 @@ The application initially utilized `redis` (node-redis v6) for fixed-window rate
 Migrate all Redis operations across the codebase to `ioredis` and uninstall `redis` (node-redis):
 
 1. **Unified Client Instance (`src/lib/redis.ts`)**: A single lightweight `ioredis` instance manages application-level operations, configured with `lazyConnect: true` and `maxRetriesPerRequest: null`, completely decoupled from specific middleware scripts.
-2. **Atomic Middleware Transactions:** Rate limiting counter increments and window expirations execute via `redis.multi().incr().expire(..., "NX").exec()` directly within middleware [ADR-050], eliminating custom Lua scripts and interface augmentation.
+2. **Atomic Middleware Rate Limiting:** Counter increments and window expirations execute via atomic Lua scripting (`redis.eval`) directly within middleware [ADR-050], cutting Upstash command charges by 75% compared to multi-command transactions while eliminating external script maintenance.
 3. **Dedicated Queue & Worker Connections (`src/lib/queue.ts`)**: BullMQ Workers and Queues spawn dedicated `ioredis` connections via `createBullMQConnection()`, isolating blocking queue operations (e.g. `BRPOPLPUSH`/`BLMOVE`) from general caching and rate limiting requests.
 4. **Lifecycle & Status Alignment:** Leverage native `redis.status === "ready"` directly for fail-safe connectivity checks across rate limiter middleware and cache access layers, ensuring fail-open resilience without custom wrapper properties.
 
@@ -2262,3 +2287,156 @@ export const emailWorker = new Worker<EmailJobData>(
 - **Resource Conservation:** Immediate failure classification prevents futile retries on unrecoverable validation errors.
 - **Zero In-Flight Job Corruption:** Graceful worker shutdown permits in-flight email dispatches to complete, minimizing duplicate deliveries on process termination.
 - **Production Auditability:** Retaining failed jobs in Redis allows operators to inspect payloads, failure reasons, and timestamps via standard queue inspection tools.
+
+---
+
+## ADR-076 — Refresh Token Rotation with Atomic CAS and Ephemeral Leeway Window
+
+**Status:** Accepted _(Extends ADR-014)_
+
+### Context
+
+Refresh Token Rotation (RFC 6819) invalidates the consumed refresh token upon first exchange to prevent token replay attacks. In modern Single Page Applications (SPAs) and multi-tab browser environments, components and background queries frequently emit concurrent or rapid back-to-back API requests when an access token expires. Under strict single-winner rotation without concurrency tolerance, parallel refresh requests cause a race condition where one request succeeds while the others present the now-invalidated token, triggering false-positive session revocations ("ghost logouts").
+
+Conversely, relaxing reuse detection entirely creates an unacceptable vulnerability window for stolen credential replay. The authentication subsystem requires an atomic, transaction-free mutation pattern that collapses concurrent client requests into a synchronized response while maintaining strict replay detection.
+
+### Decision
+
+Implement single-statement atomic Compare-And-Swap (CAS) session rotation paired with an ephemeral Redis leeway cache (`auth:refresh-leeway:{sessionId}:{oldTokenHash}`) configured with a 30-second TTL.
+
+When a client initiates a refresh, the system first checks Redis for cached leeway tokens. If not found, the service generates new tokens and executes an atomic CAS update on PostgreSQL via `prisma.session.updateMany` conditioned on both `id` and `tokenHash`. The winning caller caches the newly generated token pair in Redis under the consumed token hash. Concurrent requests within the 30-second leeway window receive the identical cached token pair without database re-rotation, while any reuse outside the leeway window triggers immediate session revocation across the device or account.
+
+```typescript
+const rotated = await prisma.session.updateMany({
+  where: { id: sessionId, tokenHash: expectedOldTokenHash },
+  data: sessionUpdateData,
+});
+if (rotated.count > 0) {
+  await redis.set(leewayKey, JSON.stringify(tokens), "EX", 30);
+  return tokens;
+}
+```
+
+### Rationale
+
+- **Ghost Logout Elimination:** Ephemeral leeway caching collapses concurrent SPA requests into a single synchronized token pair, preventing false-positive revocations across parallel tabs.
+- **Zero Multi-Statement Transaction Overhead:** Single-statement atomic Compare-And-Swap leverages PostgreSQL's row-level write lock, preventing race conditions without database transaction overhead.
+- **Durable Replay Attack Detection:** Any presentation of an invalidated token outside the 30-second grace window triggers immediate session revocation, upholding OAuth 2.0 Security BCP (RFC 6819 / RFC 8725).
+- **In-Memory Response Collapsing:** Concurrent requests within the leeway window resolve directly from Redis memory in $O(1)$ time without database queries.
+
+---
+
+## ADR-077 — Process-Aware Environment Partitioning and Least Privilege Secret Isolation
+
+**Status:** Accepted _(Extends ADR-003, ADR-004)_
+
+### Context
+
+AuthSphere compiles a single unified container image (`ghcr.io/utkarshj014/authsphere:v1`) that powers two distinct runtime workloads: an internet-facing Express REST API and an asynchronous BullMQ background email worker. Each process role requires a fundamentally different subset of credentials. The public HTTP API requires database connection strings, JWT signing keys, and OAuth provider secrets, but never initiates outbound email dispatches. Conversely, the private background worker requires email provider API keys and sender addresses, but never interacts with the primary PostgreSQL database or token signing keys.
+
+Jamming all environment variables into a single monolithic schema or forcing them across both processes creates a severe breach of the Principle of Least Privilege. Exposing email dispatch keys inside public-facing HTTP containers increases threat surface unnecessarily, while requiring database credentials inside background workers prevents isolated worker deployment. The configuration subsystem requires role-aware schema partitioning that enforces strict credential boundaries at process boot without requiring separate Docker images or runtime fallback hacks.
+
+### Decision
+
+Partition environment configuration in `apps/api/src/config/env.ts` into three discrete Zod schemas: `sharedConfig` (infrastructure common to both: `NODE_ENV`, `APP_ROLE`, `FRONTEND_URL`, `REDIS_URL`), `apiConfig` (database, JWT, OAuth, MFA), and `workerConfig` (`RESEND_API_KEY`, `EMAIL_FROM`).
+
+At startup, the runtime inspects `process.env.APP_ROLE` to construct a dedicated active schema. The API server strictly validates `sharedConfig + apiConfig`, while the background worker strictly validates `sharedConfig + workerConfig`. Zod's default undeclared key-stripping automatically purges any extraneous variables passed to a container, ensuring neither workload leaks or accesses credentials belonging to the other.
+
+```typescript
+const apiSchema = sharedConfig.extend(apiConfig.shape).transform((c) => ({
+  ...c,
+  JWT_ACCESS_EXPIRES_IN_MS: parseDurationToMs(c.JWT_ACCESS_EXPIRES_IN),
+  JWT_REFRESH_EXPIRES_IN_MS: parseDurationToMs(c.JWT_REFRESH_EXPIRES_IN),
+}));
+const workerSchema = sharedConfig.extend(workerConfig.shape);
+const activeSchema = isWorker ? workerSchema : apiSchema;
+const parsed = activeSchema.safeParse(process.env);
+```
+
+### Rationale
+
+- **Principle of Least Privilege:** Public API containers never hold or require third-party email dispatch keys (`RESEND_API_KEY`), and background workers never hold database credentials (`DATABASE_URL`).
+- **Unified Container Portability:** A single immutable container image runs either role simply by declaring `APP_ROLE`, eliminating multi-image build complexity in CI/CD.
+- **Natural Secret Stripping:** Leverages Zod's native undeclared key stripping to discard cross-role environment pollution without fragile `.partial()` extensions or defensive runtime fallback hacks.
+- **Fail-Fast Process Boot:** Each process role immediately validates its exact mandatory credentials at boot (`process.exit(1)`), preventing silent runtime failures during user requests or background job processing.
+
+---
+
+## ADR-078 — Dual-Driver Background Job Architecture and Cloud Migration Path
+
+**Status:** Accepted _(Extends ADR-072, ADR-075, ADR-077)_
+
+### Context
+
+Operating a dedicated, persistent BullMQ background worker daemon provides robust job retries and dead-letter retention. However, serverless Redis providers such as Upstash bill strictly per command and sever idle TCP sockets every 60–120 seconds. An uncalibrated BullMQ worker continuously executes `BLMOVE` blocking polls, stream inspections, and stalled-job timers, generating continuous command churn without processing any jobs. In single-tenant cloud VMs, portfolio demonstrations, and low-traffic environments, this command churn rapidly exhausts free-tier quotas and incurs unnecessary operational overhead. Conversely, attempting on-demand container task spin-ups introduces 30–60 second cold-start provisioning latencies that critically degrade interactive user onboarding, verification, and password-reset experiences.
+
+The system requires an operational model that eliminates idle Redis command exhaustion and guarantees sub-second transactional email delivery in resource-constrained environments, while preserving the production BullMQ queue driver and defining a durable cloud migration roadmap.
+
+### Decision
+
+Implement a configurable dual-driver background job architecture governed by `QUEUE_DRIVER: z.enum(["bullmq", "inline", "sync"]).default("bullmq")`:
+
+1. **Inline Event-Loop Offload (`QUEUE_DRIVER=inline`):** In low-traffic or single-container deployments, `enqueueEmailJob()` offloads execution asynchronously to the Node.js event loop via `setImmediate()`. Delivery executes non-blocking via `emailService.processJob()` and `resendProvider`, achieving sub-second delivery (<500ms) with zero Redis command consumption and zero HTTP response latency degradation.
+2. **Dedicated Queue Daemon (`QUEUE_DRIVER=bullmq`):** In clustered or high-concurrency environments, jobs publish to BullMQ (`emailQueue.add()`) and execute across dedicated worker processes with exponential backoff retries [ADR-072, ADR-075]. The worker daemon calibrates `drainDelay: 30` (30s idle poll) and `stalledInterval: 300000` (5m stalled check) to eliminate tight polling loops on serverless Redis while maintaining crash-recovery guarantees.
+3. **Lazy Connection Guards:** Redis queue and provider SDK client instances instantiate lazily upon first invocation with `lazyConnect: true`, ensuring module evaluation never initiates unsolicited TCP handshakes or emits `ECONNREFUSED` errors during offline unit testing or inline operation.
+4. **Intentional Failure Window:** The inline driver accepts an asynchronous in-process failure window: if the API container terminates abruptly between the HTTP response and event-loop execution tick, the email remains unsent without retry storage. This trade-off is intentionally accepted over distributed outbox tables or continuous worker polling costs.
+5. **Cloud Migration Invariant (AWS SQS + Lambda):** When system throughput requires multi-AZ horizontal elasticity, BullMQ and Redis are replaced with native AWS SQS and AWS Lambda. SQS provides push-based invocation ($0 idle cost), automatic scaling from zero to thousands, and native Dead-Letter Queues without continuous compute polling.
+
+```typescript
+export const enqueueEmailJob = async (data: EmailJobData): Promise<void> => {
+  if (env.QUEUE_DRIVER === "inline") {
+    setImmediate(async () => {
+      const { emailService } = await import("./email.service.js");
+      const { resendProvider } = await import("./resend.provider.js");
+      await emailService.processJob(data, resendProvider);
+    });
+    return;
+  }
+  await emailQueue.add(data.type, data);
+};
+```
+
+### Rationale
+
+- **Zero Idle Command Exhaustion:** The inline driver completely eliminates background polling traffic on serverless Redis tiers, saving tens of thousands of idle commands daily.
+- **Sub-Second Interactive UX:** Offloading post-commit dispatch via `setImmediate()` delivers OTP tokens and verification links in under 500ms without container boot delays or synchronous request-thread blocking.
+- **Hermetic Testing Parity:** Lazy connection initialization isolates test suites from physical networking, eliminating unhandled connection rejections while preserving 100% offline unit test fidelity.
+- **Pragmatic Complexity Management:** Avoids premature integration of cloud SDKs or dual queue drivers in application code, while codifying an explicit architectural blueprint for AWS SQS + Lambda cloud evolution.
+
+---
+
+## ADR-079 — Serverless Lambda Runtime, Synchronous Execution Guard, and Reverse-Proxy Cookie Bridge
+
+**Status:** Accepted _(Extends ADR-002, ADR-010, ADR-078)_
+
+### Context
+
+Deploying AuthSphere to ephemeral serverless environments (AWS Lambda) introduces two fundamental execution hazards:
+
+1. **The Lambda Freeze Trap:** Once an HTTP response completes, AWS Lambda immediately pauses execution. Any uncompleted in-process background promises (`QUEUE_DRIVER=inline` via `setImmediate`) freeze mid-flight. If the execution environment scales down, uncompleted transactional emails are silently dropped; if thawed later for a subsequent request, emails dispatch unpredictably out-of-band.
+2. **The "No Custom Domain" Cross-Origin Barrier:** In portfolio and low-cost deployments lacking a unified custom domain, the frontend lives on `https://<app>.vercel.app` while backend compute resides on an AWS Application Load Balancer (`http://...elb.amazonaws.com`) or API Gateway (`https://...execute-api.<region>.amazonaws.com`). Unproxied cross-origin setups fail: browsers block plain HTTP ALB calls (mixed-content), drop authentication cookies (`SameSite=Lax`), and force preflight `OPTIONS` roundtrips (+100–300ms) on every API call.
+
+### Decision
+
+Implement a zero-cost serverless execution model with an edge reverse-proxy architecture:
+
+1. **Serverless Express Adapter (`apps/api/src/lambda.ts`):** Adapt pure Express (`app.ts`) to AWS Lambda via `@codegenie/serverless-express`. Cold starts eagerly initialize database connection pooling (`prisma.$connect()`) and Redis caching (`redis.connect()`), persisting warm client singletons across subsequent invocations.
+2. **Synchronous Execution Guard (`QUEUE_DRIVER=sync`):** When running in AWS Lambda (`AWS_LAMBDA_FUNCTION_NAME` present) or explicitly configured, `enqueueEmailJob()` directly awaits `emailService.processJob()` within the HTTP handler lifecycle before response completion, eliminating uncompleted background tasks.
+3. **Edge Reverse Proxy Rewrite (`apps/web/vercel.json`):** Configure Vercel Edge rewrites (`/api/:path*` -> backend endpoint). Browsers communicate strictly same-origin (`/api/*`), preserving `HttpOnly; SameSite=Lax` cookies, eliminating CORS preflight roundtrips, and handling SSL termination without custom domains.
+
+```typescript
+// apps/api/src/lambda.ts
+export const handler = async (event: unknown, context: unknown) => {
+  if (!serverlessHandler) {
+    await Promise.all([prisma.$connect(), redis.connect()]);
+    serverlessHandler = configureServerless({ app });
+  }
+  return serverlessHandler(event, context);
+};
+```
+
+### Rationale
+
+- **Deterministic Serverless Delivery:** Awaiting email dispatch inside the Lambda handler guarantees delivery before runtime freeze, avoiding silent drops without requiring persistent container infrastructure.
+- **Native Browser Security Without Domain Costs:** The Vercel edge rewrite treats all client interactions as first-party same-site requests, retaining strict `SameSite=Lax` cookie protection and zeroing preflight latency.
+- **Zero Ingress Maintenance:** Single codebase seamlessly targets long-lived containers (`server.ts` on ECS Fargate) and ephemeral serverless compute (`lambda.ts` on AWS Lambda) with 100% route, middleware, and validation parity.

@@ -8,6 +8,7 @@ export const EMAIL_QUEUE_NAME = "authsphere-email";
 export const createBullMQConnection = () =>
   new Redis(env.REDIS_URL, {
     maxRetriesPerRequest: null,
+    lazyConnect: true,
   });
 
 export const emailQueue = new Queue<EmailJobData>(EMAIL_QUEUE_NAME, {

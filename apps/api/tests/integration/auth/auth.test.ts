@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { authService } from "../../../src/modules/auth/auth.service.js";
 import {
   prisma,
+  redis,
   createUser,
   createVerifiedUser,
   createMfaUser,
@@ -89,6 +90,42 @@ describe("Auth Service — Core Integration Suite", () => {
     it("verifyEmail with invalid or expired token throws 400", async () => {
       await expect(
         authService.verifyEmail({ token: "invalid-token-value" }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        message: "Invalid or expired verification token",
+      });
+    });
+
+    it("verifyEmail returns cleanly and idempotently when user is already verified", async () => {
+      const { user } = await createVerifiedUser();
+      const rawToken = `token-${Date.now()}`;
+      await prisma.emailVerificationToken.create({
+        data: {
+          tokenHash: hashToken(rawToken),
+          userId: user.id,
+          expiresAt: new Date(Date.now() + 3600000),
+        },
+      });
+
+      // Verification succeeds idempotently without error
+      await expect(
+        authService.verifyEmail({ token: rawToken }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("verifyEmail with already-consumed token throws 400", async () => {
+      const email = `verify-consumed-${Date.now()}@authsphere.test`;
+      await authService.signup({ email, password: "Password123!" });
+
+      const sentEmail = getLastSentVerificationEmail();
+      expect(sentEmail).toBeDefined();
+
+      // First verification succeeds and consumes token
+      await authService.verifyEmail({ token: sentEmail!.token });
+
+      // Second verification rejects with 400 because token is consumed
+      await expect(
+        authService.verifyEmail({ token: sentEmail!.token }),
       ).rejects.toMatchObject({
         statusCode: 400,
         message: "Invalid or expired verification token",
@@ -443,6 +480,30 @@ describe("Auth Service — Core Integration Suite", () => {
       });
     });
 
+    it("resetPassword with already-consumed token throws 400", async () => {
+      const { user } = await createVerifiedUser();
+      await authService.forgotPassword({ email: user.email });
+      const sentEmail = getLastSentForgotPasswordEmail();
+      expect(sentEmail).toBeDefined();
+
+      // First reset succeeds and consumes token
+      await authService.resetPassword({
+        token: sentEmail!.token,
+        password: "BrandNewPassword123!",
+      });
+
+      // Second reset rejects with 400 because token is consumed
+      await expect(
+        authService.resetPassword({
+          token: sentEmail!.token,
+          password: "AnotherPassword123!",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        message: "Invalid or expired reset token",
+      });
+    });
+
     it("changePassword updates password when valid old password is provided", async () => {
       const { user, password } = await createVerifiedUser();
       await createSession(user.id);
@@ -527,7 +588,33 @@ describe("Auth Service — Core Integration Suite", () => {
       ).rejects.toThrowError(UnauthorizedError);
     });
 
-    it("token reuse detected → revokes session and throws 401", async () => {
+    it("token reuse within leeway window returns cached tokens", async () => {
+      const { user, password } = await createVerifiedUser();
+      const loginResult = await authService.login(
+        { email: user.email, password },
+        "127.0.0.1",
+      );
+
+      if (loginResult.mfaRequired) throw new Error("MFA not expected");
+      const firstRefreshToken = loginResult.tokens.refreshToken;
+
+      const rotated = await authService.refreshToken(
+        "127.0.0.1",
+        undefined,
+        firstRefreshToken,
+      );
+
+      // Re-invoking with the old refresh token within leeway returns the identical rotated tokens
+      const leewayHit = await authService.refreshToken(
+        "127.0.0.1",
+        undefined,
+        firstRefreshToken,
+      );
+      expect(leewayHit.refreshToken).toBe(rotated.refreshToken);
+      expect(leewayHit.accessToken).toBe(rotated.accessToken);
+    });
+
+    it("token reuse detected outside leeway window → revokes session and throws 401", async () => {
       const { user, password } = await createVerifiedUser();
       const loginResult = await authService.login(
         { email: user.email, password },
@@ -538,6 +625,9 @@ describe("Auth Service — Core Integration Suite", () => {
       const firstRefreshToken = loginResult.tokens.refreshToken;
 
       await authService.refreshToken("127.0.0.1", undefined, firstRefreshToken);
+
+      // Invalidate the leeway cache in Redis to simulate reuse outside grace period
+      await redis.flushdb();
 
       await expect(
         authService.refreshToken("127.0.0.1", undefined, firstRefreshToken),

@@ -354,16 +354,16 @@ apps/api/src/
 
 ## 10. Security Properties & ADR Cross-References
 
-| Property                           | Mechanism                                                                                       | Authoritative Decision |
-| :--------------------------------- | :---------------------------------------------------------------------------------------------- | :--------------------- |
-| **Provider-Agnostic Architecture** | Unified `OAuthProviderStrategy` interface with normalized `OAuthProfile` DTO                    | `[ADR-059]`            |
-| **CSRF Prevention**                | 32-byte cryptographic state token bound to Redis with 10-minute TTL                             | `[ADR-060]`            |
-| **State Replay Prevention**        | `redis.getDel()` atomic single-use state consumption with provider validation                   | `[ADR-060]`            |
-| **Account Takeover Prevention**    | Email-matching existing users are never auto-linked during unauthenticated flows (409 Conflict) | `[ADR-061]`            |
-| **Identity Stability**             | Google `sub` (OIDC) and GitHub numeric `id` used as immutable `providerId`                      | `[ADR-059, ADR-061]`   |
-| **Email Verification Enforcement** | Google: `email_verified === true`. GitHub: always queries `/user/emails` for verified status    | `[ADR-062]`            |
-| **Controller Decoupling**          | Higher-order controller factories eliminate route boilerplate while retaining explicit exports  | `[ADR-063]`            |
-| **Rate Limiting Protection**       | Dedicated `OAUTH_INITIATE` (20/1m) and `OAUTH_CALLBACK` (20/1m) IP-based rate limiting          | `[ADR-051, ADR-066]`   |
-| **Information Leakage Prevention** | Provider HTTP errors logged via Pino internally; clients receive generic status codes           | `[ADR-008, ADR-009]`   |
-| **Session & Cookie Transport**     | Standard AuthSphere session with HTTP-only, secure, SameSite=Lax cookies                        | `[ADR-033, ADR-042]`   |
-| **Provider Credential Isolation**  | Client secrets validated via Zod schema at startup; never exposed to browser clients            | `[ADR-003, ADR-004]`   |
+| Property                           | Mechanism                                                                                       | Authoritative Decision        |
+| :--------------------------------- | :---------------------------------------------------------------------------------------------- | :---------------------------- |
+| **Provider-Agnostic Architecture** | Unified `OAuthProviderStrategy` interface with normalized `OAuthProfile` DTO                    | `[ADR-059]`                   |
+| **CSRF Prevention**                | 32-byte cryptographic state token bound to Redis with 10-minute TTL                             | `[ADR-060]`                   |
+| **State Replay Prevention**        | `redis.getDel()` atomic single-use state consumption with provider validation                   | `[ADR-060]`                   |
+| **Account Takeover Prevention**    | Email-matching existing users are never auto-linked during unauthenticated flows (409 Conflict) | `[ADR-061]`                   |
+| **Identity Stability**             | Google `sub` (OIDC) and GitHub numeric `id` used as immutable `providerId`                      | `[ADR-059, ADR-061]`          |
+| **Email Verification Enforcement** | Google: `email_verified === true`. GitHub: always queries `/user/emails` for verified status    | `[ADR-062]`                   |
+| **Controller Decoupling**          | Higher-order controller factories eliminate route boilerplate while retaining explicit exports  | `[ADR-063]`                   |
+| **Rate Limiting Protection**       | Dedicated `OAUTH_INITIATE` (20/1m) and `OAUTH_CALLBACK` (20/1m) IP-based rate limiting          | `[ADR-051, ADR-066]`          |
+| **Information Leakage Prevention** | Provider HTTP errors logged via Pino internally; clients receive generic status codes           | `[ADR-008, ADR-009]`          |
+| **Session & Cookie Transport**     | Standard AuthSphere session with HTTP-only, secure, SameSite=Lax cookies                        | `[ADR-033, ADR-042]`          |
+| **Provider Credential Isolation**  | Client secrets validated via Zod schema at startup; never exposed to browser clients            | `[ADR-003, ADR-004, ADR-077]` |

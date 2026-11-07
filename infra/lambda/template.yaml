@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform:
+  - AWS::LanguageExtensions
+  - AWS::Serverless-2016-10-31
+Description: AuthSphere - Serverless Express 5 REST API on AWS Lambda + Function URL
+
+Parameters:
+  DatabaseUrl:
+    Type: String
+    NoEcho: true
+    Description: Production PostgreSQL connection string (Neon pooled)
+  RedisUrl:
+    Type: String
+    NoEcho: true
+    Description: Production Redis connection string (Upstash)
+  FrontendUrl:
+    Type: String
+    Default: "https://authsphere-iota.vercel.app"
+    Description: Vercel frontend URL for CORS and origin validation
+  JwtAccessSecret:
+    Type: String
+    NoEcho: true
+    Description: JWT Access Secret (minimum 16 characters)
+  JwtRefreshSecret:
+    Type: String
+    NoEcho: true
+    Description: JWT Refresh Secret (minimum 16 characters)
+  MfaEncryptionKey:
+    Type: String
+    NoEcho: true
+    Description: MFA AES-256-GCM encryption key (minimum 16 characters)
+  ResendApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Resend API Key for transactional emails
+  EmailFrom:
+    Type: String
+    Default: "AuthSphere <noreply@authsphere.dev>"
+    Description: Outbound sender email address
+  GoogleClientId:
+    Type: String
+    Default: ""
+    Description: Google OAuth Client ID
+  GoogleClientSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Google OAuth Client Secret
+  GithubClientId:
+    Type: String
+    Default: ""
+    Description: GitHub OAuth Client ID
+  GithubClientSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: GitHub OAuth Client Secret
+  EmailProvider:
+    Type: String
+    Default: ""
+    Description: Email provider strategy ("gmail" or "resend")
+  GmailUser:
+    Type: String
+    Default: ""
+    Description: Gmail account address for OAuth2 sending
+  GmailRefreshToken:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Gmail OAuth2 Refresh Token
+  OAuthCallbackBaseUrl:
+    Type: String
+    Default: ""
+    Description: Base URL for OAuth callbacks routed via Vercel reverse proxy
+
+Globals:
+  Function:
+    Timeout: 15
+    MemorySize: 512
+    Runtime: nodejs24.x
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        NODE_ENV: production
+        APP_ROLE: api
+        QUEUE_DRIVER: sync
+        TRUST_PROXY: "1"
+        HOST: "0.0.0.0"
+        JWT_ACCESS_EXPIRES_IN: "15m"
+        JWT_REFRESH_EXPIRES_IN: "30d"
+        AUTH_REUSE_DELETION_MODE: "SESSION"
+        AUTH_REFRESH_TOKEN_LEEWAY_SECONDS: "30"
+        DATABASE_POOL_MAX: "2"
+
+Resources:
+  # Lambda Function running Express API with Native Function URL
+  AuthSphereApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: authsphere-api
+      CodeUri: authsphere-api.zip
+      Handler: lambda.handler
+      AutoPublishAlias: live
+      AutoPublishAliasAllProperties: true
+      ReservedConcurrentExecutions: 10
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - !Ref FrontendUrl
+          AllowHeaders:
+            - Content-Type
+            - Authorization
+            - X-Request-Id
+          AllowMethods:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+            - OPTIONS
+          AllowCredentials: true
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref DatabaseUrl
+          REDIS_URL: !Ref RedisUrl
+          FRONTEND_URL: !Ref FrontendUrl
+          JWT_ACCESS_SECRET: !Ref JwtAccessSecret
+          JWT_REFRESH_SECRET: !Ref JwtRefreshSecret
+          MFA_ENCRYPTION_KEY: !Ref MfaEncryptionKey
+          RESEND_API_KEY: !Ref ResendApiKey
+          EMAIL_FROM: !Ref EmailFrom
+          EMAIL_PROVIDER: !Ref EmailProvider
+          GMAIL_USER: !Ref GmailUser
+          GMAIL_REFRESH_TOKEN: !Ref GmailRefreshToken
+          GOOGLE_CLIENT_ID: !Ref GoogleClientId
+          GOOGLE_CLIENT_SECRET: !Ref GoogleClientSecret
+          GITHUB_CLIENT_ID: !Ref GithubClientId
+          GITHUB_CLIENT_SECRET: !Ref GithubClientSecret
+          OAUTH_CALLBACK_BASE_URL: !Ref OAuthCallbackBaseUrl
+
+  # CloudWatch Log Group with 7-day retention guardrail
+  AuthSphereApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AuthSphereApiFunction}"
+      RetentionInDays: 7
+
+Outputs:
+  FunctionUrl:
+    Description: Lambda Function URL (HTTPS endpoint)
+    Value: !GetAtt AuthSphereApiFunctionUrl.FunctionUrl
+  FunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt AuthSphereApiFunction.Arn

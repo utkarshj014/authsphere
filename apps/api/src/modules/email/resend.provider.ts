@@ -2,13 +2,22 @@ import { Resend } from "resend";
 import { env } from "../../config/env.js";
 import { EmailDeliveryError, type EmailProvider } from "./email.types.js";
 
-const resend = new Resend(env.RESEND_API_KEY);
+let resendClient: Resend | null = null;
 
 export const resendProvider: EmailProvider = {
   name: "resend",
 
   async send({ to, subject, html }) {
-    const { data, error } = await resend.emails.send({
+    if (!env.RESEND_API_KEY || !env.EMAIL_FROM) {
+      throw new EmailDeliveryError(
+        "Resend credentials (RESEND_API_KEY, EMAIL_FROM) are not configured",
+        true,
+      );
+    }
+
+    // Lazy singleton: instantiates once per process while avoiding top-level import crashes when unconfigured
+    resendClient ??= new Resend(env.RESEND_API_KEY);
+    const { data, error } = await resendClient.emails.send({
       from: env.EMAIL_FROM,
       to,
       subject,

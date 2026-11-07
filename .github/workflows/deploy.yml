@@ -1,0 +1,249 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Typecheck, Test & Build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: authsphere_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d authsphere_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      APP_ROLE: api
+      QUEUE_DRIVER: inline
+      PORT: 3001
+      HOST: 0.0.0.0
+      FRONTEND_URL: http://localhost:5173
+      TRUST_PROXY: "false"
+      DATABASE_URL: postgresql://postgres:test@localhost:5432/authsphere_test
+      REDIS_URL: redis://localhost:6379/1
+      JWT_ACCESS_SECRET: test-access-secret-minimum-16-chars
+      JWT_REFRESH_SECRET: test-refresh-secret-minimum-16-chars
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 30d
+      AUTH_REUSE_DELETION_MODE: SESSION
+      AUTH_REFRESH_TOKEN_LEEWAY_SECONDS: 30
+      MFA_ENCRYPTION_KEY: test-mfa-encryption-key-min16
+      GOOGLE_CLIENT_ID: test-google-client-id
+      GOOGLE_CLIENT_SECRET: test-google-client-secret
+      GITHUB_CLIENT_ID: test-github-client-id
+      GITHUB_CLIENT_SECRET: test-github-client-secret
+      OAUTH_CALLBACK_BASE_URL: http://localhost:3001/auth/oauth
+      EMAIL_PROVIDER: resend
+      RESEND_API_KEY: resend_test_dummy_key_for_testing
+      EMAIL_FROM: AuthSphere <noreply@authsphere.dev>
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Apply test database migrations
+        run: npm run db:migrate:deploy --workspace=@authsphere/api
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  deploy:
+    name: Release & Deploy
+    needs: validate
+    runs-on: ubuntu-latest
+
+    env:
+      IMAGE_NAME: ghcr.io/${{ github.repository }}/backend
+      DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET || 'serverless' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix infra/lambda ci --omit=dev
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-south-1' }}
+
+      - name: Run production database migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: npm run db:migrate:deploy --workspace=@authsphere/api
+
+      - name: Deploy to AWS Lambda (SAM)
+        if: env.DEPLOY_TARGET != 'ecs'
+        run: |
+          npm run build:lambda
+          cd infra/lambda
+          sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
+            --region ${{ vars.AWS_REGION || 'ap-south-1' }} \
+            --parameter-overrides \
+              DatabaseUrl="${{ secrets.DATABASE_URL_POOLED }}" \
+              RedisUrl="${{ secrets.REDIS_URL }}" \
+              FrontendUrl="${{ vars.FRONTEND_URL || 'https://authsphere-iota.vercel.app' }}" \
+              JwtAccessSecret="${{ secrets.JWT_ACCESS_SECRET }}" \
+              JwtRefreshSecret="${{ secrets.JWT_REFRESH_SECRET }}" \
+              MfaEncryptionKey="${{ secrets.MFA_ENCRYPTION_KEY }}" \
+              ResendApiKey="${{ secrets.RESEND_API_KEY }}" \
+              EmailFrom="${{ secrets.EMAIL_FROM || 'AuthSphere <noreply@authsphere.dev>' }}" \
+              EmailProvider="${{ vars.EMAIL_PROVIDER }}" \
+              GmailUser="${{ secrets.GMAIL_USER }}" \
+              GmailRefreshToken="${{ secrets.GMAIL_REFRESH_TOKEN }}" \
+              GoogleClientId="${{ vars.GOOGLE_CLIENT_ID }}" \
+              GoogleClientSecret="${{ secrets.GOOGLE_CLIENT_SECRET }}" \
+              GithubClientId="${{ vars.GH_OAUTH_CLIENT_ID }}" \
+              GithubClientSecret="${{ secrets.GH_OAUTH_CLIENT_SECRET }}" \
+              OAuthCallbackBaseUrl="${{ vars.OAUTH_CALLBACK_BASE_URL }}"
+
+          FUNCTION_URL=$(aws cloudformation describe-stacks \
+            --stack-name authsphere-serverless \
+            --region ${{ vars.AWS_REGION || 'ap-south-1' }} \
+            --query "Stacks[0].Outputs[?OutputKey=='FunctionUrl'].OutputValue" \
+            --output text)
+          echo "FUNCTION_URL=$FUNCTION_URL" >> $GITHUB_ENV
+
+      - name: Smoke test Lambda deployment (Liveness & Readiness)
+        if: env.DEPLOY_TARGET != 'ecs'
+        run: |
+          echo "Verifying process liveness at: ${FUNCTION_URL}health/live"
+          curl --fail --retry 3 --retry-delay 5 --max-time 15 "${FUNCTION_URL}health/live"
+          echo "Verifying dependency readiness at: ${FUNCTION_URL}health/ready"
+          curl --fail --retry 3 --retry-delay 5 --max-time 15 "${FUNCTION_URL}health/ready"
+
+      - name: Set up Docker Buildx
+        if: env.DEPLOY_TARGET == 'ecs'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: env.DEPLOY_TARGET == 'ecs'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        if: env.DEPLOY_TARGET == 'ecs'
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        if: env.DEPLOY_TARGET == 'ecs'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Inject AWS Account ID into ECS task definitions
+        if: env.DEPLOY_TARGET == 'ecs'
+        run: |
+          ACCOUNT_ID="${{ vars.AWS_ACCOUNT_ID }}"
+          if [ -z "$ACCOUNT_ID" ]; then
+            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          fi
+          sed -i "s|<ACCOUNT_ID>|${ACCOUNT_ID}|g" infra/ecs/api-task-definition.json infra/ecs/worker-task-definition.json
+
+      - name: Render ECS API task definition
+        if: env.DEPLOY_TARGET == 'ecs'
+        id: render-api-container
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: infra/ecs/api-task-definition.json
+          container-name: authsphere-api
+          image: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+
+      - name: Deploy API to Amazon ECS
+        if: env.DEPLOY_TARGET == 'ecs'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-api-container.outputs.task-definition }}
+          service: authsphere-api
+          cluster: authsphere-cluster
+          wait-for-service-stability: true
+
+      - name: Render ECS Worker task definition
+        if: env.DEPLOY_TARGET == 'ecs' && vars.DEPLOY_ECS_WORKER == 'true'
+        id: render-worker-container
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: infra/ecs/worker-task-definition.json
+          container-name: authsphere-worker
+          image: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+
+      - name: Deploy Background Worker to Amazon ECS
+        if: env.DEPLOY_TARGET == 'ecs' && vars.DEPLOY_ECS_WORKER == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-worker-container.outputs.task-definition }}
+          service: authsphere-worker
+          cluster: authsphere-cluster
+          wait-for-service-stability: false

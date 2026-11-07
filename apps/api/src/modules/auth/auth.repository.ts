@@ -1,6 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { Prisma, type OAuthProvider } from "../../generated/prisma/client.js";
-import { AppError, UnauthorizedError } from "../../common/errors/index.js";
+import { AppError } from "../../common/errors/index.js";
 import type { RoleName, SecurityEventTypeName } from "@authsphere/shared";
 
 const findUserByEmail = (email: string) =>
@@ -43,18 +43,26 @@ const createUserWithVerificationToken = async (
   }
 };
 
-const verifyEmailAndDeleteToken = async (tokenHash: string) => {
-  const verificationToken = await prisma.emailVerificationToken.findFirst({
-    where: { tokenHash, expiresAt: { gte: new Date() } },
+const findVerificationTokenWithUser = (tokenHash: string) =>
+  prisma.emailVerificationToken.findFirst({
+    where: {
+      tokenHash,
+      expiresAt: { gte: new Date() },
+    },
+    include: {
+      user: {
+        select: {
+          id: true,
+          isEmailVerified: true,
+        },
+      },
+    },
   });
 
-  if (!verificationToken) {
-    throw new AppError("Invalid or expired verification token", 400);
-  }
-
+const markEmailVerifiedAndConsumeToken = async (userId: string) => {
   try {
     await prisma.user.update({
-      where: { id: verificationToken.userId, isEmailVerified: false },
+      where: { id: userId },
       data: {
         isEmailVerified: true,
         verifiedAt: new Date(),
@@ -66,7 +74,7 @@ const verifyEmailAndDeleteToken = async (tokenHash: string) => {
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === "P2025"
     ) {
-      throw new AppError("Email is already verified", 400);
+      return;
     }
     throw error;
   }
@@ -139,29 +147,30 @@ const deleteSessionById = (sessionId: string) =>
 const deleteAllSessionsByUserId = (userId: string) =>
   prisma.session.deleteMany({ where: { userId } });
 
+/**
+ * Atomic Compare-And-Swap (CAS) session rotation.
+ * Updates session in a single statement conditioned on expectedOldTokenHash matching.
+ * Returns true if the caller won the CAS, false otherwise (concurrent rotation / reuse).
+ */
 const rotateSession = async (
   sessionId: string,
+  expectedOldTokenHash: string,
   sessionUpdateData: {
     tokenHash: string;
     expiresAt: Date;
     ipAddress?: string;
     userAgent?: string;
   },
-) => {
-  try {
-    return await prisma.session.update({
-      where: { id: sessionId },
-      data: { ...sessionUpdateData },
-    });
-  } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2025"
-    ) {
-      throw new UnauthorizedError("Session invalidated");
-    }
-    throw error;
-  }
+): Promise<boolean> => {
+  const result = await prisma.session.updateMany({
+    where: {
+      id: sessionId,
+      tokenHash: expectedOldTokenHash,
+    },
+    data: { ...sessionUpdateData },
+  });
+
+  return result.count > 0;
 };
 
 const findUserById = (userId: string) =>
@@ -502,6 +511,7 @@ const consumeMagicLinkToken = async (
     await prisma.user.update({
       where: { id: userId },
       data: {
+        updatedAt: new Date(),
         ...(isEmailVerified
           ? {}
           : { isEmailVerified: true, verifiedAt: new Date() }),
@@ -563,7 +573,8 @@ export const authRepository = {
   findUserByEmail,
   findRoleByName,
   createUserWithVerificationToken,
-  verifyEmailAndDeleteToken,
+  findVerificationTokenWithUser,
+  markEmailVerifiedAndConsumeToken,
   reCreateVerificationToken,
   findUserByEmailWithRole,
   createSession,

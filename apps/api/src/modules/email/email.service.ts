@@ -1,4 +1,3 @@
-import { UnrecoverableError } from "bullmq";
 import {
   EMAIL_JOB_TYPES,
   type EmailJobData,
@@ -32,6 +31,7 @@ const processJob = async (
 
     default: {
       const exhaustiveCheck: never = data;
+      const { UnrecoverableError } = await import("bullmq");
       throw new UnrecoverableError(
         `Unsupported email job type: ${(exhaustiveCheck as any)?.type}`,
       );
