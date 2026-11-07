@@ -132,6 +132,8 @@ jobs:
 
       - name: Deploy to AWS Lambda (SAM)
         if: env.DEPLOY_TARGET != 'ecs'
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/authsphere_build
         run: |
           npm run build:lambda
           cd infra/lambda
