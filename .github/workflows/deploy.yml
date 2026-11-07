@@ -137,25 +137,30 @@ jobs:
         run: |
           npm run build:lambda
           cd infra/lambda
+
+          PARAMS=()
+          add_param() { [ -n "$2" ] && PARAMS+=("$1=$2"); }
+
+          add_param "DatabaseUrl" "${{ secrets.DATABASE_URL_POOLED }}"
+          add_param "RedisUrl" "${{ secrets.REDIS_URL }}"
+          add_param "FrontendUrl" "${{ vars.FRONTEND_URL || 'https://authsphere-iota.vercel.app' }}"
+          add_param "JwtAccessSecret" "${{ secrets.JWT_ACCESS_SECRET }}"
+          add_param "JwtRefreshSecret" "${{ secrets.JWT_REFRESH_SECRET }}"
+          add_param "MfaEncryptionKey" "${{ secrets.MFA_ENCRYPTION_KEY }}"
+          add_param "EmailFrom" "${{ secrets.EMAIL_FROM || 'AuthSphere <noreply@authsphere.dev>' }}"
+          add_param "EmailProvider" "${{ vars.EMAIL_PROVIDER || 'gmail' }}"
+          add_param "GmailUser" "${{ vars.GMAIL_USER }}"
+          add_param "GmailRefreshToken" "${{ secrets.GMAIL_REFRESH_TOKEN }}"
+          add_param "ResendApiKey" "${{ secrets.RESEND_API_KEY }}"
+          add_param "GoogleClientId" "${{ vars.GOOGLE_CLIENT_ID }}"
+          add_param "GoogleClientSecret" "${{ secrets.GOOGLE_CLIENT_SECRET }}"
+          add_param "GithubClientId" "${{ vars.GH_OAUTH_CLIENT_ID }}"
+          add_param "GithubClientSecret" "${{ secrets.GH_OAUTH_CLIENT_SECRET }}"
+          add_param "OAuthCallbackBaseUrl" "${{ vars.OAUTH_CALLBACK_BASE_URL }}"
+
           sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
             --region ${{ vars.AWS_REGION || 'ap-south-1' }} \
-            --parameter-overrides \
-              DatabaseUrl="${{ secrets.DATABASE_URL_POOLED }}" \
-              RedisUrl="${{ secrets.REDIS_URL }}" \
-              FrontendUrl="${{ vars.FRONTEND_URL || 'https://authsphere-iota.vercel.app' }}" \
-              JwtAccessSecret="${{ secrets.JWT_ACCESS_SECRET }}" \
-              JwtRefreshSecret="${{ secrets.JWT_REFRESH_SECRET }}" \
-              MfaEncryptionKey="${{ secrets.MFA_ENCRYPTION_KEY }}" \
-              ResendApiKey="${{ secrets.RESEND_API_KEY }}" \
-              EmailFrom="${{ secrets.EMAIL_FROM || 'AuthSphere <noreply@authsphere.dev>' }}" \
-              EmailProvider="${{ vars.EMAIL_PROVIDER }}" \
-              GmailUser="${{ secrets.GMAIL_USER }}" \
-              GmailRefreshToken="${{ secrets.GMAIL_REFRESH_TOKEN }}" \
-              GoogleClientId="${{ vars.GOOGLE_CLIENT_ID }}" \
-              GoogleClientSecret="${{ secrets.GOOGLE_CLIENT_SECRET }}" \
-              GithubClientId="${{ vars.GH_OAUTH_CLIENT_ID }}" \
-              GithubClientSecret="${{ secrets.GH_OAUTH_CLIENT_SECRET }}" \
-              OAuthCallbackBaseUrl="${{ vars.OAUTH_CALLBACK_BASE_URL }}"
+            --parameter-overrides "${PARAMS[@]}"
 
           FUNCTION_URL=$(aws cloudformation describe-stacks \
             --stack-name authsphere-serverless \
