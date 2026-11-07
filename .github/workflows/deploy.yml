@@ -99,7 +99,6 @@ jobs:
     name: Release & Deploy
     needs: validate
     runs-on: ubuntu-latest
-    environment: production
 
     env:
       IMAGE_NAME: ghcr.io/${{ github.repository }}/backend
@@ -152,8 +151,8 @@ jobs:
               GmailRefreshToken="${{ secrets.GMAIL_REFRESH_TOKEN }}" \
               GoogleClientId="${{ vars.GOOGLE_CLIENT_ID }}" \
               GoogleClientSecret="${{ secrets.GOOGLE_CLIENT_SECRET }}" \
-              GithubClientId="${{ vars.GITHUB_CLIENT_ID }}" \
-              GithubClientSecret="${{ secrets.GITHUB_CLIENT_SECRET }}" \
+              GithubClientId="${{ vars.GH_OAUTH_CLIENT_ID }}" \
+              GithubClientSecret="${{ secrets.GH_OAUTH_CLIENT_SECRET }}" \
               OAuthCallbackBaseUrl="${{ vars.OAUTH_CALLBACK_BASE_URL }}"
 
           FUNCTION_URL=$(aws cloudformation describe-stacks \
@@ -190,7 +189,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=sha,prefix=sha-,format=long
+            type=sha,prefix=,format=short
             type=raw,value=latest
 
       - name: Build and push Docker image
@@ -220,7 +219,7 @@ jobs:
         with:
           task-definition: infra/ecs/api-task-definition.json
           container-name: authsphere-api
-          image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          image: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
 
       - name: Deploy API to Amazon ECS
         if: env.DEPLOY_TARGET == 'ecs'
@@ -238,7 +237,7 @@ jobs:
         with:
           task-definition: infra/ecs/worker-task-definition.json
           container-name: authsphere-worker
-          image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          image: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
 
       - name: Deploy Background Worker to Amazon ECS
         if: env.DEPLOY_TARGET == 'ecs' && vars.DEPLOY_ECS_WORKER == 'true'

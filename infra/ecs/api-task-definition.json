@@ -12,7 +12,7 @@
   "containerDefinitions": [
     {
       "name": "authsphere-api",
-      "image": "authsphere-api:latest",
+      "image": "ghcr.io/utkarshj014/authsphere/backend:<IMAGE_TAG>",
       "cpu": 256,
       "memory": 512,
       "essential": true,
