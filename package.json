@@ -18,15 +18,16 @@
     "typecheck": "npm run build:shared && npm run generate:api && npm run typecheck --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
     "clean": "npm run clean --workspaces --if-present"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
     "bestzip": "^4.0.3",
-    "typescript": "^7.0.2"
+    "typescript": "~5.8.3"
   },
   "engines": {
-    "node": ">=24"
+    "node": "24.x || 25.x"
   },
   "repository": {
     "type": "git",

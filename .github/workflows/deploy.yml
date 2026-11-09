@@ -17,83 +17,9 @@ concurrency:
 
 jobs:
   validate:
-    name: Typecheck, Test & Build
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: authsphere_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d authsphere_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:8-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      NODE_ENV: test
-      APP_ROLE: api
-      QUEUE_DRIVER: inline
-      PORT: 3001
-      HOST: 0.0.0.0
-      FRONTEND_URL: http://localhost:5173
-      TRUST_PROXY: "false"
-      DATABASE_URL: postgresql://postgres:test@localhost:5432/authsphere_test
-      REDIS_URL: redis://localhost:6379/1
-      JWT_ACCESS_SECRET: test-access-secret-minimum-16-chars
-      JWT_REFRESH_SECRET: test-refresh-secret-minimum-16-chars
-      JWT_ACCESS_EXPIRES_IN: 15m
-      JWT_REFRESH_EXPIRES_IN: 30d
-      AUTH_REUSE_DELETION_MODE: SESSION
-      AUTH_REFRESH_TOKEN_LEEWAY_SECONDS: 30
-      MFA_ENCRYPTION_KEY: test-mfa-encryption-key-min16
-      GOOGLE_CLIENT_ID: test-google-client-id
-      GOOGLE_CLIENT_SECRET: test-google-client-secret
-      GITHUB_CLIENT_ID: test-github-client-id
-      GITHUB_CLIENT_SECRET: test-github-client-secret
-      OAUTH_CALLBACK_BASE_URL: http://localhost:3001/auth/oauth
-      EMAIL_PROVIDER: resend
-      RESEND_API_KEY: resend_test_dummy_key_for_testing
-      EMAIL_FROM: AuthSphere <noreply@authsphere.dev>
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Apply test database migrations
-        run: npm run db:migrate:deploy --workspace=@authsphere/api
-
-      - name: Test
-        run: npm test
-
-      - name: Build
-        run: npm run build
+    name: Validate
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
 
   deploy:
     name: Release & Deploy

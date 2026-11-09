@@ -1,12 +1,13 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - dev
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - dev
+  workflow_call:
 
 permissions:
   contents: read
@@ -84,6 +85,9 @@ jobs:
         run: |
           npm ci
           npm --prefix infra/lambda ci --omit=dev
+
+      - name: Lint
+        run: npm run lint
 
       - name: Typecheck
         run: npm run typecheck
