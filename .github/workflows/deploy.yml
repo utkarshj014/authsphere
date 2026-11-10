@@ -122,8 +122,8 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=sha,prefix=,format=short
-            type=raw,value=latest
+            type=sha,prefix=,format=short,priority=300
+            type=raw,value=latest,priority=100
 
       - name: Build and push Docker image
         if: env.DEPLOY_TARGET == 'ecs'
