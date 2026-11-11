@@ -51,6 +51,23 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'ap-south-1' }}
 
+      - name: Resolve ECS ALB endpoint
+        if: env.DEPLOY_TARGET == 'ecs'
+        id: ecs-alb
+        run: |
+          DNS=$(aws elbv2 describe-load-balancers \
+            --names authsphere-alb \
+            --region ${{ vars.AWS_REGION || 'ap-south-1' }} \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text 2>/dev/null || true)
+
+          if [[ -z "$DNS" || "$DNS" == "None" ]]; then
+            echo "::error::ALB 'authsphere-alb' not found in region ${{ vars.AWS_REGION || 'ap-south-1' }}. Provision or recreate it before deploying to ECS."
+            exit 1
+          fi
+
+          echo "base_url=http://${DNS}" >> "$GITHUB_OUTPUT"
+
       - name: Run production database migrations
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL_DIRECT }}
@@ -161,6 +178,7 @@ jobs:
           task-definition: ${{ steps.render-api-container.outputs.task-definition }}
           service: authsphere-api
           cluster: authsphere-cluster
+          desired-count: 1
           wait-for-service-stability: true
 
       - name: Render ECS Worker task definition
@@ -179,4 +197,21 @@ jobs:
           task-definition: ${{ steps.render-worker-container.outputs.task-definition }}
           service: authsphere-worker
           cluster: authsphere-cluster
+          desired-count: 1
           wait-for-service-stability: false
+
+      - name: Smoke test ECS deployment (Liveness & Readiness)
+        if: env.DEPLOY_TARGET == 'ecs'
+        env:
+          BASE_URL: ${{ steps.ecs-alb.outputs.base_url }}
+        run: |
+          for endpoint in health/live health/ready; do
+            echo "Testing ${BASE_URL}/${endpoint}"
+            curl --fail --silent --show-error \
+              --retry 10 \
+              --retry-all-errors \
+              --retry-delay 5 \
+              --connect-timeout 5 \
+              --max-time 15 \
+              "${BASE_URL}/${endpoint}"
+          done
