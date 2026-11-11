@@ -45,19 +45,20 @@ export function getOpenApiDocument(): OpenAPIObject {
       version: "1.0.0",
       license: { name: "ISC" },
     },
-    servers: [
-      {
-        url: "/",
-        description: "Current Host / Reverse Proxy (Production & Local)",
-      },
-      {
-        url: "http://localhost:{port}",
-        description: "Direct Local Development",
-        variables: {
-          port: { default: "3000" },
-        },
-      },
-    ],
+    servers:
+      env.NODE_ENV === "production"
+        ? [
+            {
+              url: "/api",
+              description: "AuthSphere API (Production Proxy)",
+            },
+          ]
+        : [
+            {
+              url: "/",
+              description: "Direct API Host (Local Development)",
+            },
+          ],
     tags: [
       { name: "Health", description: "Service health checks" },
       { name: "Auth", description: "Authentication flows" },

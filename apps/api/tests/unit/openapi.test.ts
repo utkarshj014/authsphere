@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
-import { getOpenApiDocument } from "../../src/common/openapi/index.js";
+import {
+  getOpenApiDocument,
+  clearOpenApiCache,
+} from "../../src/common/openapi/index.js";
+import { env } from "../../src/config/env.js";
 import app from "../../src/app.js";
 import { healthRouter } from "../../src/modules/health/index.js";
 import { authRouter } from "../../src/modules/auth/index.js";
@@ -15,6 +19,12 @@ describe("OpenAPI specification", () => {
   it("generates a valid OpenAPI 3.1 specification with cookie security", () => {
     expect(doc.openapi).toBe("3.1.0");
     expect(doc.info.title).toBe("AuthSphere API");
+    expect(doc.servers).toEqual([
+      {
+        url: "/",
+        description: "Direct API Host (Local Development)",
+      },
+    ]);
     expect(doc.components?.securitySchemes).toMatchObject({
       accessTokenCookie: {
         type: "apiKey",
@@ -38,6 +48,24 @@ describe("OpenAPI specification", () => {
     expect(paths["/sessions"]?.get?.security).toEqual([
       { accessTokenCookie: [] },
     ]);
+  });
+
+  it("configures /api proxy server in production mode", () => {
+    const originalEnv = env.NODE_ENV;
+    try {
+      (env as any).NODE_ENV = "production";
+      clearOpenApiCache();
+      const prodDoc = getOpenApiDocument();
+      expect(prodDoc.servers).toEqual([
+        {
+          url: "/api",
+          description: "AuthSphere API (Production Proxy)",
+        },
+      ]);
+    } finally {
+      (env as any).NODE_ENV = originalEnv;
+      clearOpenApiCache();
+    }
   });
 
   it("maintains strict 1:1 bidirectional parity with Express router definitions", () => {
