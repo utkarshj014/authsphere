@@ -1,9 +1,5 @@
-import {
-  Router,
-  type Request,
-  type Response,
-  type NextFunction,
-} from "express";
+import { Router } from "express";
+import helmet from "helmet";
 import swaggerUi from "swagger-ui-express";
 import { OpenApiGeneratorV31 } from "@asteasolutions/zod-to-openapi";
 import { registry } from "./registry.js";
@@ -90,16 +86,23 @@ router.get("/openapi.json", (_req, res) => {
   return res.json(getOpenApiDocument());
 });
 
-// Serve Swagger UI with dynamic document support
+// Relaxed Content Security Policy scoped specifically to Swagger UI assets
+const swaggerCsp = helmet.contentSecurityPolicy({
+  directives: {
+    defaultSrc: ["'self'"],
+    scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+    styleSrc: ["'self'", "'unsafe-inline'"],
+    imgSrc: ["'self'", "data:", "https:"],
+    connectSrc: ["'self'", "https:", "http:"],
+  },
+});
+
+// Serve Swagger UI
 router.use(
   "/docs",
-  (req: Request, _res: Response, next: NextFunction) => {
-    (req as Request & { swaggerDoc?: OpenAPIObject }).swaggerDoc =
-      getOpenApiDocument();
-    next();
-  },
+  swaggerCsp,
   swaggerUi.serve,
-  swaggerUi.setup(),
+  swaggerUi.setup(getOpenApiDocument()),
 );
 
 export { router as openApiRouter };

@@ -11,7 +11,7 @@ export const config: VercelConfig = {
     },
   ],
   rewrites: [
-    routes.rewrite("/api/:path*", `${backendUrl}/:path*`),
+    routes.rewrite("/api/(.*)", `${backendUrl}/$1`),
     routes.rewrite("/(.*)", "/index.html"),
   ],
 };
