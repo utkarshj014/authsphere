@@ -112,11 +112,22 @@ describe("OpenAPI specification", () => {
       expect(res.body.paths).toBeDefined();
     });
 
-    it("GET /docs returns 200 with Swagger UI HTML", async () => {
+    it("GET /docs/ returns 200 with Swagger UI HTML and relaxed CSP", async () => {
       const res = await request(app).get("/docs/");
       expect(res.status).toBe(200);
       expect(res.headers["content-type"]).toMatch(/html/);
       expect(res.text).toContain("swagger");
+      expect(res.headers["content-security-policy"]).toContain("'unsafe-eval'");
+      expect(res.headers["content-security-policy"]).toContain(
+        "'unsafe-inline'",
+      );
+    });
+
+    it("GET /docs/swagger-ui-init.js returns pre-populated specification", async () => {
+      const res = await request(app).get("/docs/swagger-ui-init.js");
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/javascript/);
+      expect(res.text).toContain("AuthSphere API");
     });
   });
 });
