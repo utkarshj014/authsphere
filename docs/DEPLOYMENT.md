@@ -286,7 +286,7 @@ Unlike Lambda, ECS container credentials do not need to be passed as environment
 
 1. **GitHub Repository Secrets (`production` environment):**
    - `DATABASE_URL_DIRECT`: Direct unpooled Neon connection URL (used by CI to run migrations)
-   - `AWS_DEPLOY_ROLE_ARN`: AWS IAM OIDC Role ARN with permissions to register task definitions and update ECS services (container image push to GHCR is authenticated natively via `GITHUB_TOKEN`)
+   - `AWS_DEPLOY_ROLE_ARN`: AWS IAM OIDC Role ARN with permissions to register task definitions, update ECS services, and discover ALB endpoints (`elasticloadbalancing:DescribeLoadBalancers`) (container image push to GHCR is authenticated natively via `GITHUB_TOKEN`)
 
 2. **GitHub Repository Variables:**
    - `DEPLOY_TARGET`: `ecs`
