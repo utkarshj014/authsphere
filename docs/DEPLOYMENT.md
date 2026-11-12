@@ -536,10 +536,12 @@ Triggered on push to `main` using a two-stage Directed Acyclic Graph (DAG) with 
 1. **Stage 1 (`validate`):** Executes full monorepo typechecks, Prisma migrations, and test suite verification (`npm test`) on ephemeral test containers.
 2. **Stage 2 (`deploy`, depends on `validate`):**
    - Assumes AWS IAM deployment role via OpenID Connect (OIDC) (`aws-actions/configure-aws-credentials`).
-   - Applies production database migrations against Neon using direct connection secret (`DATABASE_URL_DIRECT`).
+   - Resolves load balancer DNS dynamically (`authsphere-alb`) when `DEPLOY_TARGET == 'ecs'`.
+   - **Artifact Creation First:** Builds and pushes container images (`ghcr.io/<owner>/backend:<sha>`) via Buildx and `docker/login-action@v4` for ECS, or compiles the Lambda bundle (`npm run build:lambda`) for serverless. Building artifacts before database migrations prevents broken builds from leaving running tasks on an altered schema.
+   - **Production Database Migrations:** Applies Prisma migrations (`npm run db:migrate:deploy`) against Neon via direct unpooled connection secret (`DATABASE_URL_DIRECT`) immediately prior to compute deployment. Migrations must maintain backward-compatibility with currently running application instances to support zero-downtime rolling ECS updates where old and new tasks overlap.
    - **Deployment Target Dispatch (`DEPLOY_TARGET` Toggle):**
-     - **Default / Serverless (`DEPLOY_TARGET != 'ecs'`):** Builds the Lambda artifact via container (`sam build --use-container`) to guarantee native module (`argon2`) ABI compatibility with Amazon Linux 2023, and deploys via AWS SAM (`sam deploy`) using preconfigured defaults in [`samconfig.toml`](../infra/lambda/samconfig.toml) and parameter overrides from GitHub Secrets/Variables targeting AWS Lambda + Function URL (with `AutoPublishAlias: live`).
-     - **Reference Containers (`DEPLOY_TARGET == 'ecs'`):** Builds & pushes container images to GitHub Container Registry (`ghcr.io/<owner>/backend:<sha>`), renders task definitions, and updates Amazon ECS Fargate services (`authsphere-api` and `authsphere-worker`).
+     - **Default / Serverless (`DEPLOY_TARGET != 'ecs'`):** Deploys via AWS SAM (`sam deploy`) with parameter overrides targeting AWS Lambda + Function URL (with `AutoPublishAlias: live`), followed by automated liveness and readiness smoke tests.
+     - **Reference Containers (`DEPLOY_TARGET == 'ecs'`):** Renders task definitions with injected image SHAs and updates Amazon ECS Fargate services (`authsphere-api` and `authsphere-worker`), followed by automated ALB smoke tests against `/health/live` and `/health/ready`.
 
 ---
 
