@@ -2,6 +2,7 @@ import { Pool, type PoolConfig } from "pg";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../generated/prisma/client.js";
 import { env } from "../config/env.js";
+import { logger } from "./logger.js";
 
 // Detect if executing inside an AWS Lambda serverless microVM
 const isLambdaRuntime = Boolean(
@@ -25,6 +26,13 @@ const poolConfig: PoolConfig = {
 };
 
 const pool = new Pool(poolConfig);
+
+// Safeguard against unhandled errors on idle clients (e.g. remote close during compute scale-to-zero)
+// preventing uncaughtException crashes in Node.js
+pool.on("error", (err) => {
+  logger.error({ err }, "Unexpected error on idle PostgreSQL pool client");
+});
+
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
