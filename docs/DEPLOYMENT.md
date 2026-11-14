@@ -1,579 +1,421 @@
 # Cloud Deployment & DevOps Guide — AuthSphere
 
-This document specifies the deployment architectures, infrastructure strategies, configuration standards, and operational workflows for AuthSphere across serverless (AWS Lambda), containerized (AWS ECS Fargate), and edge (Vercel) environments.
+This document specifies the production deployment architecture, infrastructure engineering, continuous release pipelines, configuration standards, and operational workflows for AuthSphere across serverless (AWS Lambda), containerized (AWS ECS Fargate), and edge (Vercel) environments.
 
 ---
 
-## 1. High-Level Architecture Overview
+## 1. Architecture & Deployment Snapshot
 
-AuthSphere implements a decoupled architecture: an edge-hosted Single-Page Application (SPA) frontend, two distinct backend compute deployment models, and managed serverless cloud data services.
+AuthSphere implements a **Shared Backing State, Interchangeable Compute** model. Rather than treating Serverless (AWS Lambda) and Containers (AWS ECS Fargate) as separate applications, both compute targets compile from a single unified TypeScript codebase and run against the exact same managed cloud backing tier:
 
 ```mermaid
 flowchart TD
-    subgraph Frontend ["Frontend (Vercel - Edge Reverse Proxy)"]
-        UI["React 19 SPA (apps/web)"]
-        Proxy["Vercel Edge Rewrite Proxy (/api)"]
-        UI -->|"Same-Origin /api/*"| Proxy
+    subgraph Client ["Client Presentation Tier (Edge)"]
+        Browser["User Browser (React 19 SPA)"]
+        VercelProxy["Vercel Edge Reverse Proxy (/api/*)\nSame-Origin Ingress · HttpOnly Cookies · Zero CORS"]
+        Browser -->|"Same-Origin HTTPS"| VercelProxy
     end
 
-    subgraph Data ["Managed Cloud Data Services"]
-        Neon["Neon Serverless PostgreSQL (Pooled Port 5432)"]
-        Upstash["Upstash Serverless Redis (Rate Limiting, State & Leeway Cache)"]
-        Resend["Resend API (Transactional Email Service)"]
-    end
-
-    subgraph ComputeOptions ["Backend Compute Architectures"]
-        subgraph Serverless ["Primary Serverless Architecture: AWS Lambda + Function URL"]
-            FURL["Lambda Function URL (Native Free Dual-Stack HTTPS Ingress)"]
-            Lambda["Lambda Function (authsphere-api) (Node 24, Serverless Express)"]
+    subgraph Compute ["Interchangeable Backend Compute Tier (AWS ap-south-1)"]
+        subgraph Option1 ["Option 1: Primary Serverless Compute (AWS Lambda)"]
+            FURL["Lambda Function URL\nDirect HTTPS Access · AuthType: NONE"]
+            Lambda["AWS Lambda Function (authsphere-api)\nNode.js 24 · 512 MB · Single ESM Bundle"]
             FURL --> Lambda
         end
 
-        subgraph Container ["Reference Container Architecture: AWS ECS Fargate"]
-            ALB["Application Load Balancer"]
-            ECS_API["authsphere-api Container (Express 5 REST API)"]
-            ECS_Worker["authsphere-worker Container (BullMQ Background Daemon)"]
+        subgraph Option2 ["Option 2: Reference Container Compute (AWS ECS Fargate)"]
+            ALB["Application Load Balancer (Port 80)\nPublic DNS · Layer 4 Security Perimeter"]
+            ECS_API["authsphere-api Task (Node.js 24 Alpine)\nContinuous libuv Event Loop · Port 3000"]
+            ECS_Worker["authsphere-worker Task (BullMQ Daemon)\nOptional Decoupled Background Worker"]
             ALB --> ECS_API
         end
     end
 
-    Proxy -->|HTTPS Proxy Bridge| FURL
-    Proxy -->|"HTTP Port 80 (Demo Only)"| ALB
+    subgraph BackingTier ["Shared Managed Cloud Backing Tier"]
+        Neon["Neon Serverless PostgreSQL\nPgBouncer Transaction Pooling (Port 5432)"]
+        Upstash["Upstash Serverless Redis\nTLS Encrypted (rediss://) · Atomic Lua Scripts"]
+        EmailService["Transactional Email Service\nGoogle Gmail OAuth2 (Port 465) or Resend API (HTTPS)"]
+    end
 
-    Lambda --> Neon
-    Lambda --> Upstash
-    Lambda -->|Synchronous Delivery| Resend
+    VercelProxy -->|"Encrypted Upstream HTTPS"| FURL
+    VercelProxy -->|"Plaintext HTTP Port 80"| ALB
 
-    ECS_API --> Neon
-    ECS_API --> Upstash
-    ECS_API -. "Variant 1a: Enqueue" .-> Upstash
-    ECS_Worker -->|"Variant 1a: Dequeue"| Upstash
-    ECS_Worker -->|"Variant 1a: Dispatch"| Resend
-    ECS_API -. "Variant 1b Toggle: Inline" .-> Resend
+    Lambda -->|"Pooled Connection (pg.Pool max: 2)"| Neon
+    Lambda -->|"Fail-Fast Atomic Lua"| Upstash
+    Lambda -->|"Synchronous Delivery (QUEUE_DRIVER=sync)"| EmailService
+
+    ECS_API -->|"Pooled Connection (pg.Pool max: 10)"| Neon
+    ECS_API -->|"Persistent Connection"| Upstash
+    ECS_API -->|"Inline Dispatch (QUEUE_DRIVER=inline)"| EmailService
+
+    ECS_API -.->|"Optional: Enqueue (QUEUE_DRIVER=bullmq)"| Upstash
+    ECS_Worker -.->|"Optional: Dequeue & Retries"| Upstash
+    ECS_Worker -.->|"Optional: Worker Dispatch"| EmailService
 ```
 
-### Compute Model Comparison
+### Deployed Services Summary
 
-| Dimension                     | Serverless (AWS Lambda + Function URL)                                                 | Containers (AWS ECS Fargate)                                                                       |
-| :---------------------------- | :------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------- |
-| **Operational Model**         | Automated scale-to-zero serverless                                                     | Minimum-footprint reference container deployment                                                   |
-| **Idle Infrastructure Cost**  | **$0.00 baseline idle compute** (scale-to-zero; request volume/duration billed on use) | Continuous compute allocation + ALB hourly charges + public IPv4 address fees                      |
-| **Email Processing Strategy** | Synchronous API submission within request lifecycle (`QUEUE_DRIVER=sync`)              | Decoupled queue worker (`QUEUE_DRIVER=bullmq`) or inline (`QUEUE_DRIVER=inline`)                   |
-| **HTTPS Endpoint**            | Native HTTPS via Lambda Function URL (`.lambda-url.<region>.on.aws`)                   | ALB provides HTTP on port 80 (demo-only reference setup; production requires custom domain + ACM)  |
-| **Request Timeout**           | Handled directly by Lambda function without an intermediate API Gateway proxy timeout  | Subject to ALB idle timeout configuration                                                          |
-| **Infrastructure as Code**    | AWS SAM template ([infra/lambda/template.yaml](../infra/lambda/template.yaml))         | ECS Task Definitions ([infra/ecs/api-task-definition.json](../infra/ecs/api-task-definition.json)) |
-| **Portability & Coupling**    | Portable application core (Express 5) with AWS SAM infrastructure coupling             | Portable container image (Alpine Node 24) with ECS task definition coupling                        |
-| **Engineering Value**         | Serverless Express adapter, socket management, cold-start connection reuse             | Container lifecycle, signal forwarding, decoupled worker architecture                              |
+| Component                 | Provider / Service    | Sizing / Configuration                         | Role in AuthSphere                                                               |
+| :------------------------ | :-------------------- | :--------------------------------------------- | :------------------------------------------------------------------------------- |
+| **Frontend Presentation** | Vercel Edge Network   | Node.js Edge Runtime / CDN                     | Hosts React 19 SPA; provides same-origin reverse-proxy rewrites (`/api/*`).      |
+| **Primary Compute**       | AWS Lambda            | Node.js 24 (`nodejs24.x`), 512 MB, 15s timeout | Event-driven serverless REST API; scales to zero; zero idle compute cost.        |
+| **Reference Compute**     | AWS ECS Fargate       | 0.25 vCPU, 512 MB, Alpine Linux (`dumb-init`)  | Continuous container execution behind an Application Load Balancer.              |
+| **Database Tier**         | Neon PostgreSQL       | Serverless PostgreSQL 16 with PgBouncer        | Dual-endpoint topology (unpooled for migrations; pooled for compute).            |
+| **Cache & State Tier**    | Upstash Redis         | Serverless Redis with TLS (`rediss://`)        | Atomic fixed-window rate limiting, OAuth PKCE state, session leeway.             |
+| **Transactional Email**   | Gmail OAuth2 / Resend | Nodemailer SMTP (Port 465) or Resend HTTPS     | Strategy pattern (`EmailProvider`) supporting arbitrary test recipient delivery. |
 
 ---
 
-## 2. Serverless Architecture: AWS Lambda + Function URL
+## 2. Compute Options: Lambda Primary & Fargate Reference
 
-### 2.1. Runtime Mechanics
+### 2.1. Option 1: Primary Serverless Compute (AWS Lambda + Function URL)
 
-AuthSphere separates the Express application definition ([apps/api/src/app.ts](../apps/api/src/app.ts)) from HTTP server binding ([apps/api/src/server.ts](../apps/api/src/server.ts)). On AWS Lambda, the application is invoked via `@codegenie/serverless-express` in [apps/api/src/lambda.ts](../apps/api/src/lambda.ts).
+AuthSphere runs on Node.js 24 on **Amazon Linux 2023 (x86_64)** Firecracker microVMs.
 
-#### Core Technical Mechanics:
+#### Key Architectural Decisions:
 
-1. **Direct Function URL Ingress (Scale-to-Zero HTTPS):**
-   Operates with `AuthType: NONE` for native HTTPS without intermediate API Gateway fees. Application middlewares enforce all security boundaries directly (origin validation, 16kb payload bounds, fixed-window rate limits, signed JWTs; see [Section 4](#4-frontend-deployment-vercel-edge-reverse-proxy)).
-2. **Immutable Versioning & Aliasing:**
-   `AutoPublishAlias: live` snapshots an immutable Lambda version on each deploy and maps the Function URL directly to the `live` alias, enabling instant rollbacks.
-3. **Standardized Runtime:** Operates on `nodejs24.x` across serverless, container builds, and CI workflows.
-4. **Serverless Database Connection Pooling (`pg.Pool max: 2`):**
-   In [prisma.ts](../apps/api/src/lib/prisma.ts), PostgreSQL connection pool sizing adapts dynamically. Bounding `pg.Pool` to `max: 2` per Lambda microVM prevents connection multiplication across concurrent instances from exhausting Neon's connection pooler. (Long-running ECS containers allocate `max: 10`; see [Section 3](#3-reference-container-architecture-aws-ecs-fargate)).
-5. **Event Loop Non-Blocking Teardown:**
-   ```ts
-   // apps/api/src/lambda.ts
-   context.callbackWaitsForEmptyEventLoop = false;
-   ```
-   PostgreSQL and Redis maintain persistent TCP keepalives. Disabling `callbackWaitsForEmptyEventLoop` allows Lambda to freeze the container immediately upon HTTP response completion rather than hanging until timeout.
-6. **Graceful Startup Degradation:**
-   Prisma and Redis clients initialize outside the request handler and persist across warm invocations. If Redis is unreachable, rate limiting fails open to preserve authentication; if PostgreSQL is temporarily down, non-database endpoints (`/health/live`) continue operating.
-7. **Synchronous Email Submission (`QUEUE_DRIVER=sync`):**
-   Because Lambda freezes immediately after response dispatch, background in-memory tasks (`setImmediate`) cannot run reliably. `QUEUE_DRIVER=sync` awaits API acceptance by Resend's edge relay during the request lifecycle before freezing (downstream mailbox delivery occurs asynchronously over SMTP).
-8. **Proxy Trust Calibration (`TRUST_PROXY=1`):**
-   In [`template.yaml`](../infra/lambda/template.yaml), `TRUST_PROXY: "1"` is configured for the 1-hop topology (`Browser -> Vercel Edge Proxy -> Lambda Function URL`). Express strips 1 proxy hop from `X-Forwarded-For` to resolve the genuine client IP for rate limiting and audit logs. (See [Section 4.2](#42-traffic-journey--core-architectural-concepts) for complete proxy hop calibration, origin shielding, direct access risks, and mitigation trade-offs).
-9. **Resource Sizing (512 MB & 15s Timeout):**
-   - **Memory (`MemorySize: 512`):** Proportional vCPU allocation enables Argon2id password hashing to complete in ~180ms (measured benchmark under standard test parameters) versus 1.5–2.0s at default 128 MB.
-   - **Timeout (`Timeout: 15`):** Absorbs cold-start TLS handshakes to Neon PostgreSQL and Upstash Redis while guaranteeing runaway requests terminate.
-10. **Cost, Versioning & Concurrency Guardrails:**
-    - `AutoPublishAliasAllProperties: true` & `AWS::LanguageExtensions`: To ensure credential and parameter rotations publish a new immutable Lambda version, [`infra/lambda/template.yaml`](../infra/lambda/template.yaml) includes both `AWS::LanguageExtensions` and `AWS::Serverless-2016-10-31` transforms. Without language extensions, intrinsic parameter references (`!Ref`) are evaluated as static AST nodes by the SAM macro, causing parameter-only updates to leave the `live` alias pointing to the prior version. With language extensions, parameter values resolve before version hash generation.
-    - `Reserved Concurrency Calibration`: By default, reserved concurrency is omitted so the function draws from standard account concurrency. On accounts with default/Free Tier quota limits (10 concurrent executions), reserving 10 would decrease unreserved concurrency to 0, violating AWS's mandatory floor of 10 unreserved executions. For scaled production accounts with increased quotas (e.g., 1000+), `ReservedConcurrentExecutions: 10` can be applied to shield Neon connection pools.
-      - **Function URL Quota & Throttling:** AWS Function URLs cap request rate at $10 \times \text{Reserved Concurrency} = 100\text{ req/s}$. Saturated requests receive an immediate edge `HTTP 429 Too Many Requests` (no queuing). This caps downstream connection exhaustion rather than guaranteeing throughput or DoS immunity.
-    - `RetentionInDays: 7`: CloudWatch Log Group retention caps log storage accumulation.
-    - `NoEcho: true`: Masks sensitive database and JWT credentials in CloudFormation console displays and CLI outputs.
+1. **Why Lambda is Primary:** Eliminates idle compute and load-balancer costs completely while scaling automatically with request demand.
+2. **Two-Layer Packaging:**
+   - _Layer 1 (Application Bundle):_ Compiled by `tsup` into a single ESM file (`infra/lambda/lambda.mjs`). An injected banner (`import { createRequire } from "node:module"; const require = createRequire(import.meta.url);`) resolves dynamic CommonJS `require()` calls in `@codegenie/serverless-express` and `pino`.
+   - _Layer 2 (Native C++ Addon):_ `argon2` is marked `external` to preserve its precompiled `.node` binary structure. Prerequisite: `npm --prefix infra/lambda ci --omit=dev`.
+3. **Zero-Binary Database Engine:** Prisma 7 delegates query execution to `@prisma/adapter-pg` over pure JavaScript TCP sockets. All Prisma packages (`@prisma/client`, `@prisma/adapter-pg`, and `prisma` CLI) are locked strictly to exact version `"7.8.0"`.
+4. **Function URL Pricing & Access:** Function URLs provide direct HTTP(S) access without an additional endpoint fee. Lambda request and execution charges still apply. Configured with `AuthType: NONE` as an intentional portfolio project trade-off to allow direct testing without AWS SigV4 signing.
+5. **Cold-Start Performance & Sizing:**
+   - _Measured Cold Start (512 MB allocation):_
+     ```text
+     REPORT RequestId: 7b84... Init Duration: 1045.54 ms Duration: 24.12 ms Billed Duration: 1070 ms Memory Size: 512 MB Max Memory Used: 127 MB
+     ```
+   - _Metric Interpretation:_ The **Init Duration (1045.54 ms)** metric reflects microVM provisioning, runtime bootstrapping, and module evaluation outside the handler. The **First Invocation Duration (24.12 ms)** covers initial handler execution, including the eager Redis TLS handshake. On subsequent warm invocations, zero-I/O routes like `/health/live` execute in **~1–3 ms**.
+   - _Memory Sizing Rationale:_ A baseline 128 MB deployment was observed to fail with `Runtime.OutOfMemory` during cold-start module loading. Sizing at 512 MB provides essential memory headroom (`Max Memory Used: 127 MB` in the CloudWatch report) and proportionally allocates ~0.29 vCPU, reducing CPU-bound Argon2id verification to **~180 ms** (versus 1.8–2.2s at 128 MB).
+   - _Warm Route Latencies:_ `/health/live` executes in **~1–3 ms**; `/users/me` in **~15–35 ms**; `/auth/login` in **~200–220 ms** warm end-to-end.
+6. **Execution Timeout Boundary:** Configured execution timeout is **15 seconds** (application ceiling), distinct from Lambda's 900s platform maximum.
 
-### 2.2. Scale-Out Roadmap: Amazon SQS + Worker Lambda
+### 2.2. Option 2: Reference Container Compute (AWS ECS Fargate + ALB)
 
-For high-volume serverless environments requiring decoupled queuing, the cloud-native serverless equivalent of the BullMQ worker daemon is **Amazon SQS + Event-Driven Consumer Lambda**:
+AuthSphere provides a complete containerized deployment reference running Node.js 24 Alpine on AWS Fargate behind an Application Load Balancer.
 
-```mermaid
-flowchart LR
-    API["Express API Lambda"] -->|1. sqs.sendMessage| SQS["Amazon SQS FIFO/Standard"]
-    API -->|2. HTTP 201 Created| Client["Client Browser"]
-    SQS -->|3. Event Source Trigger| WorkerLambda["Email Consumer Lambda"]
-    WorkerLambda -->|4. Dispatch Email| Resend["Resend API"]
-```
+#### Key Architectural Decisions & Safeguards:
 
-- **Scale-to-Zero:** SQS costs $0 when empty; the consumer Lambda executes only for the duration of the email dispatch call.
-- **Native Retries:** Utilizes AWS Dead-Letter Queues (DLQ) and native exponential backoff without requiring running daemon infrastructure.
-
-### 2.3. Deployment & Infrastructure Setup (AWS Lambda)
-
-Deployments are executed via GitHub Actions CI/CD or the AWS SAM CLI.
-
-> [!NOTE]
-> **Prerequisite:** Ensure Neon PostgreSQL is provisioned and baseline migrations are applied (see [5.1. Database Provisioning & Schema Migrations](#51-neon-postgresql-connection-pooling-architecture--provisioning)). When using the CI/CD pipeline, migrations run automatically on every release.
-
-#### Step 1: Configure GitHub Repository Secrets & Variables
-
-Lambda runtime secrets are defined in [`infra/lambda/template.yaml`](../infra/lambda/template.yaml) with `NoEcho: true` (masking credentials in CloudFormation console displays and CLI outputs) and supplied at deploy-time via GitHub Secrets.
-
-1. **GitHub Repository Secrets (`production` environment):**
-   - `DATABASE_URL_DIRECT`: Direct unpooled database connection string (used by CI to run schema migrations)
-   - `DATABASE_URL_POOLED`: Pooled database connection string (supplied to Lambda runtime compute)
-   - `REDIS_URL`: Serverless Redis connection string
-   - `JWT_ACCESS_SECRET`: Signing secret for access JWTs (min 16 characters)
-   - `JWT_REFRESH_SECRET`: Signing secret for refresh JWTs (min 16 characters)
-   - `MFA_ENCRYPTION_KEY`: AES-256-GCM encryption key for TOTP secrets (min 16 characters)
-   - `RESEND_API_KEY`: Transactional email service API key
-   - `AWS_DEPLOY_ROLE_ARN`: AWS IAM OIDC Role ARN for GitHub Actions deployment
-
-2. **GitHub Repository Variables (Optional / Defaults):**
-   - `DEPLOY_TARGET`: `serverless` (default) or `ecs`
-   - `AWS_REGION`: Target AWS deployment region (e.g. `ap-south-1`)
-   - `FRONTEND_URL`: Hosted frontend origin URL (e.g. `https://<YOUR_PROJECT>.vercel.app`)
-   - `EMAIL_FROM`: Transactional sender identity (e.g. `AuthSphere <noreply@<YOUR_DOMAIN>>`)
-
-#### Step 2: Deploy via AWS SAM CLI or GitHub Actions
-
-Non-sensitive deployment defaults (stack name, region, IAM capabilities, S3 resolution) are saved in [`infra/lambda/samconfig.toml`](../infra/lambda/samconfig.toml).
-
-> [!WARNING]
-> **Credential Security with `samconfig.toml`:**
-> If deploying interactively via `sam deploy --guided`, answer **`N`** when prompted to save arguments to the configuration file. While CloudFormation's `NoEcho: true` masks secrets on-screen, SAM CLI persists guided values in plaintext to `samconfig.toml`. Never commit secret parameter overrides to version control.
-
-- **Automated Deploy (GitHub Actions):** Push code to `main`. The `deploy.yml` workflow automatically runs Prisma migrations, compiles the unified Lambda package (`npm run build:lambda`), and executes `sam deploy` with parameter overrides.
-- **Manual CLI Deploy:**
-
-  ```bash
-  # 1. Build and package the production Lambda artifact (self-contained, with prebuilt argon2)
-  npm run build:lambda
-
-  # 2. Deploy directly via AWS SAM (reads template.yaml pointing to authsphere-api.zip)
-  cd infra/lambda
-  sam deploy --parameter-overrides \
-    DatabaseUrl="<POOLED_DB_URL>" \
-    RedisUrl="<REDIS_URL>" \
-    FrontendUrl="<FRONTEND_URL>" \
-    JwtAccessSecret="<JWT_ACCESS_SECRET>" \
-    JwtRefreshSecret="<JWT_REFRESH_SECRET>" \
-    MfaEncryptionKey="<MFA_KEY>" \
-    ResendApiKey="<RESEND_KEY>" \
-    EmailFrom="<EMAIL_FROM>"
-  ```
-
-#### Step 3: Verify Deployment
-
-Capture the output `FunctionUrl` from the deployment output.
-Test the health probe:
-
-```bash
-curl -I <FUNCTION_URL>/health/live
-# Expected: HTTP/1.1 200 OK
-```
+1. **Why Retain Fargate:** Serves as a reference implementation for continuous event-loop workloads, persistent connection multiplexing (`pg.Pool max: 10`), and background queue workers.
+2. **Actual ECS Deployment Safeguards:**
+   - _Desired Task Count:_ `1` task (baseline single-instance container reference).
+   - _Deployment Circuit Breaker:_ Enabled with automatic rollback (`rollback: true`) in ECS service configuration, rolling back failed task updates automatically if new containers crash.
+   - _Health-Check Grace Period:_ **30 seconds** (`--health-check-grace-period-seconds 30`), allowing Node.js container bootstrap and initial database connection checks before health checks dictate routing.
+   - _Target Health Check:_ ALB routes to `/health/live` (HTTP port 3000, 30s interval, 5s timeout, healthy/unhealthy threshold: 2).
+   - _Post-Deployment Smoke Tests:_ GitHub Actions executes automated retrying curl checks (`--retry 10`) on `/health/live` and `/health/ready`.
+   - _Dynamic DNS Discovery & Stability Wait:_ CI/CD dynamically discovers the ALB DNS via `aws elbv2 describe-load-balancers` and waits for ECS service stability (`wait-for-service-stability: true`).
+3. **Public Subnet Layer 4 Perimeter:** Containers deploy in public subnets with public IPs to pull images from GHCR without an expensive AWS NAT Gateway (~$44.53/month fixed baseline per AZ in Mumbai `ap-south-1`: $0.056/hr NAT Gateway + $0.005/hr public IPv4, excluding $0.056/GB data processing). `ECS-SG` restricts port 3000 strictly to `ALB-SG`.
+4. **Worker Status Clarification:** The BullMQ worker (`authsphere-worker`) is **optional and not part of the active inline-dispatch baseline setup** (`QUEUE_DRIVER=inline`). Activating the worker daemon requires setting `DEPLOY_ECS_WORKER=true`, updating `QUEUE_DRIVER=bullmq` on the API container, and configuring separate connection factories (bounded retries for producers; `maxRetriesPerRequest: null` for workers).
 
 ---
 
-## 3. Reference Container Architecture: AWS ECS Fargate
+## 3. Shared Infrastructure & Data Tier
 
-### 3.1. Architectural Variants
+Both compute targets connect to the same cloud backends without requiring modification when toggling compute targets:
 
-#### Variant 1a: Clustered Enterprise Standard (API + Standalone BullMQ Worker)
+### 3.1. Neon PostgreSQL: Dual-Endpoint Topology
 
-- **Producer–Consumer Separation:** The API container handles incoming HTTP requests and enqueues email tasks to Redis. Responses return without waiting for third-party email API roundtrips.
-- **Failure Isolation:** Outbound email delivery interruptions or provider rate limits do not block HTTP connections or exhaust database connection pools.
-- **Retry Resilience:** BullMQ executes with up to 4 exponential backoff retries across 5 total delivery attempts (delays: 2s, 4s, 8s, 16s via `delay: 2000`) and stores failed jobs in retention storage for operational diagnosis.
-- **Production Scaling Pattern:** In high-volume production, API tasks scale horizontally based on ALB target group request count/CPU, and worker tasks scale based on Redis queue depth (`authsphere-email`). The baseline reference deployment runs static single tasks (`desired tasks: 1`) to represent a minimum-footprint container showcase (continuous compute allocation and ALB baseline fees apply; see Section 1).
+- **Direct Unpooled Connection (`ep-xyz...`):** Configured as `DATABASE_URL_DIRECT` strictly for database migrations (`npm run db:migrate:deploy`) and initial seeding. Chosen to preserve PostgreSQL **Session-Level Advisory Lock** (`pg_advisory_lock`) semantics and DDL transactions. (Modern PgBouncer supports prepared statements, but direct connections remain the recommended practice for migration lock safety).
+- **Pooled Connection (`-pooler`):** Configured as `DATABASE_URL` for runtime compute. PgBouncer multiplexes queries across concurrent microVMs and container tasks.
+- **Pool Sizing & Safety:** `pg.Pool max: 2` ceiling for Lambda; `max: 10` for ECS. In `apps/api/src/lib/prisma.ts`, `pool.on("error")` intercepts background idle socket drops (e.g. Neon scale-to-zero) to prevent uncaught process crashes.
 
-#### Variant 1b: Pragmatic Cost-Saving Toggle (Single-Container Inline)
+### 3.2. Upstash Redis: Fail-Fast Architecture
 
-- Set `QUEUE_DRIVER=inline` in the API container environment.
-- Set the worker ECS service task count to `0`.
-- The API dispatches jobs asynchronously in-process via `setImmediate()` directly to Resend.
-- **Durability Trade-off:** While this eliminates dedicated worker compute and stops continuous BullMQ polling, in-memory jobs are best-effort: an unexpected container crash or redeployment can drop in-flight unexecuted emails. Variant 1a with BullMQ remains the durable, enterprise-grade architecture.
+- **Fail-Fast Policy (`enableOfflineQueue: false`):** Commands fail fast immediately if Redis is unreachable, rather than queuing in memory across frozen Lambda invocations.
+- **Reconnection Delays:** `retryStrategy` schedules backoff delays (0ms, 50ms, 100ms; max 3 retries) and `maxRetriesPerRequest: 1` bounds command attempts.
+- **Warm Ingress Readiness Gate (Lambda):** Warm microVM invocations wait up to 100ms via `once(redis, "ready")` to allow in-flight TLS handshakes to complete on fast routes.
 
-### 3.2. Docker Image & Lean Container Design
+### 3.3. Transactional Email Strategy: Gmail OAuth2 vs. Resend
 
-The production container build ([Dockerfile](../Dockerfile)) uses a multi-stage Alpine pipeline:
+- **Option A: Google Gmail OAuth2 (Recommended for Testing):** Uses Nodemailer SMTP over TLS on port 465 with OAuth2 tokens. Sends to **any arbitrary recipient** without requiring a custom domain. Published personal quota is **500 emails/day**. Outbound sockets use one-shot lifecycles (`pool: false`) terminated immediately upon message dispatch.
+- **Option B: Resend API (Enterprise SaaS):** Requires a verified sending domain with SPF and DKIM DNS records (DMARC recommended) for arbitrary recipient delivery. Free tier allows 3,000 emails/month (100/day); default API rate limit is **10 requests/second**. Sandbox mode (`onboarding@resend.dev`) delivers exclusively to the account owner.
 
-```mermaid
-flowchart LR
-    Base["Stage 1: Base (node:24-alpine, libc6, openssl)"] --> Builder["Stage 2: Builder (Generate Prisma and tsc compile)"]
-    Builder --> Prune["npm prune --omit=dev (Strip Prisma CLI binary)"]
-    Runner["Stage 3: Runner (dumb-init PID 1, non-root user)"]
-    Prune --> Runner
-```
+### 3.4. Decoupled Secret Stores & Key Rotation Operational Rules
 
-#### Container Engineering Highlights:
-
-1. **Build-Time Prisma Compilation:** Prisma Client is generated and compiled into JavaScript during Stage 2 (`npm run build -w @authsphere/api`). The final runner stage receives pre-compiled native JavaScript, meaning **zero client generation overhead on container startup** and zero runtime dependency on the heavy `prisma` CLI development package.
-2. **Persistent Connection Pooling (`pg.Pool max: 10`):** Unlike serverless microVMs, long-running ECS container instances multiplex concurrent HTTP requests across their event loop, sizing `pg.Pool` to `max: 10` to maximize query throughput.
-3. **Proxy Trust Calibration for ECS (`TRUST_PROXY=2`):** In [`infra/ecs/api-task-definition.json`](../infra/ecs/api-task-definition.json), `TRUST_PROXY: "2"` is configured to account for the 2-hop topology (`Browser -> Vercel Edge Proxy -> AWS ALB -> Container`). Express peels 2 hops from `X-Forwarded-For` to resolve the real client IP.
-4. **Frontend Isolation:** `apps/web` is excluded via [.dockerignore](../.dockerignore), ensuring frontend dependencies (`framer-motion`, `tailwindcss`, Vite) never enter the backend image.
-5. **Signal Forwarding & PID 1 Reaping:** Utilizes `dumb-init` as the container entrypoint to correctly propagate `SIGTERM` and `SIGINT` signals for graceful Express and Redis termination.
-6. **External Health Checks:** ALB Target Groups evaluate container health over HTTP at `/health/live`. In-container Docker `HEALTHCHECK` polling is omitted to conserve vCPU cycles on minimal 0.25 vCPU Fargate tasks.
-
-### 3.3. Networking Topology (Lean Public Subnet with Layer 4 Security Group Perimeter)
-
-To eliminate AWS NAT Gateway hourly baseline charges and data processing fees while maintaining robust perimeter defense, AuthSphere implements a **Public Subnet with Layer 4 Security Group Perimeter** topology:
-
-> [!NOTE]
-> **Understanding Layer 4 vs. Layer 7:**  
-> In the OSI networking model, **Layer 4** is the **Transport Layer (TCP / UDP ports)**, whereas Layer 7 is the Application Layer (HTTP / HTTPS paths, headers, and payloads). AWS Security Groups operate strictly at Layer 4: they filter traffic by IP address and TCP port number, dropping unauthorized packets at the virtual network interface level before they can reach the container operating system or application runtime.
-
-- **VPC:** 1 VPC spanning at least 2 Availability Zones (`ap-south-1a`, `ap-south-1b`).
-- **Subnets:** Public Subnets (2x) attached to an Internet Gateway (`igw-xxx`). Both ALB and ECS Fargate tasks reside in these subnets with `assign_public_ip: ENABLED`.
-- **Security Group Isolation Perimeter:**
-  - `ALB-SG`: Ingress HTTP (80) from `0.0.0.0/0`. AWS Security Groups are stateful; return traffic to browsers is automatically allowed.
-  - `ECS-API-SG`: Ingress TCP 3000 **strictly restricted to `ALB-SG`**. AWS Security Groups reject all direct internet connections at Layer 4 (TCP port level) before reaching the container. Egress `0.0.0.0/0` routes directly via the Internet Gateway to Neon, Upstash, and Resend without intermediate gateway fees.
-  - `ECS-Worker-SG`: **Zero inbound ingress rules** (completely unreachable from the internet). Egress `0.0.0.0/0` allows outbound HTTPS calls to Upstash and Resend.
-
-> [!WARNING]
-> **Production TLS Boundary vs. Demo Reference:**  
-> The baseline ECS ALB ingress uses plain HTTP on port 80 over default AWS DNS (`*.elb.amazonaws.com`). While sufficient for architectural demonstration and portfolio benchmarking without custom domain costs, **plain HTTP is strictly non-production**. Authentication credentials, session cookies, and reset tokens must never traverse the public internet unencrypted. For production deployments, an AWS ACM certificate and custom domain must be attached to an HTTPS (port 443) ALB listener.
-
-### 3.4. Deployment & Infrastructure Setup (AWS ECS Fargate)
-
-To deploy the reference container architecture, initialize the foundational AWS resources:
-
-> [!NOTE]
-> **Prerequisites:**
->
-> 1. Ensure Neon PostgreSQL is provisioned and baseline migrations are applied (see [5.1. Database Provisioning & Schema Migrations](#51-neon-postgresql-connection-pooling-architecture--provisioning)).
-> 2. Ensure your container image repository (e.g., GitHub Container Registry `ghcr.io/<OWNER>/<REPO>` or Amazon ECR) has public read access enabled. This allows ECS Fargate tasks in public subnets to pull images anonymously over the internet without configuring AWS Secrets Manager credentials or registry authentication tokens.
-
-#### Step 1: Configure AWS SSM Parameter Store (`/authsphere/*` Namespace)
-
-ECS containers resolve secrets natively from **AWS SSM Parameter Store** via the ECS Task Execution Role (`ecsTaskExecutionRole`). Create the following parameters in SSM Parameter Store in your chosen AWS Region (`<AWS_REGION>`):
-
-- **SecureString Parameters:**
-  - `/authsphere/DATABASE_URL`: Pooled database connection string (`postgresql://<USER>:<PASS>@<POOLED_HOST>/<DB>?sslmode=require`)
-  - `/authsphere/REDIS_URL`: Serverless Redis connection string (`rediss://default:<PASS>@<REDIS_HOST>:<PORT>`)
-  - `/authsphere/JWT_ACCESS_SECRET`: Signing secret for access JWTs (min 16 chars)
-  - `/authsphere/JWT_REFRESH_SECRET`: Signing secret for refresh JWTs (min 16 chars)
-  - `/authsphere/MFA_ENCRYPTION_KEY`: AES-256-GCM encryption key for TOTP secrets (min 16 chars)
-  - `/authsphere/RESEND_API_KEY`: Email delivery service API key (Option B)
-  - `/authsphere/GMAIL_REFRESH_TOKEN`: Gmail OAuth2 Refresh Token (Option A)
-  - `/authsphere/GOOGLE_CLIENT_SECRET`: Google OAuth client secret (shared for Sign-In & Gmail sending)
-  - `/authsphere/GITHUB_CLIENT_SECRET`: GitHub OAuth client secret (optional)
-
-- **String Parameters:**
-  - `/authsphere/FRONTEND_URL`: Hosted frontend origin (e.g. `https://<YOUR_PROJECT>.vercel.app`)
-  - `/authsphere/EMAIL_PROVIDER`: Email strategy selection (`gmail` or `resend`)
-  - `/authsphere/EMAIL_FROM`: Transactional sender identity (Option B, e.g. `AuthSphere <noreply@<YOUR_DOMAIN>>`)
-  - `/authsphere/GMAIL_USER`: Gmail account address for OAuth2 sending (Option A)
-  - `/authsphere/GOOGLE_CLIENT_ID`: Google OAuth client ID (shared for Sign-In & Gmail sending)
-  - `/authsphere/GITHUB_CLIENT_ID`: GitHub OAuth client ID (optional)
-  - `/authsphere/OAUTH_CALLBACK_BASE_URL`: OAuth callback base URL (optional)
-
-The ECS container definitions ([infra/ecs/api-task-definition.json](../infra/ecs/api-task-definition.json) and [infra/ecs/worker-task-definition.json](../infra/ecs/worker-task-definition.json)) reference these parameters directly via `"secrets": [{ "name": "...", "valueFrom": "/authsphere/..." }]`. When OAuth is not configured, optional parameters can be left empty (`""`).
-
-#### Step 2: Configure GitHub Repository Secrets & Variables
-
-Unlike Lambda, ECS container credentials do not need to be passed as environment variables in GitHub Secrets because ECS pulls them directly from SSM. Only CI/CD pipeline access credentials are required in GitHub:
-
-1. **GitHub Repository Secrets (`production` environment):**
-   - `DATABASE_URL_DIRECT`: Direct unpooled Neon connection URL (used by CI to run migrations)
-   - `AWS_DEPLOY_ROLE_ARN`: AWS IAM OIDC Role ARN with permissions to register task definitions, update ECS services, and discover ALB endpoints (`elasticloadbalancing:DescribeLoadBalancers`) (container image push to GHCR is authenticated natively via `GITHUB_TOKEN`)
-
-2. **GitHub Repository Variables:**
-   - `DEPLOY_TARGET`: `ecs`
-   - `AWS_REGION`: `ap-south-1` (default)
-
-#### Step 3: Create ECS Cluster & IAM Roles
-
-- Create an ECS cluster named `authsphere-cluster`.
-- Create an ECS task execution role (`ecsTaskExecutionRole`) granting permissions to read SSM parameters (`arn:aws:ssm:*:*:parameter/authsphere/*`) and decrypt via KMS.
-
-#### Step 4: Configure ALB & Target Group
-
-- Create an Application Load Balancer in public subnets with `ALB-SG`.
-- Create a Target Group (target type: IP, protocol: HTTP, port: 3000, health check path: `/health/live`).
-- Add a listener forwarding port 80 to the target group.
-
-#### Step 5: Register Task Definitions & Launch Services
-
-- Register task definitions from [infra/ecs/api-task-definition.json](../infra/ecs/api-task-definition.json) and [infra/ecs/worker-task-definition.json](../infra/ecs/worker-task-definition.json).
-- Create the `authsphere-api` service in the **public subnets** with `assign_public_ip: ENABLED` and `security_groups: [ECS-API-SG]`, attaching it to the ALB target group (desired tasks: 1).
-- (Optional for Variant 1a) Create the `authsphere-worker` service in the **public subnets** with `assign_public_ip: ENABLED` and `security_groups: [ECS-Worker-SG]` without load balancer attachment (desired tasks: 1).
-
-Subsequent deployments trigger automatically when code is pushed to `main` with `DEPLOY_TARGET=ecs`.
+- **Decoupled Secret Stores:**
+  - _Lambda_ receives secrets as deploy-time parameter overrides from GitHub Secrets.
+  - _ECS Fargate_ resolves secrets natively from AWS SSM Parameter Store (`/authsphere/prod/*`) at container boot.
+  - These two stores are independent, unsynchronized copies. Any credential update requires updating **both** stores and triggering deployments for both targets.
+- **JWT Secrets (`JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`):**
+  - Tokens signed with an old key are rejected by instances using the new key.
+  - During mixed-version deployments or rolling cutovers, authentication can fail intermittently while old and new instances temporarily coexist.
+  - As cutover completes and old instances drain, users holding tokens signed with the old key must re-authenticate. Seamless rotation without disruption requires application-level multi-key verification (e.g. JWKS key sets).
+- **MFA Encryption Key (`MFA_ENCRYPTION_KEY`):**
+  - `MFA_ENCRYPTION_KEY` derives the 32-byte AES-256-GCM key used to encrypt TOTP secrets in the database.
+  - Existing encrypted TOTP secrets must be decrypted with the old key and re-encrypted with the new key before retiring the old key. Otherwise, affected users cannot generate valid TOTP codes and must re-enrol MFA.
+  - Seamless rotation requires application-level multi-key decryption fallback.
 
 ---
 
-## 4. Frontend Deployment: Vercel Edge Reverse Proxy
+## 4. Frontend Ingress & Edge Security
 
-When deploying the frontend on Vercel and backend compute on AWS without an expensive shared custom domain, standard cross-origin setups encounter strict browser security boundaries (mixed content, third-party cookie restrictions, and CORS preflight roundtrip delays). AuthSphere resolves these through Vercel's Edge Reverse Proxy:
+AuthSphere routes frontend traffic through Vercel's Edge Reverse Proxy (`apps/web/vercel.ts`):
 
 ```mermaid
 flowchart LR
-    Browser["Client Browser (React 19 SPA)"]
-    VercelEdge["Vercel Edge Reverse Proxy (Frontend Domain)"]
-    Backend["AWS Backend Compute (Lambda Function URL or ECS ALB)"]
+    Browser["User Browser (React 19 SPA)"]
+    VercelEdge["Vercel Edge Reverse Proxy (Edge POP, Same-Origin)"]
+    AWSBackend["AWS Backend Compute (Lambda Function URL or ECS ALB)"]
 
-    Browser -->|"1. Same-Origin /api/* (Zero CORS, First-Party Cookies)"| VercelEdge
-    VercelEdge -->|"2. Upstream Rewrite (HTTPS to Lambda / HTTP to ALB)"| Backend
+    Browser -->|"1. Same-Origin HTTP/2 Request (/api/*)"| VercelEdge
+    VercelEdge -->|"2. Upstream Proxy Request (HTTPS for Lambda / HTTP for ALB)"| AWSBackend
+    AWSBackend -->|"3. Backend Response"| VercelEdge
+    VercelEdge -->|"4. Response with First-Party Cookies"| Browser
 ```
 
 ### 4.1. Browser Security Resolution Matrix
 
-| Security Dimension             | Cross-Origin Direct Challenge                                                                                           | Vercel Edge Reverse Proxy Solution                                                                                                                                                                        |
-| :----------------------------- | :---------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HTTPS Mixed Content**        | Default AWS ALB DNS provides plain HTTP. Modern browsers block insecure HTTP requests initiated from an HTTPS frontend. | Vercel terminates SSL on the frontend origin. The edge proxy rewrites `/api/*` upstream (native HTTPS to Lambda Function URL; HTTP port 80 to default ALB DNS), eliminating browser mixed-content blocks. |
-| **Cookie Privacy & Isolation** | Browsers treat disparate origins as third-party contexts, partitioning or blocking ambient cookie access.               | Requests route to `https://<FRONTEND_URL>/api/*`. Cookies remain strictly **first-party same-origin**, operating reliably under `SameSite=Lax; HttpOnly; Secure`.                                         |
-| **CORS & Preflight Latency**   | Cross-origin requests trigger browser `OPTIONS` preflight roundtrips, adding 50–200ms latency to mutating API calls.    | Because requests are same-origin from the browser's perspective, browser preflight `OPTIONS` requests are completely eliminated.                                                                          |
-| **CSRF Defense**               | Relying on `SameSite=None; Secure` increases exposure across ambient cross-site contexts.                               | Preserves `SameSite=Lax` protection. AuthSphere's [originValidation](../apps/api/src/middlewares/origin-validation.ts) middleware verifies `Sec-Fetch-Site` and `Origin` headers.                         |
+| Security Dimension             | Direct Cross-Origin Direct Challenge                                                   | Vercel Edge Reverse Proxy Resolution                                                                                                      |
+| :----------------------------- | :------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------- |
+| **HTTPS Mixed Content**        | Browsers block insecure HTTP requests initiated from an HTTPS frontend.                | Vercel terminates browser SSL. The edge proxy rewrites `/api/*` upstream, eliminating mixed-content blocks.                               |
+| **Cookie Privacy & Isolation** | Browsers treat disparate origins as third-party contexts, partitioning cookies.        | Requests route to `https://<FRONTEND_URL>/api/*`. Cookies remain strictly **first-party same-origin** (`SameSite=Lax; HttpOnly; Secure`). |
+| **CORS Preflight Overhead**    | Cross-origin mutations trigger browser `OPTIONS` preflights, adding roundtrip latency. | Browser requests are same-origin from the browser's perspective, completely eliminating `OPTIONS` preflight calls.                        |
+| **CSRF Defense**               | Relying on `SameSite=None` increases cross-site attack surfaces.                       | Preserves `SameSite=Lax`. AuthSphere's `originValidation` middleware verifies `Sec-Fetch-Site` and `Origin` headers.                      |
 
-### 4.2. Traffic Journey & Core Architectural Concepts
+### 4.2. Ingress Transport Security & Proxy Trust Calibration
 
-#### 1. The Browser Journey (Client to Edge):
+1. **Transport Security Ingress:**
+   - **Lambda:** Connects over native AWS-managed TLS via its Function URL. Vercel proxies requests over an **encrypted upstream HTTPS connection** (two distinct TLS legs: Browser --HTTPS--> Vercel Edge, then Vercel --HTTPS--> Lambda).
+   - **ECS Fargate:** The ALB listener uses plaintext HTTP on port `80`. The proxy hop from Vercel to the ALB travels over public networks unencrypted.
+2. **Proxy Trust Calibration & IP Attribution Limitation:**
+   - Express relies on `TRUST_PROXY` to derive `req.ip` from `X-Forwarded-For`.
+   - On Lambda: `TRUST_PROXY=1` (1 hop: `Browser -> Vercel -> Lambda`).
+   - On ECS Fargate: `TRUST_PROXY=2` (2 hops: `Browser -> Vercel -> ALB -> Container`).
+   - **Accepted Security Limitation:** Express derives `req.ip` using the configured proxy trust depth. Because direct backend ingress is intentionally permitted for evaluator testing, client IP attribution is not guaranteed to be trustworthy. IP-based rate limiting and audit logging have this accepted limitation.
 
-- **Same-Origin Requests:** The SPA makes all API requests to relative paths (`/api/*`). The browser connects strictly to `https://<FRONTEND_URL>/api/*`.
-- **Zero CORS Preflight:** Because the browser is communicating with its own origin, it never triggers a CORS `OPTIONS` preflight. Mutations (`POST`, `PUT`, `DELETE`) execute in a single HTTP roundtrip.
-- **First-Party Cookie Isolation:** Auth tokens operate as first-party cookies with `SameSite=Lax; HttpOnly; Secure`. Modern browser privacy engines (Safari ITP, Chrome Privacy Sandbox) never block or partition them.
+---
 
-#### 2. The Edge to Backend Journey (Vercel to AWS Compute):
+## 5. CI/CD & Automated Release Pipeline
 
-- **Server-to-Server Proxy Hop:** Vercel Edge nodes rewrite `/api/:path*` directly to the backend compute target:
-  - **AWS Lambda:** Uses native HTTPS (`https://<LAMBDA_FUNCTION_URL_HOST>/:path*`), secured by AWS-managed TLS certificates on Function URLs at $0 cost.
-  - **AWS ECS Fargate:** In the reference setup without a custom domain, rewrites over HTTP (`http://<ALB_DNS>/:path*`). AWS default `*.elb.amazonaws.com` DNS cannot obtain public ACM certificates. For production TLS on ALB, configure a custom domain with an ACM certificate.
-- **CORS Demystified:** CORS is an ambient browser security policy, not a server-to-server protocol. Upstream proxy traffic between Vercel and AWS does not trigger or require CORS headers.
-- **Why Express CORS is Retained:** The Express backend maintains `cors({ origin: env.FRONTEND_URL, credentials: true })` for two reasons:
-  1. **Local Development:** Allows the local Vite dev server (`http://localhost:5173`) to communicate directly with the Express API (`http://localhost:3000`).
-  2. **Direct Browser Defense:** If an external browser or third-party web app attempts to query the backend endpoint directly, Express CORS rejects ambient cross-origin reads.
-- **Lambda Function URL CORS Omission:** Native Function URL CORS is omitted from `template.yaml` to maintain architectural parity with ECS Fargate and keep Express CORS as the single source of truth. While Function URL CORS can terminate `OPTIONS` preflights at the AWS edge without invoking compute in direct browser-to-Lambda setups, it is redundant here because Vercel's same-origin reverse proxy (`/api/*`) already eliminates browser preflights before requests reach AWS.
+The primary deployment mechanism for AuthSphere is the automated two-stage Directed Acyclic Graph (DAG) declared in `.github/workflows/`:
 
-#### 3. Proxy Hop Calibration, Reverse Proxying & Direct Ingress Realities:
+```mermaid
+flowchart TD
+    subgraph Stage1 ["Stage 1: Validation (ci.yml)"]
+        TestPostgres["Service Container: PostgreSQL 16"]
+        TestRedis["Service Container: Redis 8"]
+        Typecheck["npm run typecheck"]
+        TestRun["npm test (All Workspaces)"]
+        TestDocker["Docker Buildx Compilation Test"]
 
-Vercel overwrites incoming `X-Forwarded-For` headers with the caller's verified IP to prevent client-supplied spoofing. Express's `trust proxy` setting scans forwarded addresses from right to left starting from the socket peer:
+        Typecheck --> TestRun --> TestDocker
+    end
 
-- **AWS Lambda (1 Hop):** `Browser -> Vercel Edge Proxy -> Lambda Function URL`. With `TRUST_PROXY=1`, Express trusts 1 hop from the right, ensuring `req.ip` reflects the verified client IP.
-- **AWS ECS Fargate (2 Hops):** `Browser -> Vercel Edge Proxy -> AWS ALB -> Container`. With `TRUST_PROXY=2`, Express trusts 2 hops from the right (stepping past both the ALB and Vercel edge node).
-- **Cookie Path Alignment:** Auth cookies use root path scoping (`path: "/"`) so browsers reliably include them on all `/api/*` requests across reverse-proxy rewrites.
-- **Direct Access Realities & Architectural Trade-offs:**
-  - _Reverse Proxy Routing with Accepted Direct Exposure:_ The backend URL is omitted from client bundles and documentation to steer legitimate browser users through Vercel. However, because the Function URL uses `AuthType: NONE`, it remains publicly invokable. Hiding the URL is obscurity rather than an access boundary; direct-origin exposure is an **accepted architectural trade-off** of a lean $0 baseline compute setup.
-  - _Direct Caller Spoofing Risk:_ Direct callers knowing the endpoint URL can bypass Vercel and supply forged `X-Forwarded-For` headers. Under numeric proxy trust, Express trusts the immediate hop, which direct callers can exploit.
-  - _Ingress Enforcement Patterns & Trade-offs:_
-    1. **AWS CloudFront Origin Access Control (OAC):** Lambda Function URLs support OAC via `AuthType: AWS_IAM` and a resource policy. While a default `*.cloudfront.net` distribution provides free AWS TLS without a custom domain, OAC isolates the Lambda to CloudFront—it does not automatically prevent direct calls to the CloudFront viewer URL unless additional edge viewer-side access controls are added.
-    2. **Pre-Shared Secret Header (`X-Edge-Secret`):** Edge middleware injects a secret validated by backend Express middleware. _Trade-off:_ Completely blocks direct unproxied callers, but couples backend to edge runtime APIs and requires serverless compute on static SPAs.
-    3. **Application Origin Validation & Socket IP Fallback:** Validating `Origin` defends against browser-based CSRF and cross-origin reads; falling back to socket IP prevents forged forwarded headers. _Trade-off:_ Non-browser HTTP clients (curl/scripts) can forge arbitrary `Origin` headers, and Lambda socket semantics reflect internal adapter virtual sockets.
+    subgraph Stage2 ["Stage 2: Release & Deploy (deploy.yml)"]
+        OIDCAuth["Assume IAM Role via OIDC (sts.amazonaws.com)"]
+        BuildArtifact["Step 1: BUILD & PUSH ARTIFACTS FIRST\nLambda Zip or Docker Image to GHCR"]
+        RunMigration["Step 2: RUN DATABASE MIGRATIONS\nnpm run db:migrate:deploy via Direct URL"]
+        DeployCompute["Step 3: DISPATCH COMPUTE UPDATE\nsam deploy OR ECS service update"]
+        SmokeTest["Step 4: AUTOMATED SMOKE TESTS\n/health/live & /health/ready"]
 
-#### 4. Shared Application Security Perimeter & Compute Trade-offs:
+        OIDCAuth --> BuildArtifact --> RunMigration --> DeployCompute --> SmokeTest
+    end
 
-Regardless of the compute model or ingress path, Express enforces multi-layered defense controls. Each control provides distinct protections with explicit trade-offs:
-
-- **CSRF & Origin Validation:** The [`originValidation`](../apps/api/src/middlewares/origin-validation.ts) middleware intercepts mutations (`POST`, `PUT`, `PATCH`, `DELETE`), verifying W3C Fetch Metadata (`Sec-Fetch-Site: same-origin | same-site`) and matching `Origin`/`Referer` against `FRONTEND_URL` to block unauthorized cross-site requests before body parsing.
-- **Distributed Fixed-Window Rate Limiting:** Enforced via atomic Redis Lua scripting (`INCR` + conditional `EXPIRE` in 1 command). Mitigates credential stuffing and brute-force attempts while reducing Redis command consumption by 75% compared to multi-command transactions.
-  - _Fail-Open Trade-off:_ If Redis is unreachable, rate limiting fails open to maintain login availability for legitimate users, accepting that endpoints are temporarily unthrottled during cache outages.
-- **Resource Sizing & Concurrency Ceilings:**
-  - _Argon2id Password Hashing:_ Protects stored passwords against offline dictionary and GPU cracking. Because it deliberately consumes CPU (~180ms) and memory (64MB), it increases compute load under high-volume online request floods.
-  - _Reserved Concurrency (10):_ Shields downstream Neon PostgreSQL connection pools from exhaustion, enforcing a hard Function URL ceiling of $10 \times \text{concurrency} = 100\text{ req/s}$. Excess requests receive an edge `HTTP 429 Too Many Requests`. This protects persistent data storage at the expense of throttling callers during surges.
-- **Payload & Memory Protections:** Strict 16kb body limits (`express.json({ limit: "16kb" })`) defend against JSON nested payload attacks and memory exhaustion.
-- **Cryptographic Access Control:** Authenticated routes require signed, tamper-proof RS256/HS256 JWTs with database-backed session revocation, constant-time timing-attack defenses, and RBAC permission checks.
-
-### 4.3. Vercel Configuration & Reverse Proxy ([apps/web/vercel.ts](../apps/web/vercel.ts))
-
-The reverse proxy rewrite in [`apps/web/vercel.ts`](../apps/web/vercel.ts) dynamically routes `/api/*` requests from your frontend domain directly to your backend compute using the programmatic `@vercel/config` configuration:
-
-```typescript
-import { deploymentEnv, routes, type VercelConfig } from "@vercel/config/v1";
-
-const backendUrl = deploymentEnv("BACKEND_URL");
-
-export const config: VercelConfig = {
-  rewrites: [
-    routes.rewrite("/api/:path*", `${backendUrl}/:path*`),
-    routes.rewrite("/(.*)", "/index.html"),
-  ],
-};
+    Stage1 --> Stage2
 ```
 
-1. In the Vercel dashboard, connect your GitHub repository and set the **Root Directory** to `apps/web`.
-2. In Vercel Project Settings → **Environment Variables**, add `BACKEND_URL` set to your live backend endpoint base URL without a trailing slash (`https://<LAMBDA_FUNCTION_URL_HOST>` for Lambda, or `http://<ALB_DNS>` for ECS). Do not prefix it with `VITE_` so it is not exposed in the client bundle.
-3. Leave `VITE_API_URL` empty in `apps/web` environment variables! This ensures the client browser sends API requests to same-origin `/api/*`, giving you first-party HttpOnly cookies and zero cross-origin CORS preflights.
-4. Every push to `main` automatically triggers an optimized production build and deployment on Vercel.
+### 5.1. Normal Production Release Flow (GitHub Actions)
+
+1. **Merge / Push to `main`:** Developers push or merge code to `main` (or dispatch `deploy.yml` manually).
+2. **Automated Validation (Stage 1):** Validates monorepo types, executes migrations against ephemeral test containers, runs unit tests, and tests Docker build compilation.
+3. **OIDC Authentication (Stage 2):** GitHub Actions authenticates to AWS via OpenID Connect (`aws-actions/configure-aws-credentials`) without static long-lived credentials.
+   - _OIDC Claim Formats:_ Legacy format is `repo:utkarshj014/authsphere:ref:refs/heads/main`. The wildcard pattern `repo:utkarshj014@*/authsphere@*:ref:refs/heads/main` is used as an intentional convenience for simplicity and rapid setup. Third-party user forks have distinct logins/IDs and remain blocked in all cases.
+4. **Artifact Creation First Invariant:** The compute artifact (Docker image pushed to GHCR or `authsphere-api.zip`) is built and published _before_ database migrations run. This guarantees the release code compiles before mutating persistent database schemas.
+5. **Database Migrations:** Prisma migrations execute against Neon via direct unpooled connection (`DATABASE_URL_DIRECT`). Migrations follow **Expand-and-Contract** backward-compatibility rules so running instances continue serving traffic without disruption.
+6. **Compute Update Dispatch:**
+   - If `DEPLOY_TARGET=serverless` (default): Executes `sam deploy` targeting AWS Lambda with parameter overrides.
+   - If `DEPLOY_TARGET=ecs`: Dynamically discovers ALB DNS, renders task definitions, updates ECS services with circuit breaker enabled, and waits for service stability.
+7. **Automated Verification:** Executes automated retrying smoke tests against `/health/live` and `/health/ready`.
+
+### 5.2. Optional Manual Bootstrap / Recovery (`sam deploy`)
+
+Local CLI deployment (`sam deploy --guided`) is an optional disaster recovery or initial bootstrapping procedure, not the routine release pipeline.
+
+> [!WARNING]
+> When prompted `Save arguments to configuration file [Y/n]`, answer **`N`**. SAM CLI persists guided values in plaintext to `samconfig.toml`. Never commit secret parameter overrides to version control.
 
 ---
 
-## 5. Managed Cloud Data Strategy
+## 6. Compute Switching & Rollback
 
-### 5.1. Neon PostgreSQL: Connection Pooling Architecture & Provisioning
+Because both compute options connect to identical managed cloud backing stores, switching compute targets requires zero database migration and zero secret edits:
 
-Neon serverless PostgreSQL enforces distinct connection modes depending on the execution context:
-
-- **Runtime Compute (AWS Lambda / ECS Fargate):**
-  - **Connection String:** Configured with the **Pooled Connection Host** (contains `-pooler`, e.g. `postgresql://<USER>:<PASS>@<POOLED_HOST>/<DB>?sslmode=require`).
-  - **Purpose:** Neon's PgBouncer proxy pools transactional connections across concurrent Lambda invocations and container instances, preventing connection exhaustion. With Prisma 7 and `@prisma/adapter-pg`, legacy `?pgbouncer=true` flags are not required.
-- **Database Migrations (CI/CD / CLI):**
-  - **Connection String:** Configured with the **Direct Connection Host** (without `-pooler`, e.g. `postgresql://<USER>:<PASS>@<DIRECT_HOST>/<DB>?sslmode=require`).
-  - **Purpose:** Prisma migration operations (`prisma migrate deploy`) require session-level advisory locks and transactional DDL that PgBouncer transaction pooling does not support.
-
-#### Database Provisioning, Schema Migrations & RBAC Seeding
-
-Run once against production Neon before launching compute (or allow GitHub Actions to run migrations automatically via `DATABASE_URL_DIRECT`):
-
-```bash
-# 1. Apply schema migrations via direct (unpooled) Neon connection
-DATABASE_URL="<DIRECT_DATABASE_URL>" npm run db:migrate:deploy --workspace=@authsphere/api
-
-# 2. Seed baseline system roles (USER, ADMIN) and permissions
-DATABASE_URL="<DIRECT_DATABASE_URL>" npm run db:seed --workspace=@authsphere/api
+```
+                        Dual-Run Compute Cutover Procedure
+┌───────────────────────────────┬───────────────────────────────────┬───────────────────────────────────┐
+│ Operational Step              │ Path A: Switching to ECS Container│ Path B: Switching to Lambda       │
+├───────────────────────────────┼───────────────────────────────────┼───────────────────────────────────┤
+│ 1. Set GitHub Target Variable │ DEPLOY_TARGET = ecs               │ DEPLOY_TARGET = serverless        │
+│ 2. Run CI/CD Workflow         │ Run deploy.yml (Builds & deploys) │ Run deploy.yml (Builds & deploys) │
+│ 3. Update Vercel Ingress      │ BACKEND_URL = http://<ALB_DNS>    │ BACKEND_URL = <LAMBDA_URL>        │
+│ 4. Redeploy Vercel Frontend   │ Redeploy frontend, verify ingress │ Redeploy frontend, verify ingress │
+│ 5. Cost Hygiene (After Proof) │ Scale ECS desired-count: 1        │ Scale ECS tasks to 0 via AWS CLI  │
+└───────────────────────────────┴───────────────────────────────────┴───────────────────────────────────┘
 ```
 
-### 5.2. Upstash Redis: Operational Profile & Command Budget
+### Dual-Run Low-Downtime Principles & Rollback:
 
-- **Responsibilities:** Powers fixed-window rate limiting, OAuth 2.0 PKCE state verification, token leeway grace periods, and BullMQ queue transport.
-- **Zero-I/O Infrastructure Health Probes:** ALB target group health checks (`/health/live`) are routed ahead of the rate-limiting middleware pipeline and execute purely in-memory with zero PostgreSQL and zero Redis I/O. This ensures container liveness stability during Redis latency or downtime (preventing cascading ECS container restarts) and completely eliminates heartbeat command churn against Upstash.
-- **Single-Command Atomic Rate Limiting:** Protected application routes enforce rate limits via an atomic Redis Lua script (`eval`) executing `INCR` and conditional `EXPIRE` in 1 single Redis command. Compared to 4-command `MULTI`/`EXEC` transaction blocks, this cuts rate-limiting command consumption on Upstash by 75% on every protected request.
-- **Background Bleed Elimination (Lambda & Inline):** Under the Primary Serverless Architecture (Lambda) or Variant 1b (Inline), BullMQ polling loops are inactive, completely eliminating background command consumption from idle queue polling.
-- **Decoupled Worker Calibration (Variant 1a):** When running a standalone BullMQ worker daemon ([apps/api/src/workers/email.worker.ts](../apps/api/src/workers/email.worker.ts)), connection settings are tuned to prevent idle command exhaustion on serverless Redis:
-  - `drainDelay: 30`: Establishes a 30-second long-poll timeout when the queue is empty, remaining safely below cloud TCP socket drop timeouts while eliminating tight polling loops. Enqueued jobs and scheduled backoff retries unblock and execute dynamically without waiting for this delay.
-  - `stalledInterval: 300000`: Sets the stalled job recovery sweep to every 5 minutes, ensuring orphaned in-flight tasks are rescued following abrupt container terminations while minimizing background inspection overhead.
-- **Active Traffic Command Scaling:** Active API requests consume atomic Redis commands for fixed-window rate limiting, RBAC permission lookup caching, and refresh token leeway verification, scaling strictly with incoming request volume rather than elapsed time.
-
-### 5.3. Transactional Email: Multi-Provider Strategy & Arbitrary Recipient Delivery
-
-AuthSphere implements a provider-agnostic Strategy Pattern (`EmailProvider`) supporting two delivery models:
-
-- **Option A: Google Gmail OAuth2 (Recommended for Portfolio & Live Demonstrations):**
-  - **No Custom Domain Required:** Sends authenticated emails from a personal Gmail address (`@gmail.com`) to **any arbitrary recipient** across the web.
-  - **Mechanics:** Uses `nodemailer` with Google OAuth 2.0 (`clientId`, `clientSecret`, `refreshToken`), dynamically imported to preserve lean cold starts.
-  - **Sender Display:** Fixed as `"AuthSphere" <${GMAIL_USER}>`.
-  - **Ideal For:** Recruiters, reviewers, and live portfolio testing where arbitrary test emails must receive real verification links without paying for or configuring custom domain DNS.
-
-- **Option B: Resend (Enterprise SaaS with Custom Domain):**
-  - **Production Mode:** Requires adding and verifying custom domain DNS records (SPF, DKIM, DMARC) in Resend. Delivers high-volume transactional emails to arbitrary recipients with dedicated reputation.
-  - **Sandbox Mode (`onboarding@resend.dev`):** Without a custom domain, Resend restricts delivery exclusively to the single email address registered with your Resend account. Attempting to send to arbitrary third-party recipients throws `403 validation_error: You can only send testing emails to your own email address`.
-
-- **Strategy Selection (`EMAIL_PROVIDER`):**
-  - Configurable as `"gmail"` or `"resend"`. If unset, automatically defaults to `"gmail"` if `GMAIL_REFRESH_TOKEN` is present, otherwise falls back to `"resend"`.
+1. **Active Backend Continuity:** The existing backend remains fully active and serving traffic throughout the new backend's build and deployment window.
+2. **Controlled Ingress Cutover:** Once the new compute target passes health checks, update `BACKEND_URL` in Vercel project settings and trigger a **new Vercel deployment** (required for updated environment variables to take effect on edge rewrites).
+3. **Verification Before Decommissioning:** Keep the old backend active until end-to-end testing confirms the new backend is processing requests cleanly through Vercel. Only then scale down the previous compute target.
+4. **Rollback:** If an issue arises after cutover, manually revert `BACKEND_URL` in Vercel and trigger a frontend redeployment.
 
 ---
 
-## 6. Unified Environment Variable & Secrets Reference
+## 7. Cloud Cost Management & Infrastructure Hygiene
 
-All environment variables follow a unified schema validated at startup via Zod in [apps/api/src/config/env.ts](../apps/api/src/config/env.ts):
+### 7.1. Cost Breakdown for `ap-south-1` (Mumbai)
 
-### 6.1. Runtime Infrastructure Configuration (Plain Text)
+Understanding the true monthly infrastructure costs across compute options:
 
-| Variable                            | Target Location                              | Default / Value                                              | Description                                                                                               |
-| :---------------------------------- | :------------------------------------------- | :----------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                          | Task Definition / SAM Globals                | `production`                                                 | Application environment mode (`development`, `production`, `test`)                                        |
-| `APP_ROLE`                          | Task Definition / SAM Globals                | `api`                                                        | Process execution role (`api` or `worker`)                                                                |
-| `QUEUE_DRIVER`                      | Task Definition / SAM Globals                | `sync` (Lambda) / `inline` (ECS API) / `bullmq` (ECS Worker) | Delivery mode (`sync` for serverless Lambda, `inline` for single-container ECS, `bullmq` for worker)      |
-| `PORT`                              | Task Definition / Not needed on Lambda       | `3000`                                                       | API listening port (Lambda executes in-process via `@vendia/serverless-express`; defaults to 3000 in env) |
-| `HOST`                              | Task Definition / SAM Globals                | `0.0.0.0`                                                    | API listening host binding                                                                                |
-| `TRUST_PROXY`                       | Task Definition / SAM Globals                | `1` (Lambda) / `2` (ECS)                                     | Proxy hops: 1 for Vercel $\rightarrow$ Lambda, 2 for Vercel $\rightarrow$ ALB $\rightarrow$ Container     |
-| `DATABASE_POOL_MAX`                 | Task Definition / SAM Globals (Optional)     | `2` (Lambda) / `10` (ECS)                                    | Maximum Prisma PostgreSQL connection pool size per compute instance                                       |
-| `JWT_ACCESS_EXPIRES_IN`             | Task Definition / SAM Globals                | `15m`                                                        | Access token expiration duration                                                                          |
-| `JWT_REFRESH_EXPIRES_IN`            | Task Definition / SAM Globals                | `30d`                                                        | Refresh token expiration duration                                                                         |
-| `AUTH_REUSE_DELETION_MODE`          | Task Definition / SAM Globals                | `SESSION`                                                    | Refresh token compromise policy (`SESSION` or `GLOBAL`)                                                   |
-| `AUTH_REFRESH_TOKEN_LEEWAY_SECONDS` | Task Definition / SAM Globals                | `30`                                                         | Multi-tab concurrent token rotation grace period (seconds)                                                |
-| `EMAIL_PROVIDER`                    | SAM Parameter (`vars`) / SSM Parameter Store | `gmail` / `resend`                                           | Delivery strategy (defaults to `gmail` if `GMAIL_REFRESH_TOKEN` present, else `resend`)                   |
+```
+                     Monthly Infrastructure Cost Breakdown (AWS ap-south-1)
+┌──────────────────────────────────────┬───────────────────────────┬───────────────────────────┐
+│ Cost Component                       │ Serverless (AWS Lambda)   │ Containers (ECS + ALB)    │
+├──────────────────────────────────────┼───────────────────────────┼───────────────────────────┤
+│ Base Compute Allocation              │ $0.00 (scales to zero)    │ ~$9.47 (0.25 vCPU / 0.5 GB)│
+│ ALB Hourly Charge ($0.0239/hr)       │ $0.00 (Function URL free) │ ~$17.45 (730 hours)       │
+│ Public IPv4 Addresses (3x total)     │ $0.00 (out-of-VPC)        │ ~$10.95 (2x ALB + 1x Task)│
+│ Load Balancer Capacity Units (LCU)   │ $0.00 (Function URL free) │ Usage-based ($0.00 idle)  │
+│ Ingress Endpoint / Gateway Charge    │ $0.00 (Function URL free) │ Included in ALB           │
+├──────────────────────────────────────┼───────────────────────────┼───────────────────────────┤
+│ Fixed Baseline Before LCU Usage      │ $0.00 / month idle compute│ ~$37.87 / month baseline  │
+└──────────────────────────────────────┴───────────────────────────┴───────────────────────────┘
+```
 
-### 6.2. Sensitive Secrets & Service Credentials
+_(Note: Actual monthly totals scale with traffic. LCU usage, request duration, and outbound data transfer are usage-based. ALB has no mandatory minimum LCU fee; an idle load balancer incurs zero LCU charges. Lambda Function URLs eliminate endpoint fees, while standard Lambda invocation and execution duration charges apply)._
 
-| Variable                  | Primary Serverless (Lambda)                         | Reference Containers (ECS)                   | Sensitivity        | Description                                                         |
-| :------------------------ | :-------------------------------------------------- | :------------------------------------------- | :----------------- | :------------------------------------------------------------------ |
-| `DATABASE_URL_DIRECT`     | GitHub Encrypted Secret `DATABASE_URL_DIRECT`       | GitHub Encrypted Secret                      | `Encrypted Secret` | PostgreSQL direct unpooled URL (strictly for CI/CD migrations)      |
-| `DATABASE_URL`            | SAM Parameter (`NoEcho`) from `DATABASE_URL_POOLED` | SSM `/authsphere/DATABASE_URL` (KMS)         | `Encrypted Secret` | PostgreSQL pooled connection URL (for runtime API compute)          |
-| `REDIS_URL`               | SAM Parameter (`NoEcho`) from `REDIS_URL`           | SSM `/authsphere/REDIS_URL` (KMS)            | `Encrypted Secret` | Upstash Redis connection URL                                        |
-| `FRONTEND_URL`            | SAM Parameter from Variable / Default               | SSM `/authsphere/FRONTEND_URL`               | `Plaintext Config` | Hosted frontend origin (e.g. `https://<YOUR_PROJECT>.vercel.app`)   |
-| `JWT_ACCESS_SECRET`       | SAM Parameter (`NoEcho`) from `JWT_ACCESS_SECRET`   | SSM `/authsphere/JWT_ACCESS_SECRET` (KMS)    | `Encrypted Secret` | Signing secret for access JWTs (256-bit entropy recommended)        |
-| `JWT_REFRESH_SECRET`      | SAM Parameter (`NoEcho`) from `JWT_REFRESH_SECRET`  | SSM `/authsphere/JWT_REFRESH_SECRET` (KMS)   | `Encrypted Secret` | Signing secret for refresh JWTs (256-bit entropy recommended)       |
-| `MFA_ENCRYPTION_KEY`      | SAM Parameter (`NoEcho`) from `MFA_ENCRYPTION_KEY`  | SSM `/authsphere/MFA_ENCRYPTION_KEY` (KMS)   | `Encrypted Secret` | Passphrase used to derive 32-byte AES-256 key via SHA-256           |
-| `GMAIL_USER`              | SAM Parameter / Optional                            | SSM `/authsphere/GMAIL_USER`                 | `Plaintext Config` | Gmail account address for OAuth2 sending (Option A)                 |
-| `GMAIL_REFRESH_TOKEN`     | SAM Parameter (`NoEcho`) / Optional                 | SSM `/authsphere/GMAIL_REFRESH_TOKEN` (KMS)  | `Encrypted Secret` | Gmail OAuth2 Refresh Token (Option A)                               |
-| `RESEND_API_KEY`          | SAM Parameter (`NoEcho`) / Optional                 | SSM `/authsphere/RESEND_API_KEY` (KMS)       | `Encrypted Secret` | Resend email API key (Option B)                                     |
-| `EMAIL_FROM`              | SAM Parameter / Optional                            | SSM `/authsphere/EMAIL_FROM`                 | `Plaintext Config` | Resend sender identity (e.g. `AuthSphere <noreply@<DOMAIN>>`)       |
-| `GOOGLE_CLIENT_ID`        | SAM Parameter / Optional                            | SSM `/authsphere/GOOGLE_CLIENT_ID`           | `Plaintext Config` | Google OAuth 2.0 Client ID (shared for Sign-In & Gmail sending)     |
-| `GOOGLE_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional                 | SSM `/authsphere/GOOGLE_CLIENT_SECRET` (KMS) | `Encrypted Secret` | Google OAuth 2.0 Client Secret (shared for Sign-In & Gmail sending) |
-| `GITHUB_CLIENT_ID`        | SAM Parameter / Optional                            | SSM `/authsphere/GITHUB_CLIENT_ID`           | `Plaintext Config` | GitHub OAuth 2.0 Sign-In Client ID (optional)                       |
-| `GITHUB_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional                 | SSM `/authsphere/GITHUB_CLIENT_SECRET` (KMS) | `Encrypted Secret` | GitHub OAuth 2.0 Sign-In Client Secret (optional)                   |
-| `OAUTH_CALLBACK_BASE_URL` | SAM Parameter / Optional                            | SSM `/authsphere/OAUTH_CALLBACK_BASE_URL`    | `Plaintext Config` | Base URL for OAuth callbacks routed via Vercel reverse proxy        |
+### 7.2. Shutdown & Cost Optimization Procedures
 
-### 6.3. Frontend & Edge Reverse Proxy Configuration (Vercel & Web Client)
+1. **Short-Term Compute Optimization: Scale Fargate Tasks to 0**
 
-| Variable       | Target Location                                 | Sensitivity        | Description                                                                                                                                                  |
-| :------------- | :---------------------------------------------- | :----------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BACKEND_URL`  | Vercel Project Settings → Environment Variables | `Plaintext Config` | Live backend base URL without trailing slash (`https://<LAMBDA_URL>` or `http://<ALB_DNS>`). Used server-side by `apps/web/vercel.ts` for Edge rewrites.     |
-| `VITE_API_URL` | `apps/web/.env` / Vercel Environment Variables  | `Client-Public`    | Web client API base URL. **Leave empty** in production to route through Vercel's same-origin proxy (`/api/*`), preserving HttpOnly cookies and zeroing CORS. |
+   ```bash
+   aws ecs update-service --cluster authsphere-cluster --service authsphere-api --desired-count 0 --region ap-south-1
+   ```
+
+   - _Savings:_ Eliminates Fargate vCPU, memory, and task public IPv4 charges (~$13.12/month). Scaling back up to 1 takes ~30 seconds.
+
+2. **Long-Term Optimization: Deleting the ALB (Retaining Target Group)**
+   - _Savings:_ Eliminates the fixed ALB hourly charge and both ALB public IPv4 addresses (~$24.75/month).
+   - _Critical Invariant:_ **Delete only the ALB (`authsphere-alb`) and retain the Target Group (`authsphere-api-tg`).** The ECS service references the target group's unique, immutable ARN. Detached target groups incur **$0.00/month** and allow the recreated ALB listener on port 80 to reattach seamlessly without modifying the ECS service.
 
 ---
 
-## 7. Continuous Integration & Deployment (GitHub Actions)
+## 8. Verification & Operational Reference
 
-AuthSphere includes two automated workflows in `.github/workflows/`:
+### 8.1. 4-Tier Verification Probes Matrix
 
-### 7.1. Quality CI Workflow ([.github/workflows/ci.yml](../.github/workflows/ci.yml))
+| Probe                    | Endpoint            | Target Dependencies                  | Normal Latency                                | Operational Role & Verification Function                                                                                                                                                                                                                   |
+| :----------------------- | :------------------ | :----------------------------------- | :-------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Liveness**             | `GET /health/live`  | None (In-memory)                     | **~1–3 ms**                                   | Validates HTTP router and serverless proxy. Zero database or native C++ execution.                                                                                                                                                                         |
+| **Readiness**            | `GET /health/ready` | Neon PostgreSQL + Upstash Redis      | **~10–30 ms** (warm; ~2–3s on Neon cold wake) | Validates external network connections and database sockets. Zero native C++ execution.                                                                                                                                                                    |
+| **Native Addon Hashing** | `POST /auth/signup` | Native C++ binary + Linux glibc + DB | **~220–250 ms** (warm)                        | **Empirical Hashing Proof:** Executes `argon2.hash()` to register a new user. Proves native C++ binding on AL2023 and returns HTTP 201 Created.                                                                                                            |
+| **Native Addon Verify**  | `POST /auth/login`  | Native C++ binary + Linux glibc + DB | **~200–220 ms** (warm)                        | **Empirical Verify Proof:** Executes `argon2.verify()`. Requires an email-verified test account (otherwise responds with HTTP 403 "Email not verified"). Proves native C++ execution on AL2023 and returns HTTP 200 with session tokens upon verification. |
 
-Triggered on push to `dev` and pull requests to `main`:
-
-1. Spawns isolated service containers: PostgreSQL 16 Alpine and Redis 8 Alpine.
-2. Installs dependencies via `npm ci` on Node 24.
-3. Executes monorepo typecheck across all workspaces (`npm run typecheck`).
-4. Applies Prisma migrations against the test database (`npm run db:migrate:deploy --workspace=@authsphere/api`). Baseline RBAC roles and permissions are seeded automatically by the test setup lifecycle (`ensureBaselineSeed()`).
-5. Executes the comprehensive test suite across all modules (`npm test`).
-6. Compiles production build artifacts across all workspaces (`npm run build`).
-7. Tests Docker container buildability using Docker Buildx.
-
-### 7.2. Release & Deploy Workflow ([.github/workflows/deploy.yml](../.github/workflows/deploy.yml))
-
-Triggered on push to `main` using a two-stage Directed Acyclic Graph (DAG) with zero test redundancy:
-
-1. **Stage 1 (`validate`):** Executes full monorepo typechecks, Prisma migrations, and test suite verification (`npm test`) on ephemeral test containers.
-2. **Stage 2 (`deploy`, depends on `validate`):**
-   - Assumes AWS IAM deployment role via OpenID Connect (OIDC) (`aws-actions/configure-aws-credentials`).
-   - Resolves load balancer DNS dynamically (`authsphere-alb`) when `DEPLOY_TARGET == 'ecs'`.
-   - **Artifact Creation First:** Builds and pushes container images (`ghcr.io/<owner>/backend:<sha>`) via Buildx and `docker/login-action@v4` for ECS, or compiles the Lambda bundle (`npm run build:lambda`) for serverless. Building artifacts before database migrations prevents broken builds from leaving running tasks on an altered schema.
-   - **Production Database Migrations:** Applies Prisma migrations (`npm run db:migrate:deploy`) against Neon via direct unpooled connection secret (`DATABASE_URL_DIRECT`) immediately prior to compute deployment. Migrations must maintain backward-compatibility with currently running application instances to support zero-downtime rolling ECS updates where old and new tasks overlap.
-   - **Deployment Target Dispatch (`DEPLOY_TARGET` Toggle):**
-     - **Default / Serverless (`DEPLOY_TARGET != 'ecs'`):** Deploys via AWS SAM (`sam deploy`) with parameter overrides targeting AWS Lambda + Function URL (with `AutoPublishAlias: live`), followed by automated liveness and readiness smoke tests.
-     - **Reference Containers (`DEPLOY_TARGET == 'ecs'`):** Renders task definitions with injected image SHAs and updates Amazon ECS Fargate services (`authsphere-api` and `authsphere-worker`), followed by automated ALB smoke tests against `/health/live` and `/health/ready`.
-
----
-
-## 8. Local Development Quickstart
-
-### 8.1. Start Infrastructure
+### 8.2. Verification Commands
 
 ```bash
-# Start local PostgreSQL 16 and Redis 8 containers
+# 1. In-memory router and serverless proxy verification
+curl -i https://<ACTIVE_ENDPOINT>/health/live
+
+# 2. External PostgreSQL and Redis connection verification
+curl -i https://<ACTIVE_ENDPOINT>/health/ready
+
+# 3. Empirically verify native Argon2 password hashing (argon2.hash()) via registration
+# Use a dedicated disposable email address. Dispatches verification email and returns HTTP 201 Created:
+curl -i -X POST https://<ACTIVE_ENDPOINT>/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Probe User","email":"probe-verification-1@example.com","password":"TestPassword123!"}'
+
+# 4. Empirically verify native Argon2 password verification (argon2.verify()) via login
+# NOTE: AuthSphere enforces email verification before granting session access (apps/api/src/modules/auth/auth.service.ts).
+# - If invoked with an unverified account: executes argon2.verify() successfully, but returns HTTP 403 "Email not verified".
+# - If invoked with an already-verified test account (or after completing verification): returns HTTP 200 OK with session tokens.
+curl -i -X POST https://<ACTIVE_ENDPOINT>/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"probe-verification-1@example.com","password":"TestPassword123!"}'
+
+# 5. Verify atomic Upstash Redis rate limiting and quota enforcement
+# Loops requests while inspecting response headers to observe decreasing RateLimit-Remaining values and eventual HTTP 429:
+for i in {1..105}; do
+  curl -s -D - -o /dev/null https://<ACTIVE_ENDPOINT>/openapi.json | grep -E "(HTTP\/|ratelimit-remaining)"
+done
+# Confirms HTTP 200 with decreasing ratelimit-remaining, transitioning to HTTP 429 Too Many Requests upon limit exhaustion
+```
+
+### 8.3. Unified Environment Variables Reference
+
+#### Plaintext Runtime Configuration:
+
+| Variable                            | Location                        | Default / Value                  | Description                                                             |
+| :---------------------------------- | :------------------------------ | :------------------------------- | :---------------------------------------------------------------------- |
+| `NODE_ENV`                          | Task Def / SAM Globals          | `production`                     | Application mode (`development`, `production`, `test`)                  |
+| `APP_ROLE`                          | Task Def / SAM Globals          | `api`                            | Process role (`api` or `worker`)                                        |
+| `QUEUE_DRIVER`                      | Task Def / SAM Globals          | `sync` (Lambda) / `inline` (ECS) | Delivery mode (`sync` serverless, `inline` container, `bullmq` worker)  |
+| `PORT`                              | Task Def / Not needed on Lambda | `3000`                           | HTTP listening port (Lambda executes in-process via serverless adapter) |
+| `HOST`                              | Task Def / SAM Globals          | `0.0.0.0`                        | API listening host binding                                              |
+| `TRUST_PROXY`                       | Task Def / SAM Globals          | `1` (Lambda) / `2` (ECS)         | Proxy hops: 1 for Vercel -> Lambda, 2 for Vercel -> ALB -> Container    |
+| `DATABASE_POOL_MAX`                 | Task Def / SAM Globals          | `2` (Lambda) / `10` (ECS)        | PostgreSQL pool upper ceiling per compute instance                      |
+| `JWT_ACCESS_EXPIRES_IN`             | Task Def / SAM Globals          | `15m`                            | Access token expiration duration                                        |
+| `JWT_REFRESH_EXPIRES_IN`            | Task Def / SAM Globals          | `30d`                            | Refresh token expiration duration                                       |
+| `AUTH_REUSE_DELETION_MODE`          | Task Def / SAM Globals          | `SESSION`                        | Compromised refresh token policy (`SESSION` or `GLOBAL`)                |
+| `AUTH_REFRESH_TOKEN_LEEWAY_SECONDS` | Task Def / SAM Globals          | `30`                             | Concurrent multi-tab rotation leeway window (seconds)                   |
+| `EMAIL_PROVIDER`                    | SAM Variable / SSM Parameter    | `gmail` / `resend`               | Active email provider strategy                                          |
+
+#### Sensitive Secrets & Service Credentials:
+
+| Variable                  | Primary Serverless (Lambda)          | Reference Containers (ECS)                     | Description                                             |
+| :------------------------ | :----------------------------------- | :--------------------------------------------- | :------------------------------------------------------ |
+| `DATABASE_URL_DIRECT`     | GitHub Secret `DATABASE_URL_DIRECT`  | GitHub Secret `DATABASE_URL_DIRECT`            | Direct unpooled Neon URL (strictly for CI migrations)   |
+| `DATABASE_URL`            | SAM Parameter (`NoEcho`) from Secret | SSM `/authsphere/prod/DATABASE_URL`            | Pooled Neon PostgreSQL connection URL (`-pooler`)       |
+| `REDIS_URL`               | SAM Parameter (`NoEcho`) from Secret | SSM `/authsphere/prod/REDIS_URL`               | Upstash Redis connection URL (`rediss://...`)           |
+| `FRONTEND_URL`            | SAM Parameter from Variable          | SSM `/authsphere/prod/FRONTEND_URL`            | Hosted frontend origin (`https://<PROJECT>.vercel.app`) |
+| `JWT_ACCESS_SECRET`       | SAM Parameter (`NoEcho`) from Secret | SSM `/authsphere/prod/JWT_ACCESS_SECRET`       | Signing secret for access JWTs (32+ chars)              |
+| `JWT_REFRESH_SECRET`      | SAM Parameter (`NoEcho`) from Secret | SSM `/authsphere/prod/JWT_REFRESH_SECRET`      | Signing secret for refresh JWTs (32+ chars)             |
+| `MFA_ENCRYPTION_KEY`      | SAM Parameter (`NoEcho`) from Secret | SSM `/authsphere/prod/MFA_ENCRYPTION_KEY`      | 32-byte key for AES-256-GCM TOTP secret encryption      |
+| `GMAIL_USER`              | SAM Parameter / Optional             | SSM `/authsphere/prod/GMAIL_USER`              | Sender Gmail address for OAuth2 sending                 |
+| `GMAIL_REFRESH_TOKEN`     | SAM Parameter (`NoEcho`) / Optional  | SSM `/authsphere/prod/GMAIL_REFRESH_TOKEN`     | Gmail OAuth2 refresh token                              |
+| `RESEND_API_KEY`          | SAM Parameter (`NoEcho`) / Optional  | SSM `/authsphere/prod/RESEND_API_KEY`          | Resend API key                                          |
+| `EMAIL_FROM`              | SAM Parameter / Optional             | SSM `/authsphere/prod/EMAIL_FROM`              | Sender identity string (`AuthSphere <noreply@...>`)     |
+| `GOOGLE_CLIENT_ID`        | SAM Parameter / Optional             | SSM `/authsphere/prod/GOOGLE_CLIENT_ID`        | Google OAuth Client ID                                  |
+| `GOOGLE_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional  | SSM `/authsphere/prod/GOOGLE_CLIENT_SECRET`    | Google OAuth Client Secret                              |
+| `GITHUB_CLIENT_ID`        | SAM Parameter / Optional             | SSM `/authsphere/prod/GITHUB_CLIENT_ID`        | GitHub OAuth Client ID                                  |
+| `GITHUB_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional  | SSM `/authsphere/prod/GITHUB_CLIENT_SECRET`    | GitHub OAuth Client Secret                              |
+| `OAUTH_CALLBACK_BASE_URL` | SAM Parameter / Optional             | SSM `/authsphere/prod/OAUTH_CALLBACK_BASE_URL` | OAuth callback base URL routed via Vercel               |
+
+#### Frontend & Edge Reverse Proxy Configuration:
+
+| Variable       | Target Location                                 | Description                                                                                                                                                  |
+| :------------- | :---------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BACKEND_URL`  | Vercel Project Settings → Environment Variables | Live backend base URL without trailing slash (`https://<LAMBDA_URL>` or `http://<ALB_DNS>`). Used server-side by `apps/web/vercel.ts` for Edge rewrites.     |
+| `VITE_API_URL` | `apps/web/.env` / Vercel Environment Variables  | Web client API base URL. **Leave empty** in production to route through Vercel's same-origin proxy (`/api/*`), preserving HttpOnly cookies and zeroing CORS. |
+
+---
+
+## 9. Local Development Quickstart
+
+### 9.1. Start Infrastructure & Environment
+
+```bash
+# 1. Start local PostgreSQL 16 and Redis 8 service containers
 docker compose -f docker/docker-compose.dev.yml up -d
-```
 
-_(Alternatively, configure `DATABASE_URL` and `REDIS_URL` in `apps/api/.env` to point to existing local instances or cloud services)._
-
-### 8.2. Configure Environment Files
-
-```bash
+# 2. Copy environment templates
 cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env
 ```
 
-### 8.3. Database Migrations & Initial Seeding
+### 9.2. Database Migrations & Initial Seeding
 
 ```bash
-# Apply schema migrations to local database
+# 1. Apply schema migrations to local database
 npm run db:migrate:deploy --workspace=@authsphere/api
 
-# Seed baseline system roles (USER, ADMIN) and permissions
+# 2. Seed baseline system roles (USER, ADMIN) and permissions
 npm run db:seed --workspace=@authsphere/api
 ```
 
-### 8.4. Start Development Servers
+### 9.3. Start Development Servers
 
 ```bash
 # 1. Start Express REST API (port 3000)

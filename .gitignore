@@ -54,3 +54,6 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Private architectural playbooks & study guides
+playbooks/
