@@ -17,7 +17,11 @@ import {
 import { googleOAuthProvider } from "./google.provider.js";
 import { githubOAuthProvider } from "./github.provider.js";
 import type { AuthTokens } from "../auth.types.js";
-import type { OAuthProviderStrategy, OAuthStateData } from "./oauth.types.js";
+import type {
+  OAuthProviderStrategy,
+  OAuthStateData,
+  OAuthProfile,
+} from "./oauth.types.js";
 
 const OAUTH_STATE_PREFIX = "oauth:state:";
 const OAUTH_STATE_TTL_SECONDS = 600; // 10 minutes
@@ -45,6 +49,7 @@ const getOAuthStrategy = (
 export const createOAuthState = async (
   provider: OAuthProviderName,
   userId?: string,
+  sessionId?: string,
 ): Promise<string> => {
   const state = crypto.randomBytes(32).toString("hex");
   const key = `${OAUTH_STATE_PREFIX}${state}`;
@@ -52,6 +57,7 @@ export const createOAuthState = async (
   const payload: OAuthStateData = {
     provider,
     ...(userId && { userId }),
+    ...(sessionId && { sessionId }),
   };
 
   await redis.set(key, JSON.stringify(payload), "EX", OAUTH_STATE_TTL_SECONDS);
@@ -103,12 +109,14 @@ export const consumeOAuthState = async (
 export const initiateOAuth = async (
   provider: OAuthProviderName,
   userId?: string,
-): Promise<string> => {
-  const state = await createOAuthState(provider, userId);
+  sessionId?: string,
+  codeChallenge?: string,
+): Promise<{ redirectUrl: string; state: string }> => {
+  const state = await createOAuthState(provider, userId, sessionId);
   const strategy = getOAuthStrategy(provider);
-  const authUrl = await strategy.getAuthorizationUrl(state);
+  const authUrl = await strategy.getAuthorizationUrl(state, codeChallenge);
 
-  return authUrl.toString();
+  return { redirectUrl: authUrl.toString(), state };
 };
 
 /**
@@ -121,6 +129,7 @@ export const handleOAuthCallback = async (
   state: string,
   ipAddress: string,
   userAgent?: string,
+  codeVerifier?: string,
 ): Promise<
   | { mfaRequired: false; tokens: AuthTokens }
   | { mfaRequired: true; mfaToken: string }
@@ -132,13 +141,66 @@ export const handleOAuthCallback = async (
   // 1. Atomically consume & verify state parameter from Redis
   const stateData = await consumeOAuthState(state, provider);
 
-  // 2. Fetch normalized profile from provider strategy
+  // 2. Fetch normalized profile from provider strategy with a shared 7-second abort deadline
   const strategy = getOAuthStrategy(provider);
-  const profile = await strategy.getUserProfile(code);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 7000);
+
+  let profile: OAuthProfile;
+  try {
+    profile = await strategy.getUserProfile(
+      code,
+      codeVerifier,
+      controller.signal,
+    );
+  } catch (error: unknown) {
+    if (controller.signal.aborted) {
+      throw new AppError(
+        `Timeout while communicating with ${provider} OAuth provider`,
+        504,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const prismaProvider = provider as OAuthProvider;
 
-  // 3. Query existing OAuthAccount
+  // 3. Pre-Resolution Session Revalidation for In-Session Flows
+  // If the flow was initiated by an authenticated user, verify the initiating session
+  // is still valid, unexpired, and owned by that user BEFORE evaluating identity resolution.
+  let authenticatedSessionUser: {
+    id: string;
+    role: { name: RoleName };
+    mfaEnabled: boolean;
+  } | null = null;
+
+  if (stateData.userId) {
+    if (!stateData.sessionId) {
+      throw new AppError(
+        "Initiating session is invalid, expired, or revoked",
+        401,
+      );
+    }
+
+    const session = await authRepository.findSessionById(stateData.sessionId);
+    if (
+      !session ||
+      session.userId !== stateData.userId ||
+      session.expiresAt <= new Date() ||
+      !session.user
+    ) {
+      throw new AppError(
+        "Initiating session is invalid, expired, or revoked",
+        401,
+      );
+    }
+
+    authenticatedSessionUser = session.user;
+  }
+
+  // 4. Query existing OAuthAccount
   const existingOAuthAccount = await authRepository.findOAuthAccount(
     prismaProvider,
     profile.providerId,
@@ -160,20 +222,15 @@ export const handleOAuthCallback = async (
     }
 
     userToAuthenticate = existingOAuthAccount.user;
-  } else if (stateData.userId) {
+  } else if (stateData.userId && authenticatedSessionUser) {
     // Case B1: Explicit Account-Linking for authenticated user
-    const user = await authRepository.findUserById(stateData.userId);
-    if (!user) {
-      throw new AppError("User account not found for linking", 404);
-    }
-
     await authRepository.createOAuthAccount(
-      user.id,
+      authenticatedSessionUser.id,
       prismaProvider,
       profile.providerId,
     );
 
-    userToAuthenticate = user;
+    userToAuthenticate = authenticatedSessionUser;
   } else {
     // Case B2: Unauthenticated OAuth Login / Signup Flow
     const existingUserByEmail = await authRepository.findUserByEmailWithRole(

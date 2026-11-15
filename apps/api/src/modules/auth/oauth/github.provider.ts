@@ -48,7 +48,10 @@ export class GitHubOAuthProvider implements OAuthProviderStrategy {
     };
   }
 
-  public async getAuthorizationUrl(state: string): Promise<URL> {
+  public async getAuthorizationUrl(
+    state: string,
+    codeChallenge?: string,
+  ): Promise<URL> {
     const { clientId } = this.validateConfig();
 
     const url = new URL(GITHUB_AUTH_URL);
@@ -57,15 +60,35 @@ export class GitHubOAuthProvider implements OAuthProviderStrategy {
     url.searchParams.set("scope", "read:user user:email");
     url.searchParams.set("state", state);
 
+    if (codeChallenge) {
+      url.searchParams.set("code_challenge", codeChallenge);
+      url.searchParams.set("code_challenge_method", "S256");
+    }
+
     return url;
   }
 
-  public async getUserProfile(code: string): Promise<OAuthProfile> {
+  public async getUserProfile(
+    code: string,
+    codeVerifier?: string,
+    signal?: AbortSignal,
+  ): Promise<OAuthProfile> {
     const { clientId, clientSecret } = this.validateConfig();
 
     // Defense-in-depth: Validate authorization code independently of caller
     if (!code || typeof code !== "string" || code.trim().length === 0) {
       throw new AppError("Missing or invalid GitHub authorization code", 400);
+    }
+
+    const tokenParams: Record<string, string> = {
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: this.getRedirectUri(),
+    };
+
+    if (codeVerifier) {
+      tokenParams.code_verifier = codeVerifier;
     }
 
     // 1. Exchange authorization code for GitHub access token
@@ -75,12 +98,8 @@ export class GitHubOAuthProvider implements OAuthProviderStrategy {
         "Content-Type": "application/x-www-form-urlencoded",
         Accept: "application/json",
       },
-      body: new URLSearchParams({
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: this.getRedirectUri(),
-      }).toString(),
+      body: new URLSearchParams(tokenParams).toString(),
+      signal: signal ?? null,
     });
 
     if (!tokenResponse.ok) {
@@ -116,6 +135,7 @@ export class GitHubOAuthProvider implements OAuthProviderStrategy {
     // 2. Fetch User Profile from GitHub API
     const userResponse = await fetch(GITHUB_USER_URL, {
       headers: authHeaders,
+      signal: signal ?? null,
     });
 
     if (!userResponse.ok) {
@@ -140,6 +160,7 @@ export class GitHubOAuthProvider implements OAuthProviderStrategy {
 
     const emailsResponse = await fetch(GITHUB_EMAILS_URL, {
       headers: authHeaders,
+      signal: signal ?? null,
     });
 
     if (emailsResponse.ok) {

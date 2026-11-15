@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import request from "supertest";
 import {
   getTestApp,
@@ -8,6 +8,8 @@ import {
   formatCookieHeader,
 } from "../helpers/index.js";
 import { generateSync } from "otplib";
+import { googleOAuthProvider } from "../../src/modules/auth/oauth/google.provider.js";
+import { githubOAuthProvider } from "../../src/modules/auth/oauth/github.provider.js";
 
 describe("E2E Journey — Auth Lifecycles", () => {
   const app = getTestApp();
@@ -207,5 +209,139 @@ describe("E2E Journey — Auth Lifecycles", () => {
       .post("/auth/login")
       .send({ email, password: newPassword });
     expect(newLogin.status).toBe(200);
+  });
+
+  it("Journey 4: OAuth Lifecycle — PKCE Initiation → Login-CSRF Defense → Social Authentication & Profile Access", async () => {
+    const providerId = `google-e2e-${Date.now()}`;
+    const email = `e2e-oauth-${Date.now()}@authsphere.test`;
+
+    // 1. Initiate OAuth flow
+    const initRes = await request(app).get("/auth/oauth/google");
+    expect(initRes.status).toBe(302);
+    expect(initRes.headers.location).toContain("accounts.google.com");
+
+    const redirectUrl = new URL(initRes.headers.location);
+    const state = redirectUrl.searchParams.get("state")!;
+    expect(state).toBeDefined();
+    expect(redirectUrl.searchParams.get("code_challenge")).toBeDefined();
+    expect(redirectUrl.searchParams.get("code_challenge_method")).toBe("S256");
+
+    // Verify browser-bound PKCE cookie was set
+    const setCookie = initRes.headers["set-cookie"];
+    expect(setCookie).toBeDefined();
+    const cookieHeader = Array.isArray(setCookie) ? setCookie : [setCookie];
+    const verifierCookie = cookieHeader.find((c) =>
+      c.startsWith(`oauth_verifier_${state}=`),
+    );
+    expect(verifierCookie).toBeDefined();
+    expect(verifierCookie).toContain("HttpOnly");
+    expect(verifierCookie).toContain("Path=/api/auth/oauth");
+
+    const [verifierNameVal] = verifierCookie!.split(";");
+
+    // 2. Security Invariant: Attack without initiating browser's cookie fails (Login CSRF)
+    const attackRes = await request(app).get(
+      `/auth/oauth/google/callback?code=mock-code&state=${state}`,
+    );
+    expect(attackRes.status).toBe(400);
+    expect(attackRes.body.message).toContain("transaction cookie");
+
+    // 3. Mock upstream profile resolution
+    vi.spyOn(googleOAuthProvider, "getUserProfile").mockResolvedValue({
+      providerId,
+      email,
+      firstName: "OAuth",
+      lastName: "User",
+      avatarUrl: null,
+    });
+
+    // 4. Valid callback with transaction cookie completes authentication
+    const callbackRes = await request(app)
+      .get(`/auth/oauth/google/callback?code=mock-code&state=${state}`)
+      .set("Cookie", verifierNameVal);
+    expect(callbackRes.status).toBe(200);
+
+    const authCookies = getAuthCookies(callbackRes);
+    expect(authCookies.accessToken).toBeDefined();
+    expect(authCookies.refreshToken).toBeDefined();
+
+    // 5. Access protected profile /auth/me with issued session
+    const meRes = await request(app)
+      .get("/auth/me")
+      .set("Cookie", formatCookieHeader(authCookies));
+    expect(meRes.status).toBe(200);
+    expect(meRes.body.data.email).toBe(email);
+
+    // 6. Security Invariant: Replay of consumed state fails immediately
+    const replayRes = await request(app)
+      .get(`/auth/oauth/google/callback?code=mock-code&state=${state}`)
+      .set("Cookie", verifierNameVal);
+    expect(replayRes.status).toBe(400);
+  });
+
+  it("Journey 5: Concurrent Multi-Tab OAuth Flows — Per-Transaction PKCE Isolation & Cross-Tab Collision Defense", async () => {
+    // 1. Tab 1 initiates Google flow
+    const tab1Init = await request(app).get("/auth/oauth/google");
+    expect(tab1Init.status).toBe(302);
+    const tab1Url = new URL(tab1Init.headers.location);
+    const state1 = tab1Url.searchParams.get("state")!;
+    const cookie1Header = tab1Init.headers["set-cookie"]!;
+    const verifier1Cookie = (
+      Array.isArray(cookie1Header) ? cookie1Header : [cookie1Header]
+    ).find((c) => c.startsWith(`oauth_verifier_${state1}=`))!;
+    const [cookie1Val] = verifier1Cookie.split(";");
+
+    // 2. Tab 2 initiates GitHub flow concurrently
+    const tab2Init = await request(app).get("/auth/oauth/github");
+    expect(tab2Init.status).toBe(302);
+    const tab2Url = new URL(tab2Init.headers.location);
+    const state2 = tab2Url.searchParams.get("state")!;
+    const cookie2Header = tab2Init.headers["set-cookie"]!;
+    const verifier2Cookie = (
+      Array.isArray(cookie2Header) ? cookie2Header : [cookie2Header]
+    ).find((c) => c.startsWith(`oauth_verifier_${state2}=`))!;
+    const [cookie2Val] = verifier2Cookie.split(";");
+
+    // Assert states and cookie names are isolated per transaction
+    expect(state1).not.toBe(state2);
+    expect(cookie1Val).toContain(`oauth_verifier_${state1}`);
+    expect(cookie2Val).toContain(`oauth_verifier_${state2}`);
+
+    // 3. Security Invariant: Cross-Tab Attack — Callback for Tab 1 carrying only Tab 2's cookie fails
+    const crossTabRes = await request(app)
+      .get(`/auth/oauth/google/callback?code=code-tab-1&state=${state1}`)
+      .set("Cookie", cookie2Val);
+    expect(crossTabRes.status).toBe(400);
+    expect(crossTabRes.body.message).toContain("transaction cookie");
+
+    // 4. Mock upstream profile resolutions
+    const email1 = `tab1-user-${Date.now()}@authsphere.test`;
+    const email2 = `tab2-user-${Date.now()}@authsphere.test`;
+    vi.spyOn(googleOAuthProvider, "getUserProfile").mockResolvedValue({
+      providerId: `google-tab1-${Date.now()}`,
+      email: email1,
+      firstName: "Tab1",
+      lastName: "Google",
+      avatarUrl: null,
+    });
+    vi.spyOn(githubOAuthProvider, "getUserProfile").mockResolvedValue({
+      providerId: `github-tab2-${Date.now()}`,
+      email: email2,
+      firstName: "Tab2",
+      lastName: "GitHub",
+      avatarUrl: null,
+    });
+
+    // 5. Tab 1 completes callback with its own cookie
+    const tab1Callback = await request(app)
+      .get(`/auth/oauth/google/callback?code=code-tab-1&state=${state1}`)
+      .set("Cookie", cookie1Val);
+    expect(tab1Callback.status).toBe(200);
+
+    // 6. Tab 2 completes callback with its own cookie (unaffected by Tab 1 completion)
+    const tab2Callback = await request(app)
+      .get(`/auth/oauth/github/callback?code=code-tab-2&state=${state2}`)
+      .set("Cookie", cookie2Val);
+    expect(tab2Callback.status).toBe(200);
   });
 });
