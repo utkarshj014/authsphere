@@ -1,13 +1,8 @@
 import { Pool, type PoolConfig } from "pg";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../generated/prisma/client.js";
-import { env } from "../config/env.js";
+import { env, isLambdaRuntime } from "../config/env.js";
 import { logger } from "./logger.js";
-
-// Detect if executing inside an AWS Lambda serverless microVM
-const isLambdaRuntime = Boolean(
-  process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT,
-);
 
 const poolConfig: PoolConfig = {
   connectionString: env.DATABASE_URL,

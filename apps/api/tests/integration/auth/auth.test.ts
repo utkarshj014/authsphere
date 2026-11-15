@@ -614,6 +614,154 @@ describe("Auth Service — Core Integration Suite", () => {
       expect(leewayHit.accessToken).toBe(rotated.accessToken);
     });
 
+    it("concurrent refresh requests with the same token resolve cleanly via CAS and leeway cache", async () => {
+      const { user, password } = await createVerifiedUser();
+      const loginResult = await authService.login(
+        { email: user.email, password },
+        "127.0.0.1",
+      );
+
+      if (loginResult.mfaRequired) throw new Error("MFA not expected");
+      const currentRefreshToken = loginResult.tokens.refreshToken;
+
+      // Simulate simultaneous client refresh exchanges (e.g. multi-tab SPA initialization)
+      const [res1, res2] = await Promise.all([
+        authService.refreshToken("127.0.0.1", "Browser-Tab-1", currentRefreshToken),
+        authService.refreshToken("127.0.0.1", "Browser-Tab-2", currentRefreshToken),
+      ]);
+
+      // Both concurrent requests must succeed without throwing UnauthorizedError
+      expect(res1.accessToken).toBeDefined();
+      expect(res2.accessToken).toBeDefined();
+      expect(res1.refreshToken).toBeDefined();
+      expect(res2.refreshToken).toBeDefined();
+
+      // One request wins CAS and seeds the leeway cache; the concurrent request resolves from the leeway cache
+      expect(res1.refreshToken).toBe(res2.refreshToken);
+      expect(res1.accessToken).toBe(res2.accessToken);
+
+      // Verify the database session persists with the newly rotated token hash
+      const session = await prisma.session.findFirst({
+        where: { userId: user.id },
+      });
+      expect(session).toBeDefined();
+      expect(session!.tokenHash).toBe(hashToken(res1.refreshToken));
+    });
+
+    it("deterministic race: pauses winner after CAS until loser checks cache, then resolves cleanly via bounded retry", async () => {
+      const { user, password } = await createVerifiedUser();
+      const loginResult = await authService.login(
+        { email: user.email, password },
+        "127.0.0.1",
+      );
+
+      if (loginResult.mfaRequired) throw new Error("MFA not expected");
+      const currentRefreshToken = loginResult.tokens.refreshToken;
+
+      // Synchronization primitives to orchestrate deterministic interleaving
+      let releaseWinner: () => void;
+      const winnerPaused = new Promise<void>((resolve) => {
+        releaseWinner = resolve;
+      });
+
+      let loserReachedFirstCacheCheck: () => void;
+      const loserAtCache = new Promise<void>((resolve) => {
+        loserReachedFirstCacheCheck = resolve;
+      });
+
+      let winnerStartedPublishing = false;
+      const originalRedisSet = redis.set.bind(redis);
+      const originalRedisGet = redis.get.bind(redis);
+
+      vi.spyOn(redis, "set").mockImplementation(async (...args: unknown[]) => {
+        winnerStartedPublishing = true;
+        await winnerPaused;
+        // @ts-expect-error ioredis overloaded call
+        return originalRedisSet(...args);
+      });
+
+      vi.spyOn(redis, "get").mockImplementation(async (...args: unknown[]) => {
+        // @ts-expect-error ioredis overloaded call
+        const val = await originalRedisGet(...args);
+        if (winnerStartedPublishing && val === null) {
+          loserReachedFirstCacheCheck();
+        }
+        return val;
+      });
+
+      try {
+        const winnerPromise = authService.refreshToken(
+          "127.0.0.1",
+          "Winner-Agent",
+          currentRefreshToken,
+        );
+
+        const loserPromise = (async () => {
+          await new Promise((r) => setTimeout(r, 10));
+          return authService.refreshToken(
+            "127.0.0.1",
+            "Loser-Agent",
+            currentRefreshToken,
+          );
+        })();
+
+        await loserAtCache;
+        releaseWinner!();
+
+        const [winnerRes, loserRes] = await Promise.all([winnerPromise, loserPromise]);
+
+        expect(winnerRes.accessToken).toBeDefined();
+        expect(loserRes.accessToken).toBeDefined();
+        expect(loserRes.refreshToken).toBe(winnerRes.refreshToken);
+        expect(loserRes.accessToken).toBe(winnerRes.accessToken);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("redis-unavailable path: when Redis fails, loser cannot retrieve cached tokens and triggers session revocation", async () => {
+      const { user, password } = await createVerifiedUser();
+      const loginResult = await authService.login(
+        { email: user.email, password },
+        "127.0.0.1",
+      );
+
+      if (loginResult.mfaRequired) throw new Error("MFA not expected");
+      const currentRefreshToken = loginResult.tokens.refreshToken;
+
+      // Simulate Redis failures
+      vi.spyOn(redis, "get").mockRejectedValue(new Error("Redis connection refused"));
+      vi.spyOn(redis, "set").mockRejectedValue(new Error("Redis connection refused"));
+
+      try {
+        // Winner executes: PostgreSQL CAS succeeds, but setLeewayCache fails silently
+        const winnerTokens = await authService.refreshToken(
+          "127.0.0.1",
+          "Winner-Agent",
+          currentRefreshToken,
+        );
+        expect(winnerTokens.refreshToken).toBeDefined();
+
+        // Loser presents consumed token: CAS fails, leeway cache lookup fails (Redis down),
+        // bounded retry fails, session is revoked due to presumed replay
+        await expect(
+          authService.refreshToken(
+            "127.0.0.1",
+            "Loser-Agent",
+            currentRefreshToken,
+          ),
+        ).rejects.toThrowError(UnauthorizedError);
+
+        // Verify session was revoked in database
+        const session = await prisma.session.findFirst({
+          where: { userId: user.id },
+        });
+        expect(session).toBeNull();
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+
     it("token reuse detected outside leeway window → revokes session and throws 401", async () => {
       const { user, password } = await createVerifiedUser();
       const loginResult = await authService.login(

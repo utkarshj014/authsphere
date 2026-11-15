@@ -356,7 +356,7 @@ If MFA is disabled (or during in-session account linking):
 2. **Generates JWT Tokens:**
    - **Access Token:** 15-minute validity containing claims `{ sub, sid, role, permissions }`.
    - **Refresh Token:** 30-day validity containing claims `{ sub, sid, role }`.
-3. **Sets HttpOnly Cookies:** Sets `accessToken` on path `/` and `refreshToken` on path `/auth` (`httpOnly: true`, `secure: true` in production, `sameSite: "lax"`).
+3. **Sets HttpOnly Cookies:** Sets both `accessToken` and `refreshToken` on root path `/` for edge reverse-proxy compatibility (`httpOnly: true`, `secure: true` in production, `sameSite: "lax"`, per ADR-079).
 4. **Records Audit Event:** Records an `OAUTH_LOGIN` security event with metadata `{ provider }`.
 5. **Returns Success:** Responds with HTTP `200 OK` and message `"Authenticated successfully via <Provider> OAuth"`.
 
@@ -499,14 +499,7 @@ apps/api/src/
 > **Operational Endpoint Paths:**
 >
 > - **Public Edge URL (Browser / Vercel Proxy):** `https://<PUBLIC_DOMAIN>/api/auth/oauth/...` (evaluates against cookie `Path=/api/auth/oauth`).
-> - **Direct Backend Testing (Local Express):** `http://localhost:4000/auth/oauth/...` (bypasses reverse-proxy `/api` prefix strip).
->
-> The examples below test the browser-facing public edge URL (`/api/auth/oauth/...`) so that transaction cookies scoped to `Path=/api/auth/oauth` are matched and delivered.
-
-> **Operational Endpoint Paths:**
->
-> - **Public Edge URL (Browser / Vercel Proxy):** `https://<PUBLIC_DOMAIN>/api/auth/oauth/...` (evaluates against cookie `Path=/api/auth/oauth`).
-> - **Direct Backend Testing (Local Express):** `http://localhost:4000/auth/oauth/...` (bypasses reverse-proxy `/api` prefix strip).
+> - **Direct Backend Testing (Local Express):** `http://localhost:3000/auth/oauth/...` (bypasses reverse-proxy `/api` prefix strip).
 >
 > The examples below test the browser-facing public edge URL (`/api/auth/oauth/...`) so that transaction cookies scoped to `Path=/api/auth/oauth` are matched and delivered.
 
@@ -560,15 +553,30 @@ To verify in-session account linking:
 
 ### 9.4. Browser-Bound PKCE Verification
 
-Verify that the callback enforces the presence of the initiating browser's transaction cookie:
+Verify that the callback enforces the presence of the initiating browser's transaction cookie and isolates concurrent flows:
 
 ```bash
-# Attempt callback with valid state format but without the corresponding HttpOnly cookie (simulating a victim browser)
+# 1. Missing Cookie Test (Simulating cross-browser code redemption or victim browser without cookie)
+# Attempt callback with valid state format but without the corresponding HttpOnly cookie:
 curl -i -X GET "https://<PUBLIC_DOMAIN>/api/auth/oauth/google/callback?code=mock-code&state=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 # Expected Response:
 # HTTP/1.1 400 Bad Request
 # {"success":false,"message":"Missing or expired OAuth transaction cookie"}
+```
+
+```bash
+# 2. Cross-Browser Replay Test
+# Obtain valid callback URL and cookie from Browser Profile A. Attempt to redeem the callback in Browser Profile B (different jar):
+# Profile B lacks oauth_verifier_<state> -> Fails immediately with HTTP 400 Bad Request.
+```
+
+```bash
+# 3. Concurrent Multi-Tab Isolation Test
+# Open two simultaneous flows in separate browser tabs:
+# Tab 1 -> GET /api/auth/oauth/google -> receives Set-Cookie: oauth_verifier_<state_1>
+# Tab 2 -> GET /api/auth/oauth/google -> receives Set-Cookie: oauth_verifier_<state_2>
+# Both cookies coexist under distinct names without collisions; completing Tab 1 leaves Tab 2's cookie intact.
 ```
 
 ---
@@ -577,8 +585,16 @@ curl -i -X GET "https://<PUBLIC_DOMAIN>/api/auth/oauth/google/callback?code=mock
 
 AuthSphere's OAuth implementation is governed by formal Architectural Decision Records in [Engineering-Decisions.md](Engineering-Decisions.md):
 
+- [ADR-032: Social Login Account Guarding](Engineering-Decisions.md#adr-032--social-login-account-guarding) — Guarded social login accounts without local passwords from direct password authentication and password reset mutations.
 - [ADR-059: Provider-Agnostic OAuth 2.0 Strategy Pattern](Engineering-Decisions.md#adr-059--provider-agnostic-oauth-20-strategy-pattern) — Established strategy pattern abstraction for identity providers.
 - [ADR-060: Redis-Backed Ephemeral OAuth State with Atomic Single-Use Invalidation](Engineering-Decisions.md#adr-060--redis-backed-ephemeral-oauth-state-with-atomic-single-use-invalidation) — Codified 32-byte crypto state tokens and atomic `GETDEL` consumption.
 - [ADR-061: Strict Conflict-Guarded OAuth Identity Resolution Workflow](Engineering-Decisions.md#adr-061--strict-conflict-guarded-oauth-identity-resolution-workflow) — Mandated strict 409 conflict responses on email collisions to prevent pre-hijacking account takeover.
 - [ADR-062: Verified Email Enforcement for Social Identity Providers](Engineering-Decisions.md#adr-062--verified-email-enforcement-for-social-identity-providers) — Required verified email enforcement and secondary `/user/emails` query on GitHub.
 - [ADR-063: Higher-Order Controller Factories for Provider-Agnostic OAuth Handlers](Engineering-Decisions.md#adr-063--higher-order-controller-factories-for-provider-agnostic-oauth-handlers) — Adopted higher-order factory functions for DRY, type-safe route controllers.
+- [ADR-066: Multi-Tier Rate Limiting for OAuth Callbacks and Passwordless Magic Links](Engineering-Decisions.md#adr-066--multi-tier-rate-limiting-for-oauth-callbacks-and-passwordless-magic-links) — Enforced dedicated IP rate limiting on OAuth initiation and callback endpoints.
+- [ADR-079: Serverless Lambda Runtime, Synchronous Execution Guard, and Reverse-Proxy Cookie Bridge](Engineering-Decisions.md#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge) — Codified root-scoped authentication cookies for reverse-proxy edge traversal.
+- [ADR-080: Browser-Bound PKCE (RFC 7636 / RFC 9700) and Per-Transaction Cookie Architecture](Engineering-Decisions.md#adr-080--browser-bound-pkce-rfc-7636--rfc-9700-and-per-transaction-cookie-architecture) — Mandated PKCE with S256 challenges and per-transaction HttpOnly verifier cookies.
+- [ADR-081: Cumulative Upstream Provider Abort Deadline and Gateway Timeout Mapping](Engineering-Decisions.md#adr-081--cumulative-upstream-provider-abort-deadline-and-gateway-timeout-mapping) — Implemented cumulative 7-second abort deadline mapped to HTTP 504 Gateway Timeout.
+- [ADR-082: Pre-Resolution Session Gate for Authenticated Account Linking](Engineering-Decisions.md#adr-082--pre-resolution-session-gate-for-authenticated-account-linking) — Enforced database session revalidation prior to identity resolution for account linking.
+- [ADR-085: Code-First Edge Reverse Proxy Configuration via `@vercel/config/v1`](Engineering-Decisions.md#adr-085--code-first-edge-reverse-proxy-configuration-via-vercelconfigv1) — Documented dynamic edge rewrite `/api/auth/oauth/(.*)` to backend infrastructure.
+- [ADR-086: Development-to-Production Reverse Proxy Parity via Vite Local Server](Engineering-Decisions.md#adr-086--development-to-production-reverse-proxy-parity-via-vite-local-server) — Ensured identical `/api` routing and cookie transport in local development.

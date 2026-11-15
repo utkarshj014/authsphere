@@ -39,3 +39,38 @@ export const clearAuthCookies = (res: Response) => {
   res.clearCookie("accessToken", clearAccessOptions);
   res.clearCookie("refreshToken", clearRefreshOptions);
 };
+
+export const OAUTH_VERIFIER_COOKIE_PREFIX = "oauth_verifier_";
+export const OAUTH_VERIFIER_COOKIE_PATH = "/api/auth/oauth";
+export const OAUTH_VERIFIER_COOKIE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
+
+export const getOAuthVerifierCookieName = (state: string): string =>
+  `${OAUTH_VERIFIER_COOKIE_PREFIX}${state}`;
+
+export const oauthVerifierCookieOptions: CookieOptions = {
+  path: OAUTH_VERIFIER_COOKIE_PATH,
+  httpOnly: true,
+  secure: env.NODE_ENV === "production",
+  sameSite: "lax",
+  maxAge: OAUTH_VERIFIER_COOKIE_MAX_AGE_MS,
+};
+
+export const setOAuthVerifierCookie = (
+  res: Response,
+  state: string,
+  verifier: string,
+): void => {
+  res.cookie(
+    getOAuthVerifierCookieName(state),
+    verifier,
+    oauthVerifierCookieOptions,
+  );
+};
+
+export const clearOAuthVerifierCookie = (
+  res: Response,
+  state: string,
+): void => {
+  const { maxAge: _noNeed, ...clearOptions } = oauthVerifierCookieOptions;
+  res.clearCookie(getOAuthVerifierCookieName(state), clearOptions);
+};

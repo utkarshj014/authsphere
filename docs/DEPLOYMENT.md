@@ -325,7 +325,7 @@ curl -i https://<ACTIVE_ENDPOINT>/health/ready
 # Use a dedicated disposable email address. Dispatches verification email and returns HTTP 201 Created:
 curl -i -X POST https://<ACTIVE_ENDPOINT>/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"name":"Probe User","email":"probe-verification-1@example.com","password":"TestPassword123!"}'
+  -d '{"firstName":"Probe","lastName":"User","email":"probe-verification-1@example.com","password":"TestPassword123!"}'
 
 # 4. Empirically verify native Argon2 password verification (argon2.verify()) via login
 # NOTE: AuthSphere enforces email verification before granting session access (apps/api/src/modules/auth/auth.service.ts).
@@ -366,22 +366,22 @@ done
 
 | Variable                  | Primary Serverless (Lambda)          | Reference Containers (ECS)                     | Description                                             |
 | :------------------------ | :----------------------------------- | :--------------------------------------------- | :------------------------------------------------------ |
-| `DATABASE_URL_DIRECT`     | GitHub Secret `DATABASE_URL_DIRECT`  | GitHub Secret `DATABASE_URL_DIRECT`            | Direct unpooled Neon URL (strictly for CI migrations)   |
-| `DATABASE_URL`            | SAM Parameter (`NoEcho`) from Secret | SSM `/authsphere/prod/DATABASE_URL`            | Pooled Neon PostgreSQL connection URL (`-pooler`)       |
-| `REDIS_URL`               | SAM Parameter (`NoEcho`) from Secret | SSM `/authsphere/prod/REDIS_URL`               | Upstash Redis connection URL (`rediss://...`)           |
-| `FRONTEND_URL`            | SAM Parameter from Variable          | SSM `/authsphere/prod/FRONTEND_URL`            | Hosted frontend origin (`https://<PROJECT>.vercel.app`) |
-| `JWT_ACCESS_SECRET`       | SAM Parameter (`NoEcho`) from Secret | SSM `/authsphere/prod/JWT_ACCESS_SECRET`       | Signing secret for access JWTs (32+ chars)              |
-| `JWT_REFRESH_SECRET`      | SAM Parameter (`NoEcho`) from Secret | SSM `/authsphere/prod/JWT_REFRESH_SECRET`      | Signing secret for refresh JWTs (32+ chars)             |
-| `MFA_ENCRYPTION_KEY`      | SAM Parameter (`NoEcho`) from Secret | SSM `/authsphere/prod/MFA_ENCRYPTION_KEY`      | 32-byte key for AES-256-GCM TOTP secret encryption      |
-| `GMAIL_USER`              | SAM Parameter / Optional             | SSM `/authsphere/prod/GMAIL_USER`              | Sender Gmail address for OAuth2 sending                 |
-| `GMAIL_REFRESH_TOKEN`     | SAM Parameter (`NoEcho`) / Optional  | SSM `/authsphere/prod/GMAIL_REFRESH_TOKEN`     | Gmail OAuth2 refresh token                              |
-| `RESEND_API_KEY`          | SAM Parameter (`NoEcho`) / Optional  | SSM `/authsphere/prod/RESEND_API_KEY`          | Resend API key                                          |
-| `EMAIL_FROM`              | SAM Parameter / Optional             | SSM `/authsphere/prod/EMAIL_FROM`              | Sender identity string (`AuthSphere <noreply@...>`)     |
-| `GOOGLE_CLIENT_ID`        | SAM Parameter / Optional             | SSM `/authsphere/prod/GOOGLE_CLIENT_ID`        | Google OAuth Client ID                                  |
-| `GOOGLE_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional  | SSM `/authsphere/prod/GOOGLE_CLIENT_SECRET`    | Google OAuth Client Secret                              |
-| `GITHUB_CLIENT_ID`        | SAM Parameter / Optional             | SSM `/authsphere/prod/GITHUB_CLIENT_ID`        | GitHub OAuth Client ID                                  |
-| `GITHUB_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional  | SSM `/authsphere/prod/GITHUB_CLIENT_SECRET`    | GitHub OAuth Client Secret                              |
-| `OAUTH_CALLBACK_BASE_URL` | SAM Parameter / Optional             | SSM `/authsphere/prod/OAUTH_CALLBACK_BASE_URL` | OAuth callback base URL routed via Vercel               |
+| `DATABASE_URL_DIRECT`     | GitHub Secret `DATABASE_URL_DIRECT`                    | GitHub Secret `DATABASE_URL_DIRECT`            | Direct unpooled Neon URL (strictly for CI migrations)   |
+| `DATABASE_URL`            | SAM Parameter (`NoEcho`) from `DATABASE_URL_POOLED`    | SSM `/authsphere/prod/DATABASE_URL`            | Pooled Neon PostgreSQL connection URL (`-pooler`)       |
+| `REDIS_URL`               | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/REDIS_URL`               | Upstash Redis connection URL (`rediss://...`)           |
+| `FRONTEND_URL`            | SAM Parameter from Variable                            | SSM `/authsphere/prod/FRONTEND_URL`            | Hosted frontend origin (`https://<PROJECT>.vercel.app`) |
+| `JWT_ACCESS_SECRET`       | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/JWT_ACCESS_SECRET`       | Signing secret for access JWTs (32+ chars)              |
+| `JWT_REFRESH_SECRET`      | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/JWT_REFRESH_SECRET`      | Signing secret for refresh JWTs (32+ chars)             |
+| `MFA_ENCRYPTION_KEY`      | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/MFA_ENCRYPTION_KEY`      | 32-byte key for AES-256-GCM TOTP secret encryption      |
+| `GMAIL_USER`              | SAM Parameter / Optional                               | SSM `/authsphere/prod/GMAIL_USER`              | Sender Gmail address for OAuth2 sending                 |
+| `GMAIL_REFRESH_TOKEN`     | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/GMAIL_REFRESH_TOKEN`     | Gmail OAuth2 refresh token                              |
+| `RESEND_API_KEY`          | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/RESEND_API_KEY`          | Resend API key                                          |
+| `EMAIL_FROM`              | SAM Parameter / Optional                               | SSM `/authsphere/prod/EMAIL_FROM`              | Sender identity string (`AuthSphere <noreply@...>`)     |
+| `GOOGLE_CLIENT_ID`        | SAM Parameter / Optional                               | SSM `/authsphere/prod/GOOGLE_CLIENT_ID`        | Google OAuth Client ID                                  |
+| `GOOGLE_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/GOOGLE_CLIENT_SECRET`    | Google OAuth Client Secret                              |
+| `GITHUB_CLIENT_ID`        | SAM Parameter from `GH_OAUTH_CLIENT_ID` (reserved var) | SSM `/authsphere/prod/GITHUB_CLIENT_ID`        | GitHub OAuth Client ID (CI: `GH_OAUTH_CLIENT_ID`)        |
+| `GITHUB_CLIENT_SECRET`    | SAM Parameter from `GH_OAUTH_CLIENT_SECRET` (reserved)  | SSM `/authsphere/prod/GITHUB_CLIENT_SECRET`    | GitHub OAuth Client Secret (CI: `GH_OAUTH_CLIENT_SECRET`)|
+| `OAUTH_CALLBACK_BASE_URL` | SAM Parameter / Optional                               | SSM `/authsphere/prod/OAUTH_CALLBACK_BASE_URL` | OAuth callback base URL routed via Vercel               |
 
 #### Frontend & Edge Reverse Proxy Configuration:
 
@@ -427,3 +427,26 @@ npm run dev:email-worker --workspace=@authsphere/api
 # 3. Start Vite React Frontend (port 5173 with /api proxy to port 3000)
 npm run dev --workspace=@authsphere/web
 ```
+
+---
+
+## 10. Architectural Decision Records (ADRs)
+
+AuthSphere's cloud deployment, containerization, and runtime architecture are governed by formal Architectural Decision Records in [Engineering-Decisions.md](Engineering-Decisions.md):
+
+- [ADR-010: Multi-Resource Graceful Shutdown](Engineering-Decisions.md#adr-010--multi-resource-graceful-shutdown) — Intercepts termination signals to drain in-flight requests before resource disconnect.
+- [ADR-011: Operational Health Monitoring Pattern](Engineering-Decisions.md#adr-011--operational-health-monitoring-pattern) — Decouples in-memory process liveness (`/health/live`) from external dependency readiness (`/health/ready`).
+- [ADR-053: Zod-Validated Proxy Trust Configuration](Engineering-Decisions.md#adr-053--zod-validated-proxy-trust-configuration) — Enforces strict runtime validation on `TRUST_PROXY` depth for single-hop (Lambda) vs dual-hop (ECS) ingress.
+- [ADR-054: Proxy-Derived Client IP Resolution via Express `req.ip`](Engineering-Decisions.md#adr-054--proxy-derived-client-ip-resolution-via-express-reqip) — Standardizes proxy-derived IP extraction while documenting best-effort attribution under direct backend access.
+- [ADR-055: Resource Isolation & Origin Validation for State-Changing Requests](Engineering-Decisions.md#adr-055--resource-isolation--origin-validation-for-state-changing-requests) — Protects mutating API endpoints against cross-origin abuse via `Sec-Fetch-Site` and `Origin` headers.
+- [ADR-074: Unified Redis Architecture (ioredis Migration)](Engineering-Decisions.md#adr-074--unified-redis-architecture-ioredis-migration) — Standardizes all Redis operations on `ioredis` for BullMQ compatibility.
+- [ADR-077: Process-Aware Environment Partitioning and Least Privilege Secret Isolation](Engineering-Decisions.md#adr-077--process-aware-environment-partitioning-and-least-privilege-secret-isolation) — Partitions environment schemas by process role (`APP_ROLE`), isolating credentials.
+- [ADR-078: Dual-Driver Background Job Architecture and Cloud Migration Path](Engineering-Decisions.md#adr-078--dual-driver-background-job-architecture-and-cloud-migration-path) — Governs `QUEUE_DRIVER: inline | bullmq | sync` to eliminate idle Redis polling in low-traffic tiers.
+- [ADR-079: Serverless Lambda Runtime, Synchronous Execution Guard, and Reverse-Proxy Cookie Bridge](Engineering-Decisions.md#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge) — Adapts Express to AWS Lambda and standardizes root-scoped cookies for edge reverse-proxy compatibility.
+- [ADR-085: Code-First Edge Reverse Proxy Configuration via `@vercel/config/v1`](Engineering-Decisions.md#adr-085--code-first-edge-reverse-proxy-configuration-via-vercelconfigv1) — Manages dynamic edge routing rewrites in TypeScript without committing hardcoded backend URLs.
+- [ADR-086: Development-to-Production Reverse Proxy Parity via Vite Local Server](Engineering-Decisions.md#adr-086--development-to-production-reverse-proxy-parity-via-vite-local-server) — Mirrors production edge reverse-proxy routing locally in Vite for seamless same-origin `/api` development.
+- [ADR-090: Keyless Cloud Deployment via AWS IAM OpenID Connect (OIDC) Federation](Engineering-Decisions.md#adr-090--keyless-cloud-deployment-via-aws-iam-openid-connect-oidc-federation) — Authenticates GitHub Actions CI/CD to AWS via temporary STS credentials without static secret storage.
+- [ADR-095: Dual Database Connection Strategy (Neon Direct Migrations vs Pooled Runtime)](Engineering-Decisions.md#adr-095--dual-database-connection-strategy-neon-direct-migrations-vs-pooled-runtime) — Separates direct unpooled connections for migration locks from pooled connections for runtime compute.
+- [ADR-096: Multi-Stage Container Architecture with Non-Root Execution and PID 1 Signal Reaping (`dumb-init`)](Engineering-Decisions.md#adr-096--multi-stage-container-architecture-with-non-root-execution-and-pid-1-signal-reaping-dumb-init) — Implements non-root execution (`USER node`) and `dumb-init` PID 1 signal forwarding for ECS task lifecycle management.
+- [ADR-097: Single-File Tree-Shaken ESM Lambda Bundling with Native C++ Addon Externalization (`tsup`)](Engineering-Decisions.md#adr-097--single-file-tree-shaken-esm-lambda-bundling-with-native-c-addon-externalization-tsup) — Bundles pure JS dependencies into a single minified bundle while keeping native Argon2 C++ addons externalized.
+- [ADR-098: Unified Dual-Target Deployment Pipeline (Serverless Lambda vs Containerized ECS Fargate)](Engineering-Decisions.md#adr-098--unified-dual-target-deployment-pipeline-serverless-lambda-vs-containerized-ecs-fargate) — Orchestrates a unified GitHub Actions deployment pipeline supporting interchangeable Lambda and ECS Fargate targets.

@@ -4,11 +4,13 @@ import { OAUTH_PROVIDERS, type OAuthProviderName } from "@authsphere/shared";
 import { asyncHandler, AppError } from "../../../common/errors/index.js";
 import { initiateOAuth, handleOAuthCallback } from "./oauth.service.js";
 import { ApiResponse } from "../../../common/responses/index.js";
-import { setAuthCookies, getClientIp } from "../../../common/utils/index.js";
-
-const OAUTH_COOKIE_PREFIX = "oauth_verifier_";
-const OAUTH_COOKIE_PATH = "/api/auth/oauth";
-const OAUTH_COOKIE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
+import {
+  setAuthCookies,
+  getClientIp,
+  getOAuthVerifierCookieName,
+  setOAuthVerifierCookie,
+  clearOAuthVerifierCookie,
+} from "../../../common/utils/index.js";
 
 /**
  * Higher-order controller factory for initiating OAuth flows.
@@ -36,14 +38,7 @@ export const initiateOAuthHandler = (provider: OAuthProviderName) =>
     );
 
     // 4. Store verifier in per-transaction HttpOnly cookie scoped to browser edge path (/api/auth/oauth)
-    const cookieName = `${OAUTH_COOKIE_PREFIX}${state}`;
-    res.cookie(cookieName, verifier, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: OAUTH_COOKIE_MAX_AGE_MS,
-      path: OAUTH_COOKIE_PATH,
-    });
+    setOAuthVerifierCookie(res, state, verifier);
 
     return res.redirect(redirectUrl);
   });
@@ -63,10 +58,10 @@ export const oauthCallbackHandler = (provider: OAuthProviderName) =>
     }
 
     // 1. Extract and clear the transaction-specific PKCE verifier cookie
-    const cookieName = `${OAUTH_COOKIE_PREFIX}${state}`;
+    const cookieName = getOAuthVerifierCookieName(state);
     const codeVerifier = req.cookies?.[cookieName] as string | undefined;
 
-    res.clearCookie(cookieName, { path: OAUTH_COOKIE_PATH });
+    clearOAuthVerifierCookie(res, state);
 
     if (!codeVerifier) {
       throw new AppError("Missing or expired OAuth transaction cookie", 400);
