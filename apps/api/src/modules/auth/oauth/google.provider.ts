@@ -43,7 +43,10 @@ export class GoogleOAuthProvider implements OAuthProviderStrategy {
     };
   }
 
-  public async getAuthorizationUrl(state: string): Promise<URL> {
+  public async getAuthorizationUrl(
+    state: string,
+    codeChallenge?: string,
+  ): Promise<URL> {
     const { clientId } = this.validateConfig();
 
     const url = new URL(GOOGLE_AUTH_URL);
@@ -52,18 +55,38 @@ export class GoogleOAuthProvider implements OAuthProviderStrategy {
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", "openid email profile");
     url.searchParams.set("state", state);
-    url.searchParams.set("access_type", "offline");
     url.searchParams.set("prompt", "select_account");
+
+    if (codeChallenge) {
+      url.searchParams.set("code_challenge", codeChallenge);
+      url.searchParams.set("code_challenge_method", "S256");
+    }
 
     return url;
   }
 
-  public async getUserProfile(code: string): Promise<OAuthProfile> {
+  public async getUserProfile(
+    code: string,
+    codeVerifier?: string,
+    signal?: AbortSignal,
+  ): Promise<OAuthProfile> {
     const { clientId, clientSecret } = this.validateConfig();
 
     // Defense-in-depth: Validate authorization code independently of caller
     if (!code || typeof code !== "string" || code.trim().length === 0) {
       throw new AppError("Missing or invalid Google authorization code", 400);
+    }
+
+    const tokenParams: Record<string, string> = {
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: this.getRedirectUri(),
+      grant_type: "authorization_code",
+    };
+
+    if (codeVerifier) {
+      tokenParams.code_verifier = codeVerifier;
     }
 
     // 1. Exchange authorization code for Google access token
@@ -73,13 +96,8 @@ export class GoogleOAuthProvider implements OAuthProviderStrategy {
         "Content-Type": "application/x-www-form-urlencoded",
         Accept: "application/json",
       },
-      body: new URLSearchParams({
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: this.getRedirectUri(),
-        grant_type: "authorization_code",
-      }).toString(),
+      body: new URLSearchParams(tokenParams).toString(),
+      signal: signal ?? null,
     });
 
     if (!tokenResponse.ok) {
@@ -107,6 +125,7 @@ export class GoogleOAuthProvider implements OAuthProviderStrategy {
         Authorization: `Bearer ${tokenData.access_token}`,
         Accept: "application/json",
       },
+      signal: signal ?? null,
     });
 
     if (!userInfoResponse.ok) {

@@ -41,9 +41,11 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix infra/lambda ci --omit=dev
+        run: npm ci
+
+      - name: Install Lambda runtime dependencies
+        if: env.DEPLOY_TARGET != 'ecs'
+        run: npm --prefix infra/lambda ci --omit=dev
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v6
@@ -68,17 +70,57 @@ jobs:
 
           echo "base_url=http://${DNS}" >> "$GITHUB_OUTPUT"
 
+      # ─── Artifact Creation: Serverless (AWS Lambda) ─────────────────
+      - name: Build Lambda package
+        if: env.DEPLOY_TARGET != 'ecs'
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/authsphere_build
+        run: npm run build:lambda
+
+      # ─── Artifact Creation: Containers (AWS ECS Fargate) ───────────
+      - name: Set up Docker Buildx
+        if: env.DEPLOY_TARGET == 'ecs'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: env.DEPLOY_TARGET == 'ecs'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        if: env.DEPLOY_TARGET == 'ecs'
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=,format=short,priority=300
+            type=raw,value=latest,priority=100
+
+      - name: Build and push Docker image
+        if: env.DEPLOY_TARGET == 'ecs'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ─── Database Migrations (Run after artifacts are built) ────────
       - name: Run production database migrations
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL_DIRECT }}
         run: npm run db:migrate:deploy --workspace=@authsphere/api
 
+      # ─── Deployment: Serverless (AWS Lambda) ────────────────────────
       - name: Deploy to AWS Lambda (SAM)
         if: env.DEPLOY_TARGET != 'ecs'
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/authsphere_build
         run: |
-          npm run build:lambda
           cd infra/lambda
 
           PARAMS=()
@@ -119,39 +161,6 @@ jobs:
           curl --fail --retry 3 --retry-delay 5 --max-time 15 "${FUNCTION_URL}health/live"
           echo "Verifying dependency readiness at: ${FUNCTION_URL}health/ready"
           curl --fail --retry 3 --retry-delay 5 --max-time 15 "${FUNCTION_URL}health/ready"
-
-      - name: Set up Docker Buildx
-        if: env.DEPLOY_TARGET == 'ecs'
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GitHub Container Registry
-        if: env.DEPLOY_TARGET == 'ecs'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Docker metadata
-        if: env.DEPLOY_TARGET == 'ecs'
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha,prefix=,format=short,priority=300
-            type=raw,value=latest,priority=100
-
-      - name: Build and push Docker image
-        if: env.DEPLOY_TARGET == 'ecs'
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Inject AWS Account ID into ECS task definitions
         if: env.DEPLOY_TARGET == 'ecs'

@@ -1,9 +1,16 @@
+import crypto from "node:crypto";
 import type { Request, Response } from "express";
 import { OAUTH_PROVIDERS, type OAuthProviderName } from "@authsphere/shared";
-import { asyncHandler } from "../../../common/errors/index.js";
+import { asyncHandler, AppError } from "../../../common/errors/index.js";
 import { initiateOAuth, handleOAuthCallback } from "./oauth.service.js";
 import { ApiResponse } from "../../../common/responses/index.js";
-import { setAuthCookies, getClientIp } from "../../../common/utils/index.js";
+import {
+  setAuthCookies,
+  getClientIp,
+  getOAuthVerifierCookieName,
+  setOAuthVerifierCookie,
+  clearOAuthVerifierCookie,
+} from "../../../common/utils/index.js";
 
 /**
  * Higher-order controller factory for initiating OAuth flows.
@@ -11,7 +18,27 @@ import { setAuthCookies, getClientIp } from "../../../common/utils/index.js";
 export const initiateOAuthHandler = (provider: OAuthProviderName) =>
   asyncHandler(async (req: Request, res: Response) => {
     const userId = req.auth?.userId;
-    const redirectUrl = await initiateOAuth(provider, userId);
+    const sessionId = req.auth?.sessionId;
+
+    // 1. Generate 32-byte cryptographically random verifier (base64url)
+    const verifier = crypto.randomBytes(32).toString("base64url");
+
+    // 2. Compute S256 code challenge
+    const challenge = crypto
+      .createHash("sha256")
+      .update(verifier)
+      .digest("base64url");
+
+    // 3. Initiate OAuth with provider
+    const { redirectUrl, state } = await initiateOAuth(
+      provider,
+      userId,
+      sessionId,
+      challenge,
+    );
+
+    // 4. Store verifier in per-transaction HttpOnly cookie scoped to browser edge path (/api/auth/oauth)
+    setOAuthVerifierCookie(res, state, verifier);
 
     return res.redirect(redirectUrl);
   });
@@ -26,12 +53,27 @@ export const oauthCallbackHandler = (provider: OAuthProviderName) =>
     const ipAddress = getClientIp(req);
     const userAgent = req.header("user-agent");
 
+    if (!state || typeof state !== "string" || state.trim().length === 0) {
+      throw new AppError("Invalid or missing OAuth state parameter", 400);
+    }
+
+    // 1. Extract and clear the transaction-specific PKCE verifier cookie
+    const cookieName = getOAuthVerifierCookieName(state);
+    const codeVerifier = req.cookies?.[cookieName] as string | undefined;
+
+    clearOAuthVerifierCookie(res, state);
+
+    if (!codeVerifier) {
+      throw new AppError("Missing or expired OAuth transaction cookie", 400);
+    }
+
     const result = await handleOAuthCallback(
       provider,
       code,
       state,
       ipAddress,
       userAgent,
+      codeVerifier,
     );
 
     if (result.mfaRequired) {

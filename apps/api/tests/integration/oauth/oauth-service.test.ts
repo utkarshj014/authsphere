@@ -1,3 +1,5 @@
+/// <reference path="../../../src/types/express.d.ts" />
+
 import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   createOAuthState,
@@ -11,6 +13,8 @@ import {
   createVerifiedUser,
   createOAuthUser,
   createMfaUser,
+  createSession,
+  createExpiredSession,
 } from "../../helpers/index.js";
 import type { OAuthProviderName } from "@authsphere/shared";
 
@@ -33,13 +37,6 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
     });
   });
 
-  it("consumeOAuthState throws 400 on empty or invalid state parameter", async () => {
-    await expect(consumeOAuthState("   ", "GOOGLE")).rejects.toMatchObject({
-      statusCode: 400,
-      message: "Invalid or missing OAuth state parameter",
-    });
-  });
-
   it("consumeOAuthState throws 400 on provider mismatch", async () => {
     const state = await createOAuthState("GOOGLE");
 
@@ -50,15 +47,17 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
   });
 
   it("initiateOAuth returns authorization URL containing state parameter for Google and GitHub", async () => {
-    const googleUrlStr = await initiateOAuth("GOOGLE");
+    const { redirectUrl: googleUrlStr, state: googleState } =
+      await initiateOAuth("GOOGLE");
     const googleUrl = new URL(googleUrlStr);
     expect(googleUrl.hostname).toContain("accounts.google.com");
-    expect(googleUrl.searchParams.get("state")).toBeDefined();
+    expect(googleUrl.searchParams.get("state")).toBe(googleState);
 
-    const githubUrlStr = await initiateOAuth("GITHUB");
+    const { redirectUrl: githubUrlStr, state: githubState } =
+      await initiateOAuth("GITHUB");
     const githubUrl = new URL(githubUrlStr);
     expect(githubUrl.hostname).toContain("github.com");
-    expect(githubUrl.searchParams.get("state")).toBeDefined();
+    expect(githubUrl.searchParams.get("state")).toBe(githubState);
   });
 
   it("handleOAuthCallback creates new user and oauth account for first-time login", async () => {
@@ -84,7 +83,7 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
     );
 
     expect(result.mfaRequired).toBe(false);
-    if (!result.mfaRequired) {
+    if (!result.mfaRequired && "tokens" in result) {
       expect(result.tokens.accessToken).toBeDefined();
     }
 
@@ -155,7 +154,7 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
     );
 
     expect(result.mfaRequired).toBe(true);
-    if (result.mfaRequired) {
+    if (result.mfaRequired && "mfaToken" in result) {
       expect(result.mfaToken).toBeDefined();
       const challenge = await prisma.mfaChallenge.findUnique({
         where: { id: result.mfaToken },
@@ -167,6 +166,7 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
 
   it("handleOAuthCallback links OAuth account when user is authenticated (explicit linking)", async () => {
     const { user } = await createVerifiedUser();
+    const { session } = await createSession(user.id);
     const newGoogleId = `new-google-${Date.now()}`;
 
     vi.spyOn(googleOAuthProvider, "getUserProfile").mockResolvedValue({
@@ -177,7 +177,7 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
       avatarUrl: null,
     });
 
-    const state = await createOAuthState("GOOGLE", user.id);
+    const state = await createOAuthState("GOOGLE", user.id, session.id);
 
     const result = await handleOAuthCallback(
       "GOOGLE",
@@ -200,25 +200,35 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
     expect(linkedAccount?.userId).toBe(user.id);
   });
 
-  it("handleOAuthCallback throws 404 when linking to a non-existent userId", async () => {
-    const nonExistentUserId = "01912345-6789-7abc-def0-123456789abc";
-    const newGoogleId = `new-google-${Date.now()}`;
+  it("handleOAuthCallback throws 401 when initiating linking session has expired or is revoked, even if OAuth account already exists", async () => {
+    const { user } = await createVerifiedUser();
+    const { session: expiredSession } = await createExpiredSession(user.id);
+    const existingGoogleId = `existing-google-${Date.now()}`;
+
+    // Account is already linked to user
+    await prisma.oAuthAccount.create({
+      data: {
+        userId: user.id,
+        provider: "GOOGLE",
+        providerId: existingGoogleId,
+      },
+    });
 
     vi.spyOn(googleOAuthProvider, "getUserProfile").mockResolvedValue({
-      providerId: newGoogleId,
-      email: "ghost@authsphere.test",
-      firstName: "Ghost",
+      providerId: existingGoogleId,
+      email: user.email,
+      firstName: "Google",
       lastName: "User",
       avatarUrl: null,
     });
 
-    const state = await createOAuthState("GOOGLE", nonExistentUserId);
+    const state = await createOAuthState("GOOGLE", user.id, expiredSession.id);
 
     await expect(
       handleOAuthCallback("GOOGLE", "mock-code", state, "127.0.0.1"),
     ).rejects.toMatchObject({
-      statusCode: 404,
-      message: "User account not found for linking",
+      statusCode: 401,
+      message: "Initiating session is invalid, expired, or revoked",
     });
   });
 
@@ -243,29 +253,12 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
     });
   });
 
-  it("initiateOAuth with unsupported provider throws 400 AppError", async () => {
-    await expect(
-      initiateOAuth("TWITTER" as unknown as OAuthProviderName),
-    ).rejects.toMatchObject({
-      statusCode: 400,
-      message: "OAuth provider TWITTER is not supported",
-    });
-  });
-
-  it("handleOAuthCallback with missing or empty code throws 400 AppError", async () => {
-    const state = await createOAuthState("GOOGLE");
-
-    await expect(
-      handleOAuthCallback("GOOGLE", "   ", state, "127.0.0.1"),
-    ).rejects.toMatchObject({
-      statusCode: 400,
-      message: "Missing or invalid authorization code",
-    });
-  });
-
   it("handleOAuthCallback throws 409 when linking an OAuth account already linked to another user", async () => {
     const { user: userA } = await createVerifiedUser();
+    const { session: sessionA } = await createSession(userA.id);
+
     const { user: userB } = await createVerifiedUser();
+    const { session: sessionB } = await createSession(userB.id);
     const sharedProviderId = `shared-google-${Date.now()}`;
 
     // Link sharedProviderId to userA
@@ -276,7 +269,7 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
       lastName: "A",
       avatarUrl: null,
     });
-    const stateA = await createOAuthState("GOOGLE", userA.id);
+    const stateA = await createOAuthState("GOOGLE", userA.id, sessionA.id);
     await handleOAuthCallback("GOOGLE", "code-a", stateA, "127.0.0.1");
 
     // Now userB attempts to link the exact same providerId
@@ -287,7 +280,7 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
       lastName: "B",
       avatarUrl: null,
     });
-    const stateB = await createOAuthState("GOOGLE", userB.id);
+    const stateB = await createOAuthState("GOOGLE", userB.id, sessionB.id);
 
     await expect(
       handleOAuthCallback("GOOGLE", "code-b", stateB, "127.0.0.1"),

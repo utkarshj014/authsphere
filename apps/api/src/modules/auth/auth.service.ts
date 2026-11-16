@@ -343,6 +343,11 @@ const refreshToken = async (
   // 1. Leeway Window: Return cached tokens if recently rotated within grace period (SPA concurrency)
   const cached = await getLeewayCache(leewayKey);
   if (cached) {
+    // Validate active session in DB to prevent cached token return after explicit revocation (logout / remote termination)
+    const activeSession = await authRepository.findSessionById(payload.sid);
+    if (!activeSession || activeSession.userId !== payload.sub) {
+      throw new UnauthorizedError("Invalid session");
+    }
     return JSON.parse(cached) as AuthTokens;
   }
 

@@ -133,3 +133,12 @@ export type EnvConfig = z.infer<typeof fullSchema> & {
 };
 
 export const env = parsed.data as EnvConfig;
+
+/**
+ * Platform runtime detection for AWS Lambda serverless execution.
+ * AWS Lambda automatically injects AWS_LAMBDA_FUNCTION_NAME and LAMBDA_TASK_ROOT
+ * into process.env at runtime; these are platform indicators, not application configuration.
+ */
+export const isLambdaRuntime = Boolean(
+  process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT,
+);
