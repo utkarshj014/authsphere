@@ -192,4 +192,66 @@ describe("ADR-076 Refresh Token Rotation Concurrency & Failure Invariants", () =
       mockSession.id,
     );
   });
+
+  it("security guard: rejects leeway cache hits if session was explicitly revoked in DB after rotation", async () => {
+    const token = await signRefreshToken({
+      sub: mockSession.userId,
+      sid: mockSession.id,
+      role: mockSession.user.role.name,
+    });
+
+    // 1. Initial refresh succeeds and caches rotated token pair in Redis leeway cache
+    vi.spyOn(authRepository, "rotateSession").mockResolvedValueOnce(true);
+    const winnerTokens = await authService.refreshToken(
+      "127.0.0.1",
+      "Winner-Agent",
+      token,
+    );
+    expect(winnerTokens.refreshToken).toBeDefined();
+
+    // 2. Explicit session revocation occurs (e.g. user logs out or session is remotely terminated)
+    vi.spyOn(authRepository, "findSessionById").mockResolvedValue(null);
+
+    // 3. Replay old token during the remaining leeway cache TTL (cache hit in Redis)
+    // Must NOT return cached credentials; must detect that the session was revoked and throw 401
+    await expect(
+      authService.refreshToken("127.0.0.1", "Replay-Agent", token),
+    ).rejects.toThrowError(new UnauthorizedError("Invalid session"));
+  });
+
+  it("redis-unavailable path under GLOBAL mode: revokes all sessions across all devices on replay", async () => {
+    const token = await signRefreshToken({
+      sub: mockSession.userId,
+      sid: mockSession.id,
+      role: mockSession.user.role.name,
+    });
+
+    // Configure GLOBAL revocation mode
+    const { env } = await import("../../src/config/env.js");
+    const originalMode = env.AUTH_REUSE_DELETION_MODE;
+    (env as any).AUTH_REUSE_DELETION_MODE = "GLOBAL";
+
+    try {
+      // Rotate first
+      vi.spyOn(authRepository, "rotateSession").mockResolvedValueOnce(true);
+      await authService.refreshToken("127.0.0.1", "Winner-Agent", token);
+
+      // Simulate Redis outage
+      redisStatus = "close";
+
+      // CAS fails for loser
+      vi.spyOn(authRepository, "rotateSession").mockResolvedValueOnce(false);
+
+      await expect(
+        authService.refreshToken("127.0.0.1", "Loser-Agent", token),
+      ).rejects.toThrowError(UnauthorizedError);
+
+      // In GLOBAL mode, deleteAllSessionsByUserId must be invoked
+      expect(authRepository.deleteAllSessionsByUserId).toHaveBeenCalledWith(
+        mockSession.userId,
+      );
+    } finally {
+      (env as any).AUTH_REUSE_DELETION_MODE = originalMode;
+    }
+  });
 });
