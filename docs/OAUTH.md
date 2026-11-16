@@ -2,54 +2,65 @@
 
 This document specifies the OAuth 2.0 social authentication and account-linking architecture for AuthSphere across Google and GitHub identity providers.
 
+> **Companion Architecture, Security & Operations Guides:**
+>
+> - [System Architecture & Design (ARCHITECTURE.md)](./ARCHITECTURE.md) — System mental model, layered middleware pipeline, entity models, and runtime compute topology.
+> - [Architecture Decision Records (Engineering-Decisions.md)](./Engineering-Decisions.md) — Formal ADRs documenting architectural context, trade-offs, security invariants, and failure boundaries.
+> - [Cloud Deployment & DevOps Guide (DEPLOYMENT.md)](./DEPLOYMENT.md) — Production deployment guide covering dual-target compute (AWS Lambda vs ECS Fargate), environment configuration, and operational runbooks.
+> - [Testing Architecture & Quality Guide (TESTING.md)](./TESTING.md) — Complete specification of the hermetic multi-tier test pyramid and automated verification suites.
+
 ---
 
 ## 1. System Overview & Architecture Snapshot
 
-AuthSphere implements the standard **OAuth 2.0 Authorization Code Grant** flow across two external identity providers:
+> [!IMPORTANT]
+> **Architectural Role — Relying Party (Client) Only:**
+> AuthSphere acts strictly as an **OAuth 2.0 / OIDC Relying Party (Client)** for federated social login and account linking with external identity providers. AuthSphere is **not an Identity Provider (IdP) or OAuth 2.0 Authorization Server**; it does not issue authorization codes or OAuth tokens to third parties, host public token endpoints for external integrations, or implement `client_credentials`, `resource_owner_password_credentials`, or `device_code` grant types.
 
-| Provider   | Initiation Endpoint      | Callback Endpoint                 | Default Scopes         | Stable Identity Claim             |
-| :--------- | :----------------------- | :-------------------------------- | :--------------------- | :-------------------------------- |
-| **Google** | `GET /auth/oauth/google` | `GET /auth/oauth/google/callback` | `openid email profile` | `sub` (OpenID Connect Subject ID) |
-| **GitHub** | `GET /auth/oauth/github` | `GET /auth/oauth/github/callback` | `read:user user:email` | `String(id)` (Numeric Account ID) |
+AuthSphere implements the standard **OAuth 2.0 Authorization Code Grant with Proof Key for Code Exchange (PKCE, RFC 7636 / RFC 9700)** across two external identity providers:
+
+| Provider   | Protocol / Specification       | Initiation Endpoint      | Callback Endpoint                 | Default Scopes         | Stable Identity Claim             |
+| :--------- | :----------------------------- | :----------------------- | :-------------------------------- | :--------------------- | :-------------------------------- |
+| **Google** | OAuth 2.0 + OIDC UserInfo      | `GET /auth/oauth/google` | `GET /auth/oauth/google/callback` | `openid email profile` | `sub` (OpenID Connect Subject ID) |
+| **GitHub** | OAuth 2.0 Web Application Flow | `GET /auth/oauth/github` | `GET /auth/oauth/github/callback` | `read:user user:email` | `String(id)` (Numeric Account ID) |
 
 Both flows share a unified strategy abstraction, Redis-backed state management, identity resolution logic, session issuance, and cookie delivery pipeline. Only provider-specific details (authorization URL parameters, token exchange endpoints, and profile normalization) are isolated in provider strategies.
 
-### Architecture Topology
+### Unified Edge Ingress & Architecture Topology
 
 ```mermaid
 flowchart TD
     subgraph Client ["Client Tier (Browser)"]
-        Browser["User Browser (React 19 SPA)"]
+        Browser["User Browser / Client Agent"]
     end
 
     subgraph Edge ["Edge Reverse Proxy (Vercel)"]
-        VercelProxy["Vercel Edge Ingress (/api/auth/oauth/*)\nSame-Origin Ingress · HttpOnly Cookies"]
+        VercelProxy["Vercel Edge Ingress (/api/auth/oauth/*)<br/>Same-Origin Reverse Proxy · Strips /api Prefix"]
     end
 
     subgraph Backend ["Backend Compute (AWS Lambda / ECS)"]
         Router["Express Router (auth.route.ts)"]
         RateLimit["Rate Limiter (20 req / 1m IP window)"]
-        OptAuth["optionalAuth (Extracts req.auth)"]
-        InitCtrl["Initiation Controller (initiateOAuth)"]
-        CallbackCtrl["Callback Controller (handleOAuthCallback)"]
+        OptAuth["optionalAuth (Extracts req.auth if access token present)"]
+        InitCtrl["Initiation Controller (initiateOAuthHandler)"]
+        CallbackCtrl["Callback Controller (oauthCallbackHandler)"]
         OAuthSvc["OAuth Service (oauth.service.ts)"]
-        GoogleStrat["Google Provider Strategy"]
-        GitHubStrat["GitHub Provider Strategy"]
+        GoogleStrat["Google Provider Strategy (google.provider.ts)"]
+        GitHubStrat["GitHub Provider Strategy (github.provider.ts)"]
     end
 
     subgraph StateTier ["State & Data Tier"]
-        Redis["Upstash Redis\noauth:state:<hex> (600s TTL) · Atomic GETDEL"]
-        Postgres["Neon PostgreSQL\nUser · OAuthAccount · Session · MfaChallenge"]
+        Redis["Upstash Redis<br/>oauth:state:hex (600s TTL) · Atomic GETDEL"]
+        Postgres["PostgreSQL Database<br/>User · OAuthAccount · Session · MfaChallenge"]
     end
 
     subgraph External ["External Identity Providers"]
-        GoogleIDP["Google Identity Services (OAuth 2.0 / OIDC)"]
-        GitHubIDP["GitHub OAuth Platform (REST API)"]
+        GoogleIDP["Google Identity Services<br/>Token: oauth2.googleapis.com<br/>Profile: openidconnect.googleapis.com"]
+        GitHubIDP["GitHub OAuth Platform<br/>Token: github.com/login/oauth<br/>Profile: api.github.com/user + /emails"]
     end
 
-    Browser -->|"1. Same-Origin Request"| VercelProxy
-    VercelProxy -->|"2. Upstream Proxy"| Router
+    Browser -->|"1. Same-Origin Request (/api/auth/oauth/...)"| VercelProxy
+    VercelProxy -->|"2. Upstream Proxy (/auth/oauth/...)"| Router
 
     Router -->|"GET /auth/oauth/:provider"| RateLimit
     RateLimit --> OptAuth --> InitCtrl --> OAuthSvc
@@ -60,12 +71,13 @@ flowchart TD
     OAuthSvc --> GoogleStrat
     OAuthSvc --> GitHubStrat
     OAuthSvc -->|"State Token Write (EX 600)"| Redis
-    OAuthSvc -->|"Atomic State Read & Delete (getdel)"| Redis
+    OAuthSvc -->|"Atomic State Invalidation (GETDEL)"| Redis
 
-    GoogleStrat -->|"Authorization & Token Exchange"| GoogleIDP
-    GitHubStrat -->|"Authorization & Token Exchange"| GitHubIDP
+    GoogleStrat -->|"Token Exchange & UserInfo Fetch (7s Budget)"| GoogleIDP
+    GitHubStrat -->|"Token Exchange & Profile/Email Fetch (7s Budget)"| GitHubIDP
 
-    OAuthSvc -->|"Identity Resolution & Session Persist"| Postgres
+    OAuthSvc -->|"Pre-Resolution Gate & Identity Resolution"| Postgres
+    CallbackCtrl -->|"Set-Cookie: accessToken, refreshToken"| Browser
 ```
 
 ---
@@ -75,31 +87,40 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Browser
+    actor Browser as User Browser
     participant API as AuthSphere API
-    participant Redis
-    participant IDP as Google / GitHub
+    participant Redis as Redis Store
+    participant IDP as Identity Provider (Google / GitHub)
     participant DB as PostgreSQL
 
-    Note over Browser, API: Phase 1 — Initiation & PKCE
-    Browser->>API: GET /auth/oauth/:provider
-    API->>Redis: SET oauth:state:<token> (10m TTL)
-    API-->>Browser: Set-Cookie: oauth_verifier_<state> & 302 Redirect to IDP (PKCE S256)
+    Note over Browser, API: Phase 1 — Initiation & PKCE Generation
+    Browser->>API: GET /auth/oauth/:provider (optional accessToken cookie)
+    API->>Redis: SET oauth:state:<token> { provider, userId?, sessionId? } (10m TTL)
+    API-->>Browser: Set-Cookie: oauth_verifier_<state> (Path=/api/auth/oauth) & 302 Redirect to IDP (PKCE S256)
 
     Note over Browser, IDP: Phase 2 — External Consent
     Browser->>IDP: User authenticates & approves scopes
     IDP-->>Browser: 302 Redirect to callback?code=...&state=...
 
-    Note over Browser, DB: Phase 3 — Callback & Resolution
+    Note over Browser, DB: Phase 3 — Callback, Validation & Profile Exchange
     Browser->>API: GET callback?code=...&state=... (Cookie: oauth_verifier_<state>)
-    API->>API: Extract & clear verifier cookie
+    API->>API: Extract & clear verifier cookie (oauth_verifier_<state>)
     API->>Redis: GETDEL oauth:state:<token> (Atomic single-use)
-    API->>IDP: POST token exchange (code + verifier) & fetch profile
-    API->>DB: Pre-resolution session gate & identity resolution
-    API-->>Browser: Set-Cookie: accessToken, refreshToken & 200 OK
-```
+    API->>IDP: POST token exchange (code + verifier) & fetch profile (7s deadline)
 
-> **Note:** For the branching logic evaluated at Step 9 (session revalidation gate, account linking, anti-hijacking conflict checks, and MFA challenges), see [Section 3.4 Identity Resolution Matrix](#34-phase-4--identity-resolution-matrix).
+    Note over API, DB: Phase 4 & 5 — Identity Resolution & Session Issuance
+    opt Authenticated Linking Intent (state.userId present)
+        API->>DB: Pre-Resolution Session Gate: findSessionById(state.sessionId)
+    end
+    API->>DB: Identity Resolution (Link, Authenticate, or Create User + OAuthAccount)
+    alt MFA Required
+        API->>DB: Create MfaChallenge (5m TTL)
+        API-->>Browser: 200 OK { mfaRequired: true, mfaToken }
+    else Direct Session Issuance
+        API->>DB: Create Session & issue JWT tokens
+        API-->>Browser: Set-Cookie: accessToken, refreshToken (Path=/) & 200 OK
+    end
+```
 
 ---
 
@@ -107,76 +128,69 @@ sequenceDiagram
 
 ### 3.1. Phase 1 — Initiation & State Generation
 
-- **Route:** `GET /auth/oauth/google` and `GET /auth/oauth/github`
+- **Route:** `GET /auth/oauth/google` and `GET /auth/oauth/github` (mounted on Express router at `/oauth/:provider`)
 - **Rate Limit:** `rateLimiter(RATE_LIMIT_POLICIES.OAUTH_INITIATE)` (20 requests per minute per IP)
-- **Middleware Pipeline:** `optionalAuth` → `initiateOAuthHandler(provider)`
+- **Middleware Pipeline:** `rateLimiter` → `optionalAuth` → `initiateOAuthHandler(provider)`
 
 #### Context Detection (`optionalAuth`)
 
 The `optionalAuth` middleware (`apps/api/src/middlewares/auth.ts`) inspects `req.cookies.accessToken`:
 
-- **Valid Access Token Detected:** Validates and decodes the cryptographically signed JWT access token, populating `req.auth = { userId, role, sessionId, permissions }`. Both `userId` and `sessionId` are captured so the flow can act as an **explicit account-linking request**. Note that `optionalAuth` statelessly verifies token cryptography; database session revalidation occurs during the callback phase.
+- **Valid Access Token Detected:** Validates and decodes the cryptographically signed JWT access token (`{ sub, sid, role }`), resolves permissions via `authorizationService.getPermissionsByRole()`, and populates `req.auth = { userId, role, sessionId, permissions }`. Both `userId` and `sessionId` are captured so the flow can act as an **explicit account-linking request**.
 - **No Valid Access Token:** Leaves `req.auth` as `undefined`. This flow acts as an **unauthenticated login/signup request**.
-- Unlike standard authentication middleware, `optionalAuth` never throws on missing or invalid tokens; expired or invalid tokens are silently treated as unauthenticated.
+- **Silent Degradation:** `optionalAuth` never throws on missing, expired, or invalid tokens; unauthenticated states degrade gracefully to standard login/signup flows without aborting initiation.
 
 #### PKCE Verifier Generation & Browser-Binding Cookie
 
-To protect against Login CSRF and authorization code injection across all clients (recommended by OAuth 2.0 Security BCP / RFC 9700), AuthSphere implements native PKCE with the `S256` challenge method without external dependencies:
+To protect against Login CSRF and authorization code injection across all clients (recommended by RFC 7636 and RFC 9700 §2.1.1), AuthSphere implements native PKCE with the `S256` challenge method without external dependencies:
 
-1. **Generates PKCE Verifier:** Generates 32 cryptographically secure random bytes in `base64url` format:
-   ```typescript
-   const verifier = crypto.randomBytes(32).toString("base64url");
-   ```
-2. **Computes S256 Challenge:** Computes the SHA-256 hash of the verifier in `base64url` format:
-   ```typescript
-   const challenge = crypto
-     .createHash("sha256")
-     .update(verifier)
-     .digest("base64url");
-   ```
-3. **Stores Verifier in Per-Transaction Cookie:** Binds the transaction to the initiating browser using a dedicated HttpOnly cookie keyed by state:
-   - **Name:** `oauth_verifier_<state>` (per-transaction naming prevents collisions across concurrent multi-tab flows)
-   - **Path:** `/api/auth/oauth` (evaluated by the browser against the public Vercel edge reverse-proxy path)
-   - **Security Flags:** `httpOnly: true`, `secure: production`, `sameSite: "lax"`, `maxAge: 600000` (10 minutes)
+1. **PKCE Verifier Specification:**
+   - 32 cryptographically secure random bytes generated via `crypto.randomBytes(32)`.
+   - Formatted as an unpadded `base64url` string (43 characters).
+2. **S256 Code Challenge Computation:**
+   - Evaluated as `SHA-256(verifier)` digest formatted in `base64url`.
+   - Sent to the identity provider authorization endpoint as `code_challenge` with `code_challenge_method=S256`.
+3. **Browser-Binding Cookie Storage:**
+   - Binds the transaction to the initiating browser using a dedicated HttpOnly cookie keyed by state:
+     - **Name:** `oauth_verifier_<state>` (per-transaction state suffix isolates concurrent multi-tab flows).
+     - **Path:** `/api/auth/oauth` (evaluated by the browser against the public Vercel edge reverse-proxy path).
+     - **Attributes:** `httpOnly: true`, `secure: production`, `sameSite: "lax"`, `maxAge: 600000` (10 minutes).
 
 #### Cryptographic State Generation & Redis Caching
 
 `createOAuthState()` (`apps/api/src/modules/auth/oauth/oauth.service.ts`):
 
-1. Generates 32 bytes of cryptographically secure random bytes:
-   ```typescript
-   const state = crypto.randomBytes(32).toString("hex"); // 64-character hex string
-   ```
+1. Generates 32 bytes of cryptographically secure randomness formatted as a 64-character hexadecimal string (`crypto.randomBytes(32).toString("hex")`).
 2. Serializes flow metadata payload:
    ```typescript
-   const payload: OAuthStateData = {
-     provider,
-     ...(userId && { userId }),
-     ...(sessionId && { sessionId }),
-   };
+   interface OAuthStateData {
+     provider: OAuthProviderName;
+     userId?: string;
+     sessionId?: string;
+   }
    ```
-3. Stores the payload in Redis under key `oauth:state:<state>` with a strict 10-minute expiration (`EX 600`).
+3. Persists the payload in Redis under key `oauth:state:<state>` with a strict 10-minute expiration (`EX 600`).
 
 #### Authorization URL Construction
 
-The provider strategy constructs the target identity provider URL, appending the PKCE challenge:
+The provider strategy constructs the external identity provider authorization URL, appending the PKCE challenge and transaction state:
 
 - **Google Strategy (`google.provider.ts`):**
   - Endpoint: `https://accounts.google.com/o/oauth2/v2/auth`
   - Parameters: `client_id`, `redirect_uri`, `response_type=code`, `scope="openid email profile"`, `state`, `prompt="select_account"`, `code_challenge`, `code_challenge_method="S256"`
-  - _Note on scopes:_ `access_type="offline"` is omitted because AuthSphere uses short-lived identity resolution without storing upstream provider refresh tokens.
+  - _Scope Policy:_ `access_type="offline"` is omitted because AuthSphere uses short-lived identity resolution and does not store upstream provider refresh tokens.
 - **GitHub Strategy (`github.provider.ts`):**
   - Endpoint: `https://github.com/login/oauth/authorize`
   - Parameters: `client_id`, `redirect_uri`, `scope="read:user user:email"`, `state`, `code_challenge`, `code_challenge_method="S256"`
 
-The API controller issues an HTTP 302 redirect sending the browser directly to the external provider.
+The API controller issues an HTTP 302 redirect sending the browser directly to the external provider consent screen.
 
 ---
 
 ### 3.2. Phase 2 — External Consent
 
-1. The browser navigates to Google or GitHub.
-2. The user authenticates (or selects an active provider session) and reviews requested scopes.
+1. The browser navigates to the external provider (Google or GitHub).
+2. The user authenticates (or selects an active account) and grants requested scopes.
 3. Upon approval, the identity provider redirects the browser back to AuthSphere's registered callback URI:
    ```http
    GET /auth/oauth/:provider/callback?code=<AUTHORIZATION_CODE>&state=<STATE_TOKEN>
@@ -188,15 +202,19 @@ The API controller issues an HTTP 302 redirect sending the browser directly to t
 
 - **Route:** `GET /auth/oauth/google/callback` and `GET /auth/oauth/github/callback`
 - **Rate Limit:** `rateLimiter(RATE_LIMIT_POLICIES.OAUTH_CALLBACK)` (20 requests per minute per IP)
-- **Validation:** `validate(authRequestSchema.oauthCallbackQuery)` enforces non-empty `code` and `state` strings.
+- **Validation Pipeline:** Validation is performed **imperatively** in the controller and service layers:
+  1. `oauthCallbackHandler` extracts and validates `req.query.state` (returns `400 Invalid or missing OAuth state parameter`).
+  2. `oauthCallbackHandler` extracts and validates the transaction cookie `oauth_verifier_<state>` (returns `400 Missing or expired OAuth transaction cookie`).
+  3. `oauth.service.ts` validates `code` string presence (returns `400 Missing or invalid authorization code`).
+     _(Note: Express routes do not attach route-level Zod validation middleware for callback queries; validation is handled directly by controller and service guards)._
 
 #### Browser-Binding PKCE Verifier Retrieval & Clearance
 
 The callback controller validates browser ownership and immediately destroys the transient verifier cookie:
 
-1. Looks up cookie `oauth_verifier_<state>`.
-2. Immediately clears the cookie via `res.clearCookie(cookieName, { path: "/api/auth/oauth" })`.
-3. If the cookie is absent or expired, the callback fails immediately with `400 Bad Request` ("Missing or expired OAuth transaction cookie"), thwarting Login CSRF and stolen callback injection.
+1. Looks up cookie `oauth_verifier_<state>` from `req.cookies`.
+2. Immediately clears the cookie via `clearOAuthVerifierCookie(res, state)` (`res.clearCookie` with `Path=/api/auth/oauth`).
+3. If the cookie is absent or expired, the callback aborts immediately with `400 Bad Request` ("Missing or expired OAuth transaction cookie"), thwarting Login CSRF, stolen callback injection, and cross-browser code redemption.
 
 #### Atomic State Invalidation (`GETDEL`)
 
@@ -207,42 +225,17 @@ const rawData = await redis.getdel(`oauth:state:${state}`);
 ```
 
 - **Replay & Race Immunity:** Because `GETDEL` is atomic in Redis, an intercepted or replayed state token cannot be redeemed twice.
-- **Expiration Enforcement:** Expired keys return `null`, failing immediately with `400 Bad Request`.
+- **Expiration Enforcement:** Expired keys return `null`, failing immediately with `400 Bad Request` ("Invalid, expired, or already consumed OAuth state").
 - **Cross-Provider Mismatch Check:** Verifies that `stateData.provider === expectedProvider`. A state generated for Google cannot be consumed on a GitHub callback route.
 
 #### Shared Upstream Network Deadline (7-Second Abort Budget)
 
-To prevent slow third-party networks from starving serverless compute or exceeding Lambda's 15-second execution ceiling, a single cumulative 7-second `AbortController` deadline is shared across all sequential provider requests (token exchange, profile fetch, and email resolution):
+To prevent slow third-party networks from starving serverless compute or exceeding AWS Lambda's 15-second execution ceiling, a single cumulative 7-second `AbortController` deadline is shared across all sequential provider requests (token exchange, profile fetch, and email resolution):
 
-```typescript
-const controller = new AbortController();
-const timeoutId = setTimeout(() => controller.abort(), 7000);
-
-try {
-  // One controller.signal is passed to every sequential fetch call:
-  // 1. Token exchange: fetch(TOKEN_URL, { signal: controller.signal })
-  // 2. Profile fetch: fetch(PROFILE_URL, { signal: controller.signal })
-  // 3. GitHub emails: fetch(EMAILS_URL, { signal: controller.signal })
-  // Response body consumption (await response.json()) is awaited under this budget
-  profile = await strategy.getUserProfile(
-    code,
-    codeVerifier,
-    controller.signal,
-  );
-} catch (error: unknown) {
-  if (controller.signal.aborted) {
-    throw new AppError(
-      `Timeout while communicating with ${provider} OAuth provider`,
-      504,
-    );
-  }
-  throw error;
-} finally {
-  clearTimeout(timeoutId);
-}
-```
-
-If the upstream provider stalls or exceeds the 7-second budget, the request is cleanly aborted and explicitly mapped to HTTP `504 Gateway Timeout`.
+- A unified `AbortController` is initialized before upstream requests (`setTimeout(() => controller.abort(), 7000)`).
+- The `controller.signal` is passed to all sequential `fetch` requests and response body streaming calls (`response.json()`).
+- In the `finally` block, `clearTimeout(timeoutId)` ensures no lingering timers remain on serverless execution threads.
+- If the upstream provider stalls or exceeds the 7-second budget, `controller.signal.aborted` triggers an explicit mapping to HTTP `504 Gateway Timeout` (`AppError("Timeout while communicating with <Provider> OAuth provider", 504)`).
 
 #### Server-to-Server Token Exchange
 
@@ -259,14 +252,14 @@ The provider strategy performs a direct server-to-server HTTP POST request excha
 
 #### Profile Retrieval & Email Verification Enforcement
 
-1. **Google Strategy:**
+1. **Google Strategy & Trust Boundary Qualification:**
    - Queries `https://openidconnect.googleapis.com/v1/userinfo` with `Authorization: Bearer <access_token>`.
    - **Enforces email verification:** Validates that `userInfo.email_verified === true`. Unverified Google emails are rejected with `400 Bad Request`.
    - Uses `sub` (OpenID Connect Subject identifier) as the immutable `providerId`.
-   - _OpenID Connect claim retrieval note:_ AuthSphere retrieves identity claims through Google's authenticated OIDC UserInfo endpoint using the access token. It does not currently validate the ID token returned by Google's token endpoint.
+   - **Trust Boundary & ID Token Specification:** AuthSphere implements Google federated identity by querying Google's authenticated UserInfo endpoint over TLS using the bearer access token. AuthSphere does not cryptographically verify the RSA/ECDSA signature of Google's `id_token` JWT against Google's JWKS endpoint (`https://www.googleapis.com/oauth2/v3/certs`). The trust boundary relies on direct server-to-server TLS exchange with Google's token and userinfo endpoints.
 
 2. **GitHub Strategy:**
-   - Queries `https://api.github.com/user` with `Authorization: Bearer <access_token>` and mandatory `User-Agent: AuthSphere-API`.
+   - Queries `https://api.github.com/user` with `Authorization: Bearer <access_token>` and mandatory headers `User-Agent: AuthSphere-API` and `Accept: application/vnd.github+json`.
    - **Mandatory secondary query:** Queries `https://api.github.com/user/emails` because GitHub's primary user profile does not expose email verification status.
    - Evaluates email priority:
      1. Primary **and** verified email.
@@ -292,26 +285,26 @@ export interface OAuthProfile {
 
 ### 3.4. Phase 4 — Identity Resolution Matrix
 
-AuthSphere resolves identity using a deterministic decision matrix with a mandatory pre-resolution session validation gate:
+AuthSphere resolves identity using a deterministic decision matrix governed by a mandatory pre-resolution session validation gate:
 
 ```mermaid
 flowchart TD
     Start["Initiate Identity Resolution"] --> InSessionCheck{"state.userId Present in State?"}
 
-    InSessionCheck -->|"YES"| SessionValidate{"Active DB Session Valid?\n(findSessionById: non-expired & matches userId)"}
-    SessionValidate -->|"NO"| Unauth["401 Unauthorized\nSession expired or revoked"]
+    InSessionCheck -->|"YES"| SessionValidate{"Active DB Session Valid?<br/>(findSessionById: non-expired and matches userId)"}
+    SessionValidate -->|"NO"| Unauth["401 Unauthorized<br/>Session expired or revoked"]
     SessionValidate -->|"YES"| ExistsCheckLinked{"OAuthAccount Found in DB?"}
 
     ExistsCheckLinked -->|"YES"| LinkedMismatchCheck{"Linked to Different User?"}
-    LinkedMismatchCheck -->|"YES"| ConflictA["409 Conflict\nOAuth account already linked to another user"]
-    LinkedMismatchCheck -->|"NO"| AuthExisting["Authenticate Existing Linked User\n(user = existingOAuthAccount.user)"]
-    ExistsCheckLinked -->|"NO"| LinkAccount["Create OAuthAccount Record\nLink to authenticated user (state.userId)"]
+    LinkedMismatchCheck -->|"YES"| ConflictA["409 Conflict<br/>OAuth account already linked to another user"]
+    LinkedMismatchCheck -->|"NO"| AuthExisting["Authenticate Existing Linked User<br/>(user = existingOAuthAccount.user)"]
+    ExistsCheckLinked -->|"NO"| LinkAccount["Create OAuthAccount Record<br/>Link to authenticated user (state.userId)"]
 
     InSessionCheck -->|"NO"| ExistsCheckUnauth{"OAuthAccount Found in DB?"}
-    ExistsCheckUnauth -->|"YES"| AuthExistingUnauth["Authenticate Existing Linked User\n(user = existingOAuthAccount.user)"]
-    ExistsCheckUnauth -->|"NO"| EmailCheck{"User with profile.email\nExists in Database?"}
-    EmailCheck -->|"YES"| ConflictB["409 Conflict (Pre-Hijacking Takeover Defense)\nAccount with email already exists.\nRequire password login + in-session link."]
-    EmailCheck -->|"NO"| CreateNew["Atomic Database Transaction:\nCreate User (isEmailVerified=true, passwordHash=null)\nCreate OAuthAccount (provider, providerId)\nAssign default role: USER"]
+    ExistsCheckUnauth -->|"YES"| AuthExistingUnauth["Authenticate Existing Linked User<br/>(user = existingOAuthAccount.user)"]
+    ExistsCheckUnauth -->|"NO"| EmailCheck{"User with profile.email<br/>Exists in Database?"}
+    EmailCheck -->|"YES"| ConflictB["409 Conflict (Pre-Hijacking Takeover Defense)<br/>Account with email already exists.<br/>Require password login + in-session link."]
+    EmailCheck -->|"NO"| CreateNew["Atomic Database Transaction:<br/>Create User (isEmailVerified=true, passwordHash=null)<br/>Create OAuthAccount (provider, providerId)<br/>Assign default role: USER"]
 ```
 
 #### Detailed Resolution Cases
@@ -346,7 +339,7 @@ If the resolved user has MFA enabled (`user.mfaEnabled === true`) and the flow i
      }
    }
    ```
-4. **Completion:** The browser prompts for the second factor and submits `mfaToken` + 6-digit TOTP code (or recovery code) to `POST /auth/mfa/verify` to receive final session cookies.
+4. **Completion:** The client prompts for the second factor and submits `mfaToken` + 6-digit TOTP code (or recovery code) to `POST /auth/mfa/verify` to receive final session cookies.
 
 #### Scenario 2: Direct Session Issuance
 
@@ -354,9 +347,9 @@ If MFA is disabled (or during in-session account linking):
 
 1. **Creates Persistent Session:** Calls `generateAuthTokensAndSession()`, creating a `Session` record with UUIDv7 ID, SHA-256 hashed refresh token, client IP address, User-Agent, and 30-day expiration.
 2. **Generates JWT Tokens:**
-   - **Access Token:** 15-minute validity containing claims `{ sub, sid, role, permissions }`.
+   - **Access Token:** 15-minute validity containing claims `{ sub, sid, role }` (permissions resolved dynamically at authorization layer).
    - **Refresh Token:** 30-day validity containing claims `{ sub, sid, role }`.
-3. **Sets HttpOnly Cookies:** Sets both `accessToken` and `refreshToken` on root path `/` for edge reverse-proxy compatibility (`httpOnly: true`, `secure: true` in production, `sameSite: "lax"`, per ADR-079).
+3. **Sets HttpOnly Cookies:** Sets both `accessToken` and `refreshToken` on root path `/` for edge reverse-proxy compatibility (`httpOnly: true`, `secure: production`, `sameSite: "lax"`).
 4. **Records Audit Event:** Records an `OAUTH_LOGIN` security event with metadata `{ provider }`.
 5. **Returns Success:** Responds with HTTP `200 OK` and message `"Authenticated successfully via <Provider> OAuth"`.
 
@@ -417,22 +410,11 @@ model OAuthAccount {
 
 In production environments (e.g. Vercel + AWS Lambda / ECS), OAuth traffic routes through Vercel's Edge Reverse Proxy:
 
-```mermaid
-flowchart LR
-    Browser["User Browser"]
-    VercelEdge["Vercel Edge Proxy\nhttps://<PROJECT>.vercel.app/api/auth/oauth/*"]
-    AWSBackend["AWS Backend Compute\nhttps://<LAMBDA_URL> or http://<ALB_DNS>"]
-    IDP["External IDP (Google / GitHub)"]
-
-    Browser -->|"1. Initiate: GET /api/auth/oauth/google"| VercelEdge
-    VercelEdge -->|"2. Upstream Rewrite"| AWSBackend
-    AWSBackend -->|"3. 302 Redirect to IDP"| Browser
-    Browser -->|"4. Authenticate & Grant Consent"| IDP
-    IDP -->|"5. Redirect to Callback URI"| Browser
-    Browser -->|"6. Callback: GET /api/auth/oauth/google/callback"| VercelEdge
-    VercelEdge -->|"7. Upstream Rewrite"| AWSBackend
-    AWSBackend -->|"8. 200 OK + First-Party HttpOnly Cookies"| Browser
-```
+- **Path Rewrite Rule:** The edge proxy accepts same-origin browser requests on `https://<PROJECT>.vercel.app/api/auth/oauth/(.*)` and strips the `/api` prefix, forwarding upstream to backend compute at `/auth/oauth/$1`.
+- **First-Party Cookie Isolation:** Because the browser only makes requests to the primary domain (`/api/auth/oauth/*`), cookies are treated as first-party by Safari ITP, Firefox ETP, and Chrome privacy sandboxes.
+- **Cookie Path Differentiation:**
+  - The PKCE verifier cookie (`oauth_verifier_<state>`) is scoped strictly to `Path=/api/auth/oauth` so it only travels during OAuth initiation and callback requests.
+  - Final authentication cookies (`accessToken`, `refreshToken`) are scoped to `Path=/` so all subsequent application requests across the domain carry credentials.
 
 ### Callback URI Resolution Logic
 
@@ -444,8 +426,7 @@ const base =
 return `${base.replace(/\/$/, "")}/${provider.toLowerCase()}/callback`;
 ```
 
-- **Production Edge Alignment:** By pointing `OAUTH_CALLBACK_BASE_URL` or `FRONTEND_URL` to the public Vercel domain, callbacks return through the same-origin reverse proxy.
-- **Cookie Security:** The browser receives auth cookies on the first-party domain, completely avoiding third-party cookie restrictions and cross-site tracking protections.
+By pointing `OAUTH_CALLBACK_BASE_URL` or `FRONTEND_URL` to the public Vercel domain, callbacks return through the same-origin reverse proxy, guaranteeing symmetric cookie access and avoiding cross-origin issues.
 
 ---
 
@@ -470,14 +451,14 @@ return `${base.replace(/\/$/, "")}/${provider.toLowerCase()}/callback`;
 
 ## 8. File Reference Map
 
-```
+```text
 apps/api/src/
 ├── config/
 │   └── env.ts                           # Zod validation for OAuth credentials & callback base URL
 ├── middlewares/
 │   ├── auth.ts                          # optionalAuth (extracts authenticated context if valid access token detected)
-│   ├── rate-limit.ts                    # OAUTH_INITIATE and OAUTH_CALLBACK rate limit policies
-│   └── validate.ts                      # Zod schema validation for OAuth callback queries
+│   ├── rate-limit.ts                    # OAUTH_INITIATE and OAUTH_CALLBACK rate limit policies (20 req / 1m IP)
+│   └── validate.ts                      # Multi-target Zod request validator
 └── modules/auth/
     ├── auth.route.ts                    # Mounts /oauth/google[/callback] and /oauth/github[/callback]
     ├── auth.openapi.ts                  # OpenAPI 3.1 specifications for OAuth endpoints
@@ -525,18 +506,28 @@ Verify that replaying or tampering with state parameters fails fast:
 # 1. Attempt callback with invalid state parameter
 curl -i -X GET "https://<PUBLIC_DOMAIN>/api/auth/oauth/google/callback?code=test-code&state=invalid-state-token"
 
-# Expected Response:
+# Expected Response (State Invalidation Guard):
 # HTTP/1.1 400 Bad Request
 # {"success":false,"message":"Invalid, expired, or already consumed OAuth state"}
 ```
 
 ```bash
-# 2. Attempt callback with missing authorization code
-curl -i -X GET "https://<PUBLIC_DOMAIN>/api/auth/oauth/google/callback?state=some-state"
+# 2. Attempt callback without transaction cookie (Login-CSRF or cross-browser replay defense)
+curl -i -X GET "https://<PUBLIC_DOMAIN>/api/auth/oauth/google/callback?code=test-code&state=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-# Expected Response:
+# Expected Response (PKCE Transaction Cookie Guard):
 # HTTP/1.1 400 Bad Request
-# {"success":false,"message":"Validation failed", ...}
+# {"success":false,"message":"Missing or expired OAuth transaction cookie"}
+```
+
+```bash
+# 3. Attempt callback with transaction cookie present but missing authorization code
+curl -i -X GET "https://<PUBLIC_DOMAIN>/api/auth/oauth/google/callback?state=<VALID_STATE>" \
+  -H "Cookie: oauth_verifier_<VALID_STATE>=<VALID_VERIFIER>"
+
+# Expected Response (Code Presence Guard):
+# HTTP/1.1 400 Bad Request
+# {"success":false,"message":"Missing or invalid authorization code"}
 ```
 
 ### 9.3. Account Linking Verification

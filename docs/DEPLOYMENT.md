@@ -1,6 +1,12 @@
 # Cloud Deployment & DevOps Guide — AuthSphere
 
-This document specifies the production deployment architecture, infrastructure engineering, continuous release pipelines, configuration standards, and operational workflows for AuthSphere across serverless (AWS Lambda), containerized (AWS ECS Fargate), and edge (Vercel) environments.
+> **Single Source of Truth (SSOT)** for AuthSphere's cloud deployment architecture, infrastructure engineering, continuous release pipelines, configuration standards, and operational workflows across serverless (AWS Lambda), containerized (AWS ECS Fargate), and edge (Vercel) environments.
+>
+> **Companion Guides:**
+> - System Architecture & Component Design: [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
+> - Architectural Decision Records (ADRs): [`docs/Engineering-Decisions.md`](Engineering-Decisions.md)
+> - OAuth 2.0 & OIDC Federation Guide: [`docs/OAUTH.md`](OAUTH.md)
+> - Test Architecture & Verification Matrix: [`docs/TESTING.md`](TESTING.md)
 
 ---
 
@@ -75,9 +81,10 @@ AuthSphere runs on Node.js 24 on **Amazon Linux 2023 (x86_64)** Firecracker micr
 #### Key Architectural Decisions:
 
 1. **Why Lambda is Primary:** Eliminates idle compute and load-balancer costs completely while scaling automatically with request demand.
-2. **Two-Layer Packaging:**
+2. **Two-Layer Packaging & Native Addon Isolation:**
    - _Layer 1 (Application Bundle):_ Compiled by `tsup` into a single ESM file (`infra/lambda/lambda.mjs`). An injected banner (`import { createRequire } from "node:module"; const require = createRequire(import.meta.url);`) resolves dynamic CommonJS `require()` calls in `@codegenie/serverless-express` and `pino`.
    - _Layer 2 (Native C++ Addon):_ `argon2` is marked `external` to preserve its precompiled `.node` binary structure. Prerequisite: `npm --prefix infra/lambda ci --omit=dev`.
+   - _Local Build vs. CI Isolation:_ In CI/CD, GitHub Actions runs on `ubuntu-latest`, ensuring `npm --prefix infra/lambda ci --omit=dev` installs Amazon Linux / glibc-compatible x86_64 binaries. If building locally from macOS or Windows for manual deployment or testing, raw `npm run build:lambda` packages host-architecture binaries (`win32` or `darwin`), causing Lambda runtime failures (`ELF format mismatch`). To ensure reproducible local packaging matching the Amazon Linux 2023 environment, use `sam build --use-container` or build inside a Linux container/WSL.
 3. **Zero-Binary Database Engine:** Prisma 7 delegates query execution to `@prisma/adapter-pg` over pure JavaScript TCP sockets. All Prisma packages (`@prisma/client`, `@prisma/adapter-pg`, and `prisma` CLI) are locked strictly to exact version `"7.8.0"`.
 4. **Function URL Pricing & Access:** Function URLs provide direct HTTP(S) access without an additional endpoint fee. Lambda request and execution charges still apply. Configured with `AuthType: NONE` as an intentional portfolio project trade-off to allow direct testing without AWS SigV4 signing.
 5. **Cold-Start Performance & Sizing:**
@@ -106,6 +113,9 @@ AuthSphere provides a complete containerized deployment reference running Node.j
    - _Dynamic DNS Discovery & Stability Wait:_ CI/CD dynamically discovers the ALB DNS via `aws elbv2 describe-load-balancers` and waits for ECS service stability (`wait-for-service-stability: true`).
 3. **Public Subnet Layer 4 Perimeter:** Containers deploy in public subnets with public IPs to pull images from GHCR without an expensive AWS NAT Gateway (~$44.53/month fixed baseline per AZ in Mumbai `ap-south-1`: $0.056/hr NAT Gateway + $0.005/hr public IPv4, excluding $0.056/GB data processing). `ECS-SG` restricts port 3000 strictly to `ALB-SG`.
 4. **Worker Status Clarification:** The BullMQ worker (`authsphere-worker`) is **optional and not part of the active inline-dispatch baseline setup** (`QUEUE_DRIVER=inline`). Activating the worker daemon requires setting `DEPLOY_ECS_WORKER=true`, updating `QUEUE_DRIVER=bullmq` on the API container, and configuring separate connection factories (bounded retries for producers; `maxRetriesPerRequest: null` for workers).
+5. **Local Container Environments (`docker/`):**
+   - `docker/docker-compose.dev.yml`: Full local infrastructure running PostgreSQL 16 Alpine and Redis 8 Alpine for end-to-end hermetic development.
+   - `docker/docker-compose.infra.yml`: Lightweight cache-only profile running Redis 8 Alpine alone, intended for developers connecting to remote Neon PostgreSQL databases.
 
 ---
 
@@ -115,15 +125,16 @@ Both compute targets connect to the same cloud backends without requiring modifi
 
 ### 3.1. Neon PostgreSQL: Dual-Endpoint Topology
 
-- **Direct Unpooled Connection (`ep-xyz...`):** Configured as `DATABASE_URL_DIRECT` strictly for database migrations (`npm run db:migrate:deploy`) and initial seeding. Chosen to preserve PostgreSQL **Session-Level Advisory Lock** (`pg_advisory_lock`) semantics and DDL transactions. (Modern PgBouncer supports prepared statements, but direct connections remain the recommended practice for migration lock safety).
+- **Direct Unpooled Connection (`ep-xyz...`):** Configured as `DATABASE_URL_DIRECT` strictly for database migrations (`npm run db:migrate:deploy --workspace=@authsphere/api`) and initial seeding. Chosen to preserve PostgreSQL **Session-Level Advisory Lock** (`pg_advisory_lock`) semantics and DDL transactions. (Modern PgBouncer supports prepared statements, but direct connections remain the recommended practice for migration lock safety).
 - **Pooled Connection (`-pooler`):** Configured as `DATABASE_URL` for runtime compute. PgBouncer multiplexes queries across concurrent microVMs and container tasks.
 - **Pool Sizing & Safety:** `pg.Pool max: 2` ceiling for Lambda; `max: 10` for ECS. In `apps/api/src/lib/prisma.ts`, `pool.on("error")` intercepts background idle socket drops (e.g. Neon scale-to-zero) to prevent uncaught process crashes.
 
-### 3.2. Upstash Redis: Fail-Fast Architecture
+### 3.2. Upstash Redis & Background Job Architecture
 
 - **Fail-Fast Policy (`enableOfflineQueue: false`):** Commands fail fast immediately if Redis is unreachable, rather than queuing in memory across frozen Lambda invocations.
 - **Reconnection Delays:** `retryStrategy` schedules backoff delays (0ms, 50ms, 100ms; max 3 retries) and `maxRetriesPerRequest: 1` bounds command attempts.
 - **Warm Ingress Readiness Gate (Lambda):** Warm microVM invocations wait up to 100ms via `once(redis, "ready")` to allow in-flight TLS handshakes to complete on fast routes.
+- **BullMQ Decoupled Capability vs. Active Baseline:** BullMQ (`apps/api/src/lib/queue.ts`) with exponential backoff retries is a fully supported deployment capability for decoupled background workers (`authsphere-worker`). However, to eliminate idle Redis command consumption and polling costs across serverless tiers, default active production relies on zero-polling drivers: `QUEUE_DRIVER=sync` on AWS Lambda (synchronous in-handler execution) and `QUEUE_DRIVER=inline` on AWS ECS Fargate (event-loop dispatch via `setImmediate`), keeping the BullMQ worker task dormant until `DEPLOY_ECS_WORKER=true` is toggled.
 
 ### 3.3. Transactional Email Strategy: Gmail OAuth2 vs. Resend
 
@@ -149,19 +160,7 @@ Both compute targets connect to the same cloud backends without requiring modifi
 
 ## 4. Frontend Ingress & Edge Security
 
-AuthSphere routes frontend traffic through Vercel's Edge Reverse Proxy (`apps/web/vercel.ts`):
-
-```mermaid
-flowchart LR
-    Browser["User Browser (React 19 SPA)"]
-    VercelEdge["Vercel Edge Reverse Proxy (Edge POP, Same-Origin)"]
-    AWSBackend["AWS Backend Compute (Lambda Function URL or ECS ALB)"]
-
-    Browser -->|"1. Same-Origin HTTP/2 Request (/api/*)"| VercelEdge
-    VercelEdge -->|"2. Upstream Proxy Request (HTTPS for Lambda / HTTP for ALB)"| AWSBackend
-    AWSBackend -->|"3. Backend Response"| VercelEdge
-    VercelEdge -->|"4. Response with First-Party Cookies"| Browser
-```
+AuthSphere routes frontend traffic through Vercel's Edge Reverse Proxy (`apps/web/vercel.ts`), eliminating cross-origin complexity while terminating SSL at edge Points of Presence (POPs). For internal Express middleware pipelines (Helmet, CORS, Request ID, Origin Validation, Rate Limiter), refer to [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#2-layered-component-architecture).
 
 ### 4.1. Browser Security Resolution Matrix
 
@@ -204,7 +203,7 @@ flowchart TD
     subgraph Stage2 ["Stage 2: Release & Deploy (deploy.yml)"]
         OIDCAuth["Assume IAM Role via OIDC (sts.amazonaws.com)"]
         BuildArtifact["Step 1: BUILD & PUSH ARTIFACTS FIRST\nLambda Zip or Docker Image to GHCR"]
-        RunMigration["Step 2: RUN DATABASE MIGRATIONS\nnpm run db:migrate:deploy via Direct URL"]
+        RunMigration["Step 2: RUN DATABASE MIGRATIONS\nnpm run db:migrate:deploy --workspace=@authsphere/api"]
         DeployCompute["Step 3: DISPATCH COMPUTE UPDATE\nsam deploy OR ECS service update"]
         SmokeTest["Step 4: AUTOMATED SMOKE TESTS\n/health/live & /health/ready"]
 
@@ -219,9 +218,9 @@ flowchart TD
 1. **Merge / Push to `main`:** Developers push or merge code to `main` (or dispatch `deploy.yml` manually).
 2. **Automated Validation (Stage 1):** Validates monorepo types, executes migrations against ephemeral test containers, runs unit tests, and tests Docker build compilation.
 3. **OIDC Authentication (Stage 2):** GitHub Actions authenticates to AWS via OpenID Connect (`aws-actions/configure-aws-credentials`) without static long-lived credentials.
-   - _OIDC Claim Formats:_ Legacy format is `repo:utkarshj014/authsphere:ref:refs/heads/main`. The wildcard pattern `repo:utkarshj014@*/authsphere@*:ref:refs/heads/main` is used as an intentional convenience for simplicity and rapid setup. Third-party user forks have distinct logins/IDs and remain blocked in all cases.
+   - _OIDC Claim Formats:_ Standard format is `repo:utkarshj014/authsphere:ref:refs/heads/main` (or wildcard pattern `repo:utkarshj014/authsphere:*` for feature branch testing). Third-party user forks have distinct logins/IDs and remain blocked in all cases.
 4. **Artifact Creation First Invariant:** The compute artifact (Docker image pushed to GHCR or `authsphere-api.zip`) is built and published _before_ database migrations run. This guarantees the release code compiles before mutating persistent database schemas.
-5. **Database Migrations:** Prisma migrations execute against Neon via direct unpooled connection (`DATABASE_URL_DIRECT`). Migrations follow **Expand-and-Contract** backward-compatibility rules so running instances continue serving traffic without disruption.
+5. **Database Migrations:** Prisma migrations execute against Neon via direct unpooled connection (`DATABASE_URL_DIRECT`) using `npm run db:migrate:deploy --workspace=@authsphere/api`. Migrations follow **Expand-and-Contract** backward-compatibility rules so running instances continue serving traffic without disruption.
 6. **Compute Update Dispatch:**
    - If `DEPLOY_TARGET=serverless` (default): Executes `sam deploy` targeting AWS Lambda with parameter overrides.
    - If `DEPLOY_TARGET=ecs`: Dynamically discovers ALB DNS, renders task definitions, updates ECS services with circuit breaker enabled, and waits for service stability.
@@ -229,7 +228,7 @@ flowchart TD
 
 ### 5.2. Optional Manual Bootstrap / Recovery (`sam deploy`)
 
-Local CLI deployment (`sam deploy --guided`) is an optional disaster recovery or initial bootstrapping procedure, not the routine release pipeline.
+Local CLI deployment (`sam deploy --guided`) is an optional disaster recovery or initial bootstrapping procedure, not the routine release pipeline. When packaging locally outside CI, execute `sam build --use-container` first to compile native C++ addons (`argon2`) within an Amazon Linux container environment.
 
 > [!WARNING]
 > When prompted `Save arguments to configuration file [Y/n]`, answer **`N`**. SAM CLI persists guided values in plaintext to `samconfig.toml`. Never commit secret parameter overrides to version control.
@@ -259,6 +258,10 @@ Because both compute options connect to identical managed cloud backing stores, 
 2. **Controlled Ingress Cutover:** Once the new compute target passes health checks, update `BACKEND_URL` in Vercel project settings and trigger a **new Vercel deployment** (required for updated environment variables to take effect on edge rewrites).
 3. **Verification Before Decommissioning:** Keep the old backend active until end-to-end testing confirms the new backend is processing requests cleanly through Vercel. Only then scale down the previous compute target.
 4. **Rollback:** If an issue arises after cutover, manually revert `BACKEND_URL` in Vercel and trigger a frontend redeployment.
+
+> [!WARNING]
+> **AWS Lambda Function URL Trailing Slash Invariant:**
+> CloudFormation outputs `FunctionUrl` with a trailing slash (`https://<id>.lambda-url.<region>.on.aws/`). Because `apps/web/vercel.ts` rewrites routes via `${backendUrl}/$1`, **you must strip the trailing slash** when configuring `BACKEND_URL` in Vercel project settings (set `https://<id>.lambda-url.<region>.on.aws`). Leaving the trailing slash creates corrupted double-slash paths (`https://...//$1`), breaking API rewrites.
 
 ---
 
@@ -290,10 +293,14 @@ _(Note: Actual monthly totals scale with traffic. LCU usage, request duration, a
 1. **Short-Term Compute Optimization: Scale Fargate Tasks to 0**
 
    ```bash
+   # Scale down the primary API service
    aws ecs update-service --cluster authsphere-cluster --service authsphere-api --desired-count 0 --region ap-south-1
+
+   # If the decoupled worker was activated (DEPLOY_ECS_WORKER=true), scale down the worker service:
+   aws ecs update-service --cluster authsphere-cluster --service authsphere-worker --desired-count 0 --region ap-south-1
    ```
 
-   - _Savings:_ Eliminates Fargate vCPU, memory, and task public IPv4 charges (~$13.12/month). Scaling back up to 1 takes ~30 seconds.
+   - _Savings:_ Eliminates Fargate vCPU, memory, and task public IPv4 charges (~$13.12/month per running task). Scaling back up to 1 takes ~30 seconds.
 
 2. **Long-Term Optimization: Deleting the ALB (Retaining Target Group)**
    - _Savings:_ Eliminates the fixed ALB hourly charge and both ALB public IPv4 addresses (~$24.75/month).
@@ -364,31 +371,31 @@ done
 
 #### Sensitive Secrets & Service Credentials:
 
-| Variable                  | Primary Serverless (Lambda)          | Reference Containers (ECS)                     | Description                                             |
-| :------------------------ | :----------------------------------- | :--------------------------------------------- | :------------------------------------------------------ |
-| `DATABASE_URL_DIRECT`     | GitHub Secret `DATABASE_URL_DIRECT`                    | GitHub Secret `DATABASE_URL_DIRECT`            | Direct unpooled Neon URL (strictly for CI migrations)   |
-| `DATABASE_URL`            | SAM Parameter (`NoEcho`) from `DATABASE_URL_POOLED`    | SSM `/authsphere/prod/DATABASE_URL`            | Pooled Neon PostgreSQL connection URL (`-pooler`)       |
-| `REDIS_URL`               | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/REDIS_URL`               | Upstash Redis connection URL (`rediss://...`)           |
-| `FRONTEND_URL`            | SAM Parameter from Variable                            | SSM `/authsphere/prod/FRONTEND_URL`            | Hosted frontend origin (`https://<PROJECT>.vercel.app`) |
-| `JWT_ACCESS_SECRET`       | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/JWT_ACCESS_SECRET`       | Signing secret for access JWTs (32+ chars)              |
-| `JWT_REFRESH_SECRET`      | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/JWT_REFRESH_SECRET`      | Signing secret for refresh JWTs (32+ chars)             |
-| `MFA_ENCRYPTION_KEY`      | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/MFA_ENCRYPTION_KEY`      | 32-byte key for AES-256-GCM TOTP secret encryption      |
-| `GMAIL_USER`              | SAM Parameter / Optional                               | SSM `/authsphere/prod/GMAIL_USER`              | Sender Gmail address for OAuth2 sending                 |
-| `GMAIL_REFRESH_TOKEN`     | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/GMAIL_REFRESH_TOKEN`     | Gmail OAuth2 refresh token                              |
-| `RESEND_API_KEY`          | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/RESEND_API_KEY`          | Resend API key                                          |
-| `EMAIL_FROM`              | SAM Parameter / Optional                               | SSM `/authsphere/prod/EMAIL_FROM`              | Sender identity string (`AuthSphere <noreply@...>`)     |
-| `GOOGLE_CLIENT_ID`        | SAM Parameter / Optional                               | SSM `/authsphere/prod/GOOGLE_CLIENT_ID`        | Google OAuth Client ID                                  |
-| `GOOGLE_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/GOOGLE_CLIENT_SECRET`    | Google OAuth Client Secret                              |
-| `GITHUB_CLIENT_ID`        | SAM Parameter from `GH_OAUTH_CLIENT_ID` (reserved var) | SSM `/authsphere/prod/GITHUB_CLIENT_ID`        | GitHub OAuth Client ID (CI: `GH_OAUTH_CLIENT_ID`)        |
-| `GITHUB_CLIENT_SECRET`    | SAM Parameter from `GH_OAUTH_CLIENT_SECRET` (reserved)  | SSM `/authsphere/prod/GITHUB_CLIENT_SECRET`    | GitHub OAuth Client Secret (CI: `GH_OAUTH_CLIENT_SECRET`)|
-| `OAUTH_CALLBACK_BASE_URL` | SAM Parameter / Optional                               | SSM `/authsphere/prod/OAUTH_CALLBACK_BASE_URL` | OAuth callback base URL routed via Vercel               |
+| Variable                  | Primary Serverless (Lambda)                            | Reference Containers (ECS)                     | Description                                               |
+| :------------------------ | :----------------------------------------------------- | :--------------------------------------------- | :-------------------------------------------------------- |
+| `DATABASE_URL_DIRECT`     | GitHub Secret `DATABASE_URL_DIRECT`                    | GitHub Secret `DATABASE_URL_DIRECT`            | Direct unpooled Neon URL (strictly for CI migrations)     |
+| `DATABASE_URL`            | SAM Parameter (`NoEcho`) from `DATABASE_URL_POOLED`    | SSM `/authsphere/prod/DATABASE_URL`            | Pooled Neon PostgreSQL connection URL (`-pooler`)         |
+| `REDIS_URL`               | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/REDIS_URL`               | Upstash Redis connection URL (`rediss://...`)             |
+| `FRONTEND_URL`            | SAM Parameter from Variable                            | SSM `/authsphere/prod/FRONTEND_URL`            | Hosted frontend origin (`https://<PROJECT>.vercel.app`)   |
+| `JWT_ACCESS_SECRET`       | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/JWT_ACCESS_SECRET`       | Signing secret for access JWTs (32+ chars)                |
+| `JWT_REFRESH_SECRET`      | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/JWT_REFRESH_SECRET`      | Signing secret for refresh JWTs (32+ chars)               |
+| `MFA_ENCRYPTION_KEY`      | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/MFA_ENCRYPTION_KEY`      | 32-byte key for AES-256-GCM TOTP secret encryption        |
+| `GMAIL_USER`              | SAM Parameter / Optional                               | SSM `/authsphere/prod/GMAIL_USER`              | Sender Gmail address for OAuth2 sending                   |
+| `GMAIL_REFRESH_TOKEN`     | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/GMAIL_REFRESH_TOKEN`     | Gmail OAuth2 refresh token                                |
+| `RESEND_API_KEY`          | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/RESEND_API_KEY`          | Resend API key                                            |
+| `EMAIL_FROM`              | SAM Parameter / Optional                               | SSM `/authsphere/prod/EMAIL_FROM`              | Sender identity string (`AuthSphere <noreply@...>`)       |
+| `GOOGLE_CLIENT_ID`        | SAM Parameter / Optional                               | SSM `/authsphere/prod/GOOGLE_CLIENT_ID`        | Google OAuth Client ID                                    |
+| `GOOGLE_CLIENT_SECRET`    | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/GOOGLE_CLIENT_SECRET`    | Google OAuth Client Secret                                |
+| `GITHUB_CLIENT_ID`        | SAM Parameter from `GH_OAUTH_CLIENT_ID` (reserved var) | SSM `/authsphere/prod/GITHUB_CLIENT_ID`        | GitHub OAuth Client ID (CI: `GH_OAUTH_CLIENT_ID`)         |
+| `GITHUB_CLIENT_SECRET`    | SAM Parameter from `GH_OAUTH_CLIENT_SECRET` (reserved) | SSM `/authsphere/prod/GITHUB_CLIENT_SECRET`    | GitHub OAuth Client Secret (CI: `GH_OAUTH_CLIENT_SECRET`) |
+| `OAUTH_CALLBACK_BASE_URL` | SAM Parameter / Optional                               | SSM `/authsphere/prod/OAUTH_CALLBACK_BASE_URL` | OAuth callback base URL routed via Vercel                 |
 
 #### Frontend & Edge Reverse Proxy Configuration:
 
-| Variable       | Target Location                                 | Description                                                                                                                                                  |
-| :------------- | :---------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BACKEND_URL`  | Vercel Project Settings → Environment Variables | Live backend base URL without trailing slash (`https://<LAMBDA_URL>` or `http://<ALB_DNS>`). Used server-side by `apps/web/vercel.ts` for Edge rewrites.     |
-| `VITE_API_URL` | `apps/web/.env` / Vercel Environment Variables  | Web client API base URL. **Leave empty** in production to route through Vercel's same-origin proxy (`/api/*`), preserving HttpOnly cookies and zeroing CORS. |
+| Variable       | Target Location                                 | Description                                                                                                                                                                                                                                   |
+| :------------- | :---------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BACKEND_URL`  | Vercel Project Settings → Environment Variables | Live backend base URL without trailing slash (`https://<LAMBDA_URL>` or `http://<ALB_DNS>`). **Important:** CloudFormation outputs `FunctionUrl` with a trailing slash (`https://...on.aws/`) which **must be stripped** before configuring Vercel to avoid double-slash (`//$1`) rewrite corruption. Used server-side by `apps/web/vercel.ts` for Edge rewrites. |
+| `VITE_API_URL` | `apps/web/.env` / Vercel Environment Variables  | Web client API base URL. **Leave empty** in production to route through Vercel's same-origin proxy (`/api/*`), preserving HttpOnly cookies and zeroing CORS.                                                                                 |
 
 ---
 
@@ -397,8 +404,12 @@ done
 ### 9.1. Start Infrastructure & Environment
 
 ```bash
-# 1. Start local PostgreSQL 16 and Redis 8 service containers
+# 1. Start local service containers:
+# Option A: Full local infrastructure (PostgreSQL 16 + Redis 8)
 docker compose -f docker/docker-compose.dev.yml up -d
+
+# Option B: Cache-only infrastructure (Redis 8 only, when connecting to remote Neon DB)
+docker compose -f docker/docker-compose.infra.yml up -d
 
 # 2. Copy environment templates
 cp apps/api/.env.example apps/api/.env

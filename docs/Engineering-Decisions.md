@@ -2,9 +2,12 @@
 
 This document records the architectural and engineering decisions made during the design, development, and evolution of **AuthSphere** — a production-grade, highly secure authentication and session management platform.
 
-> **Companion Architecture & Operations Guides:**
-> - [OAuth 2.0 Architecture & Integration Guide (OAUTH.md)](OAUTH.md) — Comprehensive guide covering end-to-end OAuth flow sequences, PKCE cookie binding, provider strategies, identity resolution matrices, and test suites.
-> - [Cloud Deployment & DevOps Guide (DEPLOYMENT.md)](DEPLOYMENT.md) — Comprehensive guide covering serverless (AWS Lambda) vs containerized (AWS ECS Fargate) compute topologies, dual database connections, CI/CD pipeline, and operational runbooks.
+> **Companion Documentation Suite:**
+>
+> - [System Architecture & Design (ARCHITECTURE.md)](ARCHITECTURE.md) — High-level mental model, layered component architecture, domain entity relationships, and core authentication lifecycles.
+> - [OAuth 2.0 Architecture & Integration Guide (OAUTH.md)](OAUTH.md) — Authoritative protocol specification for federated identity providers, PKCE browser-cookie binding, and identity resolution.
+> - [Cloud Deployment & Operations Guide (DEPLOYMENT.md)](DEPLOYMENT.md) — Operational runbooks for dual-target compute (AWS Lambda vs. ECS Fargate), database connection topologies, CI/CD, and disaster recovery.
+> - [Testing & Quality Assurance Guide (TESTING.md)](TESTING.md) — Hermetic testing pyramid, test environment isolation, and security invariant verification suites.
 
 ---
 
@@ -12,7 +15,7 @@ This document records the architectural and engineering decisions made during th
 
 ### By Domain Category
 
-<details open>
+<details open id="architecture--project-boundaries">
 <summary><b>🏗️ Architecture & Project Boundaries</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
@@ -34,7 +37,7 @@ This document records the architectural and engineering decisions made during th
 
 </details>
 
-<details open>
+<details open id="security-cryptography--credentials">
 <summary><b>🔐 Security, Cryptography & Credentials</b></summary>
 
 - [ADR-022: Mitigating Login Timing Differences via Dummy Password Verification](#adr-022--mitigating-login-timing-differences-via-dummy-password-verification)
@@ -57,7 +60,7 @@ This document records the architectural and engineering decisions made during th
 
 </details>
 
-<details open>
+<details open id="authentication--session-management">
 <summary><b>🔑 Authentication & Session Management</b></summary>
 
 - [ADR-012: Unified Session Model (Session + Refresh Token)](#adr-012--unified-session-model-session--refresh-token)
@@ -77,7 +80,7 @@ This document records the architectural and engineering decisions made during th
 
 </details>
 
-<details open>
+<details open id="multi-factor-authentication-mfa">
 <summary><b>🛡️ Multi-Factor Authentication (MFA)</b></summary>
 
 - [ADR-045: Ephemeral MFA Challenge Tokens for Two-Step Authentication](#adr-045--ephemeral-mfa-challenge-tokens-for-two-step-authentication)
@@ -90,7 +93,7 @@ This document records the architectural and engineering decisions made during th
 
 </details>
 
-<details open>
+<details open id="validation-middleware--authorization">
 <summary><b>⚙️ Validation, Middleware & Authorization</b></summary>
 
 - [ADR-003: Single-Source Environment Configuration](#adr-003--single-source-environment-configuration)
@@ -113,7 +116,7 @@ This document records the architectural and engineering decisions made during th
 
 </details>
 
-<details open>
+<details open id="data-access-orm--transactions">
 <summary><b>🗄️ Data Access, ORM & Transactions</b></summary>
 
 - [ADR-005: Prisma 7 ORM with Native PostgreSQL Driver Adapter](#adr-005--prisma-7-orm-with-native-postgresql-driver-adapter)
@@ -131,7 +134,7 @@ This document records the architectural and engineering decisions made during th
 
 </details>
 
-<details open>
+<details open id="observability-reliability--operations">
 <summary><b>📊 Observability, Reliability & Operations</b></summary>
 
 - [ADR-008: Hierarchical Error Handling Pipeline](#adr-008--hierarchical-error-handling-pipeline)
@@ -151,7 +154,7 @@ This document records the architectural and engineering decisions made during th
 
 </details>
 
-<details open>
+<details open id="testing-quality--security-invariants">
 <summary><b>🧪 Testing, Quality & Security Invariants</b></summary>
 
 - [ADR-070: High-Signal Hermetic Testing Architecture across Unit, Integration, and E2E Pyramids](#adr-070--high-signal-hermetic-testing-architecture-across-unit-integration-and-e2e-pyramids)
@@ -582,21 +585,26 @@ Strict **Refresh Token Rotation (RTR)**: every refresh generates a new token pai
 
 ## ADR-015 — Pre-Persistence UUIDv7 Session Identifiers
 
-**Status:** Accepted
+**Status:** Accepted _(Extended by ADR-093)_
 
 ### Context
 
-JWT Access Tokens include Session ID (`sid`). Database-generated PKs require a multi-step roundtrip before signing.
+JWT Access Tokens include the Session ID (`sid`). Database-generated primary keys require a multi-step roundtrip before token signing. Furthermore, while Node.js 24.16.0+ introduced `crypto.randomUUIDv7()`, AuthSphere targets `node: "24.x || 25.x"` and standardizes on the portable `uuidv7` package to guarantee deterministic execution across all supported runtime environments.
 
 ### Decision
 
-Generate Session ID (`crypto.randomUUIDv7()`) in the service layer _before_ database insertion or JWT signing.
+Generate Session IDs in the service layer using `import { uuidv7 } from "uuidv7"` _before_ database insertion or JWT signing:
+
+```typescript
+const sessionId = existingSessionId ?? uuidv7();
+```
 
 ### Rationale
 
-- **Time-Ordered:** UUIDv7's time prefix ensures efficient B-Tree index placement in PostgreSQL.
-- **Atomic:** Enables constructing JWTs and persisting the session in a single write.
-- Prevents orphaned records if JWT signing fails.
+- **Time-Ordered:** UUIDv7's millisecond timestamp prefix guarantees sequential B-Tree index placement in PostgreSQL, preventing random disk page splits.
+- **Atomic Pre-Signing:** Enables constructing signed JWTs (`sid`) and persisting the session record in a single database write without roundtrip latency.
+- **Fail-Secure Lifecycle:** Prevents orphaned database records if token generation or signing fails.
+- **Ecosystem Evolution:** Standardized application pre-persistence generation serves as the precursor to the universal database entity strategy formalized in [ADR-093](#adr-093--universal-uuidv7-primary-key-strategy-across-relational-entities).
 
 ---
 
@@ -660,7 +668,9 @@ Enforce expiration filtering in repository lookups (e.g., `where: { expiresAt: {
 
 ## ADR-019 — Standalone Function Export Pattern
 
-**Status:** Accepted
+**Status:** Accepted _(Codebase Standard & Convention)_
+
+> **Category Note:** This record captures a repository-wide coding standard and export convention rather than a distributed architectural decision. Maintained here for historical codebase convention tracking.
 
 ### Context
 
@@ -687,7 +697,9 @@ export const authService = { signup, login };
 
 ## ADR-020 — Barrel Index Re-Exports with Explicit ESM Extensions
 
-**Status:** Accepted
+**Status:** Accepted _(Codebase Standard & Convention)_
+
+> **Category Note:** This record captures a TypeScript/Node.js native ESM module resolution convention rather than a distributed architectural decision. Maintained here for historical codebase convention tracking.
 
 ### Context
 
@@ -989,7 +1001,7 @@ Guard all password-dependent flows:
 
 ## ADR-033 — Cookie-Based Token Transport
 
-**Status:** Accepted
+**Status:** Accepted _(Cookie paths superseded by ADR-042 and ADR-079)_
 
 ### Context
 
@@ -1000,14 +1012,21 @@ Tokens can be transported via headers, localStorage, or cookies — each with di
 Transport both tokens exclusively via `httpOnly`, `secure`, `sameSite: "lax"` cookies. Never exposed to client-side JS or response bodies.
 
 - **Access Token:** Path `/`, `maxAge` = `JWT_ACCESS_EXPIRES_IN_MS`.
-- **Refresh Token:** Path `/auth` (covers `/auth/refresh-token` and `/auth/logout`), `maxAge` = `JWT_REFRESH_EXPIRES_IN_MS`.
+- **Refresh Token:** Path `/` (originally `/auth/refresh-token`, subsequently widened to `/auth` in ADR-042, and finalized to `/` in ADR-079), `maxAge` = `JWT_REFRESH_EXPIRES_IN_MS`.
 - Both use `priority: "high"` to prevent browser eviction.
+
+> [!NOTE]
+> **Cookie Path Progression:**
+>
+> 1. Initial implementation scoped refresh token cookie to `path: "/auth/refresh-token"`.
+> 2. [ADR-042](#adr-042--refresh-token-cookie-path-scoped-to-auth) widened path to `/auth` to enable `POST /auth/logout` session revocation.
+> 3. [ADR-079](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge) finalized path to root `/` to survive reverse-proxy prefix rewriting (`/api/*` -> backend `/auth/*`).
 
 ### Rationale
 
 - **XSS Protection:** `httpOnly` prevents JS token theft.
 - **CSRF Mitigation:** `sameSite: "lax"` blocks cross-origin POST cookies.
-- **Minimal Exposure:** Refresh token scoped to `/auth` — covers refresh and logout endpoints but excluded from unrelated routes.
+- **Root Scoping Parity:** Scoping both cookies to `/` ensures reliable transport across reverse proxies, while CSRF protection is strictly enforced via `SameSite=Lax` and `originValidation` middleware.
 
 ---
 
@@ -1074,7 +1093,7 @@ Scattering authorization checks within controller functions mixes access control
 
 ### Decision
 
-Implement composable Express middleware factories in `authorization.middleware.ts`:
+Implement composable Express middleware factories in `apps/api/src/modules/authorization/authorization.middleware.ts`:
 
 - `requireRole(...roles)`: Allows access if the authenticated user has at least one of the specified roles (OR logic).
 - `requirePermission(...permissions)`: Allows access only if the user holds all specified permissions (AND logic).
@@ -1229,25 +1248,25 @@ catch (error) {
 
 ## ADR-042 — Refresh Token Cookie Path Scoped to `/auth`
 
-**Status:** Accepted _(Supersedes the `/auth/refresh-token` path specified in ADR-033; Subsequent reverse-proxy scoping documented in ADR-079)_
+**Status:** Superseded by ADR-079
+
+> [!IMPORTANT]
+> **Superseded Status Note:**
+> This decision broadened the refresh token cookie path from `/auth/refresh-token` (ADR-033) to `/auth`. However, when routing through reverse-proxy topologies (such as Vercel Edge rewriting `/api/:path*` to backend compute), the browser-facing path is `/api/auth/*` while backend Express routing is mounted at `/auth/*`. Cookies scoped to `/auth` are never delivered by browsers on `/api/*` requests. Consequently, [ADR-079](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge) superseded this decision by broadening `refreshTokenCookieOptions.path` to root `"/"`.
 
 ### Context
 
-The refresh token cookie was originally scoped to `path: "/auth/refresh-token"`, which prevented the browser from sending it to `POST /auth/logout`. The logout endpoint reads `req.cookies.refreshToken` to identify and delete the session, but the cookie was absent due to path mismatch.
+The refresh token cookie was originally scoped to `path: "/auth/refresh-token"` [ADR-033], which prevented the browser from sending it to `POST /auth/logout`. The logout endpoint reads `req.cookies.refreshToken` to identify and delete the session, but the cookie was absent due to path mismatch.
 
 ### Decision
 
-Broaden the refresh token cookie path from `/auth/refresh-token` to `/auth`. The cookie is now sent to all endpoints under the `/auth` prefix, including `/auth/refresh-token`, `/auth/logout`, and `/auth/logout-all`.
-
-> [!NOTE]
-> **Subsequent Reverse-Proxy Evolution (ADR-079):**
-> When routing through reverse-proxy topologies (such as Vercel Edge rewriting `/api/:path*` to backend compute), the public browser-facing path is `/api/auth/*` while internal Express routing is mounted at `/auth/*`. Browsers scoping cookies to `path: "/auth"` fail to deliver them on client requests directed to `/api/*`. To maintain reliable cookie transport across reverse proxies and multi-origin gateways, `refreshTokenCookieOptions.path` was broadened to root `path: "/"` in ADR-079, with CSRF defense guaranteed through `HttpOnly`, `SameSite=Lax`, and `originValidation` middleware.
+Broaden the refresh token cookie path from `/auth/refresh-token` to `/auth`. The cookie is sent to all endpoints under the `/auth` prefix, including `/auth/refresh-token`, `/auth/logout`, and `/auth/logout-all`.
 
 ### Rationale
 
 - **Functional Correctness:** Logout can now read and revoke the refresh token session.
-- **Minimal Exposure:** The cookie is restricted to authentication lifecycles, while root scoping in reverse proxies ensures reliable delivery across edge rewrite boundaries.
 - **Consistency:** Both token refresh and session revocation endpoints receive the cookie without requiring the client to pass it in the request body.
+- **Evolutionary Step:** Served as the intermediate progression (`/auth/refresh-token` -> `/auth` -> `/`) before edge reverse proxy parity required root scoping in [ADR-079](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge).
 
 ---
 
@@ -1304,7 +1323,7 @@ Set an explicit body size limit of `16kb` via `express.json({ limit: "16kb" })` 
 
 ## ADR-045 — Ephemeral MFA Challenge Tokens for Two-Step Authentication
 
-**Status:** Accepted
+**Status:** Accepted _(Cardinality extended by ADR-057)_
 
 ### Context
 
@@ -1313,6 +1332,10 @@ During primary authentication (`POST /auth/login`), users with MFA enabled compl
 ### Decision
 
 Generate a short-lived (5-minute expiration) intermediate `MfaChallenge` record (`mfaToken` UUIDv7) upon successful primary credential verification. Return `{ mfaRequired: true, mfaToken }` to the client without issuing JWT access or refresh tokens. The client must present `mfaToken` alongside the TOTP or recovery code to `POST /auth/mfa/verify`. The challenge is atomically deleted (`deleteMfaChallenge`) immediately upon verification.
+
+> [!NOTE]
+> **Cardinality Evolution (ADR-057):**
+> While ADR-045 establishes the ephemeral challenge mechanism and single-use verification token contract, [ADR-057](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation) evolved the relational schema from 1:1 to 1:Many (`User` -> `mfaChallenges MfaChallenge[]`) to allow concurrent login challenges across browser tabs without overwriting earlier pending tokens.
 
 ### Rationale
 
@@ -1617,7 +1640,7 @@ app.use(
 
 ## ADR-057 — Ephemeral Multi-Challenge MFA Architecture with Single-Use Invalidation
 
-**Status:** Accepted
+**Status:** Accepted _(Extends ADR-045)_
 
 ### Context
 
@@ -1683,6 +1706,10 @@ export interface OAuthProviderStrategy {
 ```
 
 The core service (`oauth.service.ts`) dispatches requests dynamically via a provider strategy dictionary (`getOAuthStrategy(provider)`), propagating the PKCE challenge, verifier, and abort signal to upstream provider implementations [ADR-080, ADR-081].
+
+> [!NOTE]
+> **Relying Party Trust Boundary (Google):**
+> AuthSphere acts strictly as an OAuth 2.0 / OIDC Relying Party (Client). For Google social login, user identity claims (`email`, `email_verified`, `sub`) are retrieved directly from Google's authenticated UserInfo endpoint (`https://openidconnect.googleapis.com/v1/userinfo`) over TLS using the bearer access token [ADR-062], rather than locally verifying cryptographic signatures of Google's `id_token` against Google JWKS. Full protocol contracts are specified in [OAUTH.md](OAUTH.md).
 
 ### Rationale
 
@@ -2072,7 +2099,7 @@ Implement a 3-layer test pyramid utilizing **Vitest** and **Supertest** configur
    - Deterministic serial test execution (`fileParallelism: false`) with atomic cascade truncations of mutable user tables preserving seeded roles and permissions (`cleanTestState()`) and self-healing baseline role seeding (`ensureBaselineSeed()`).
 
 2. **In-Memory Outbox & Spy Email Layer:**
-   - Mock all email dispatches (`tests/helpers/email.ts`) using Vitest spies (`vi.mock("../../modules/email/demo.js")`), capturing verification tokens and magic links in an in-memory outbox to eliminate network dependencies while enabling direct token assertion.
+   - Mock all email dispatches (`tests/helpers/email.ts`) using Vitest spies (`vi.mock("../src/modules/email/email.queue.js")` in `tests/setup.ts`), capturing verification tokens and magic links in an in-memory outbox to eliminate network dependencies while enabling direct token assertion.
 
 3. **Three-Tier Pyramid:**
    - **Focused Unit Tests (Pure In-Memory):** Direct execution of cryptography (Argon2id, AES-256-GCM, SHA-256 HMAC), TOTP generation, time parsing, Zod boundary schemas, and OpenAPI 3.1 specification generation / 1:1 bidirectional Express route parity.
@@ -2152,6 +2179,7 @@ Decouple email delivery from HTTP requests using a Redis-backed BullMQ task queu
 1. **Post-Commit Best-Effort Publication:** All database state mutations (user record creation, verification tokens, password reset tokens, security audit logs) must commit successfully before enqueuing an email job. The system intentionally accepts an asynchronous failure window between PostgreSQL commit and Redis enqueue: if the server process terminates abruptly after commit but before enqueue, the email remains unsent while database state remains authoritative. This trade-off is accepted to avoid the architectural overhead of a transactional outbox table and polling daemon.
 2. **Dedicated Queue Helpers:** Encapsulate queue publication within typed helpers (`enqueueVerificationEmail`, `enqueuePasswordResetEmail`, `enqueueMagicLinkEmail`, `enqueueSecurityNotificationEmail`) carrying minimal data payloads (`{ email, token }` or `{ email, eventType }`) rather than whole entity models.
 3. **Security Transit Perimeter:** Background queue payloads carry sensitive credentials (raw email verification tokens, password-reset tokens, and magic-link tokens). Redis is therefore classified as a sensitive data perimeter requiring TLS in transit, authenticated access, and network isolation from untrusted environments.
+4. **Supported Deployment Capability:** BullMQ represents a supported deployment capability for horizontally decoupled background workers (`APP_ROLE=worker`). Active default production deployments utilize `QUEUE_DRIVER=sync` on AWS Lambda (to prevent event-loop freeze upon response completion [ADR-079]) and `QUEUE_DRIVER=inline` on single-container ECS Fargate deployments (to eliminate idle Redis polling churn [ADR-078]), with BullMQ activated when dedicated horizontal worker compute is provisioned.
 
 ```typescript
 export const enqueueVerificationEmail = (email: string, token: string) =>
@@ -2167,6 +2195,7 @@ export const enqueueVerificationEmail = (email: string, token: string) =>
 - **Structural Latency Decoupling:** Eliminates variable third-party SMTP/REST network roundtrips from user-facing authentication request lifecycles, maintaining rapid client response times.
 - **Fault Isolation:** External email service downtime or transient rate limits do not disrupt primary registration, password reset, or magic link database mutations.
 - **Minimal Payload Contracts:** Queued jobs contain only primitive identifiers and tokens rather than complex database entity objects, preventing serialization churn and stale state discrepancies.
+- **Configurable Runtime Footprint:** Operates as a supported capability within the tri-driver background job architecture ([ADR-078](#adr-078--dual-driver-background-job-architecture-and-cloud-migration-path)), allowing lightweight deployments to run without worker overhead while preserving a zero-code-change path to full BullMQ worker scaling.
 
 ---
 
@@ -2308,15 +2337,29 @@ Conversely, relaxing reuse detection entirely creates an unacceptable vulnerabil
 
 Implement single-statement atomic Compare-And-Swap (CAS) session rotation paired with an ephemeral Redis leeway cache (`auth:refresh-leeway:{sessionId}:{oldTokenHash}`) configured with a 30-second TTL (`AUTH_REFRESH_TOKEN_LEEWAY_SECONDS`).
 
+> [!IMPORTANT]
+> **Sensitive Credential Perimeter:** While PostgreSQL strictly stores SHA-256 token digests (`tokenHash`), Redis temporarily caches the unhashed plaintext token pair (`JSON.stringify(tokens)`) during the 30-second concurrency window to collapse concurrent client requests. Redis is therefore classified as an active, sensitive credential perimeter requiring TLS in transit, password authentication, and strict network isolation from untrusted environments.
+
 Because PostgreSQL CAS and Redis cache publication are separate operations, execution handles the concurrency gap explicitly:
 
-1. **Pre-CAS Leeway Check:** When a refresh request arrives, it checks Redis for cached tokens under the old token hash. If found, it returns the cached tokens immediately.
+1. **Pre-CAS Leeway Check with Active Session Verification:** When a refresh request arrives, it checks Redis for cached tokens under the old token hash. If found, it queries PostgreSQL to confirm the session remains active (`findSessionById(payload.sid)`). If the session was explicitly revoked (via logout, password reset, or admin termination), the request is rejected with `401 Unauthorized ("Invalid session")`. If active, the cached tokens are returned immediately.
 2. **Atomic CAS Mutation:** If not cached, the request generates new tokens and executes an atomic CAS update on PostgreSQL via `prisma.session.updateMany` conditioned on both `id` and `tokenHash`.
 3. **Winner Publication:** The winning caller (`rotated.count > 0`) stores the newly generated token pair in Redis with a 30-second TTL and returns the tokens.
 4. **Loser Bounded Cache-Retry:** If the CAS returns 0 (a concurrent request won the database update), the loser does not immediately revoke the session. It checks the leeway cache; if not yet populated (winner is mid-publication), it waits 150ms and polls Redis once more. If populated, it returns the winner's cached tokens.
-5. **Replay Revocation & Redis Degraded Behavior:** If the leeway cache remains unpopulated after the bounded retry, the request is treated as a token replay outside the leeway window, triggering session revocation (either local session or global account revocation based on `AUTH_REUSE_DELETION_MODE`). If Redis is unavailable or unpopulated, concurrent requests cannot be collapsed; under this degraded scenario, strict replay security takes precedence over concurrency tolerance, resulting in session revocation.
+5. **Replay Revocation & Redis Degraded Behavior:** If the leeway cache remains unpopulated after the bounded retry, the request is treated as a token replay outside the leeway window, triggering session revocation (either local session or global account revocation governed by `AUTH_REUSE_DELETION_MODE` [ADR-092]). If Redis is unavailable or unpopulated, concurrent requests cannot be collapsed; under this degraded scenario, strict replay security takes precedence over concurrency tolerance, resulting in session revocation.
 
 ```typescript
+const cached = await getLeewayCache(leewayKey);
+if (cached) {
+  const activeSession = await authRepository.findSessionById(payload.sid);
+  if (!activeSession || activeSession.userId !== payload.sub) {
+    throw new UnauthorizedError("Invalid session");
+  }
+  return JSON.parse(cached) as AuthTokens;
+}
+
+// Atomic CAS update on PostgreSQL
+const rotated = await authRepository.rotateSession(session.id, oldTokenHash, { ... });
 if (rotated) {
   await setLeewayCache(
     leewayKey,
@@ -2338,12 +2381,18 @@ if (concurrentTokens) {
 
 // Replay detected outside leeway or during cache unavailability: revoke session
 await revokeCompromisedSession(session);
+if (env.AUTH_REUSE_DELETION_MODE === "GLOBAL") {
+  await authRepository.deleteAllSessionsByUserId(session.userId);
+} else {
+  await authRepository.deleteSessionById(session.id);
+}
 throw new UnauthorizedError("Compromised session detected");
 ```
 
 ### Rationale
 
 - **Ghost Logout Elimination:** Ephemeral leeway caching collapses concurrent SPA requests into a single synchronized token pair, preventing false-positive revocations across parallel tabs.
+- **Revocation Safety:** Verifying session validity on leeway cache hits ensures that explicit logouts or remote session terminations cannot be bypassed by presenting an old token during the remaining 30-second cache TTL.
 - **Race Gap Mitigation via Bounded Retry:** Bounded 150ms polling absorbs the microsecond gap between PostgreSQL CAS commit and Redis key publication.
 - **Zero Multi-Statement Transaction Overhead:** Single-statement atomic Compare-And-Swap leverages PostgreSQL's row-level write lock, preventing race conditions without database transaction overhead.
 - **Durable Replay Attack Detection:** Any presentation of an invalidated token outside the 30-second grace window triggers immediate session revocation, upholding OAuth 2.0 Security BCP (RFC 6819 / RFC 8725).
@@ -2593,7 +2642,7 @@ In REST APIs, returning disparate response shapes—such as bare JSON objects, n
 
 Enforce a standardized JSend-inspired response envelope across all HTTP endpoints via `ApiResponse` (`apps/api/src/common/responses/api-response.ts`) and global `errorHandler` (`apps/api/src/common/errors/error-handler.ts`):
 
-1. **Successful Responses (`ApiResponse.success`):**
+1. **Successful Responses (`ApiResponse.success(res, data, message, statusCode)`):**
    ```typescript
    {
      "success": true,
@@ -2601,16 +2650,18 @@ Enforce a standardized JSend-inspired response envelope across all HTTP endpoint
      "data": T | null
    }
    ```
-2. **Error Responses (`ApiResponse.error` & `errorHandler`):**
-   ```typescript
-   {
-     "success": false,
-     "message": "Human-readable error explanation",
-     "errors": [
-       { "field": "email", "message": "Invalid email address format" }
-     ] // Optional: included for ValidationError (400)
-   }
-   ```
+2. **Error Responses (`errorHandler` & `ApiResponse.error`):**
+   - **Centralized `errorHandler` Middleware (Primary):** Emits structured DTOs with optional validation issue details:
+     ```typescript
+     {
+       "success": false,
+       "message": "Human-readable error explanation",
+       "errors": [
+         { "field": "email", "message": "Invalid email address format" }
+       ] // Optional: included for ValidationError (400)
+     }
+     ```
+   - **Static `ApiResponse.error(res, data, message, statusCode)`:** Used for static route fallbacks (e.g. 404 handler) returning `{ success: false, message: string, data: null }`.
 
 ### Rationale
 
@@ -2743,7 +2794,7 @@ Adopt `jose` (standard Web Cryptography API) and enforce dual-secret cryptograph
 
 ### Rationale
 
-- **Bounded Blast Radius via Key Separation:** Isolating access and refresh signing keys confines the impact of a compromised `JWT_ACCESS_SECRET`. While an exposed access secret permits forging access tokens (and embedded claims like `role`) during their 15-minute validity window, the attacker cannot forge refresh tokens or hijack persistent database sessions. Revoking or rotating `JWT_ACCESS_SECRET` instantly severs forged access tokens without invalidating legitimate database sessions. Conversely, compromise of `JWT_REFRESH_SECRET` alone does not permit direct forging of valid access tokens.
+- **Bounded Blast Radius via Key Separation:** Isolating access and refresh signing keys confines the impact of a compromised `JWT_ACCESS_SECRET`. While an exposed access secret permits an attacker to continuously mint forged access tokens embedding arbitrary `role` claims (each with a 15-minute TTL) for as long as the secret remains unrotated, permissions are resolved downstream through the authorization layer. The compromise does not automatically expire after 15 minutes; active minting persists until `JWT_ACCESS_SECRET` is rotated in deployment configuration, after which any previously minted tokens expire within at most 15 minutes. Crucially, access secret compromise cannot forge refresh tokens or hijack persistent database sessions. Revoking or rotating `JWT_ACCESS_SECRET` instantly invalidates all forged access tokens upon rotation without corrupting legitimate database sessions. Conversely, compromise of `JWT_REFRESH_SECRET` alone does not permit direct forging of valid access tokens.
 - **Algorithm Confusion Immunity:** Explicit header algorithm enforcement (`alg: "HS256"`) eliminates signature downgrade and key confusion attack vectors.
 - **Universal Runtime Execution:** `jose` relies exclusively on the standard Web Cryptography API (`crypto.subtle`), executing natively across Node.js 24, AWS Lambda, and edge runtimes without native compilation dependencies.
 
@@ -2885,9 +2936,14 @@ Implement configurable revocation blast-radius governed by `AUTH_REUSE_DELETION_
 - `SESSION` mode executes `authRepository.deleteSessionById(session.id)`.
 - `GLOBAL` mode executes `authRepository.deleteAllSessionsByUserId(session.userId)`.
 
+> [!WARNING]
+> **Redis Outage Degradation Behavior:**
+> When Redis is unavailable or unpopulated, the 30-second leeway grace window cannot be cached or evaluated. Consequently, concurrent SPA requests fail the atomic CAS database check and fall directly through to replay revocation. In `SESSION` mode, only the single active device session is terminated. However, in `GLOBAL` mode during a Redis outage, concurrent tab refreshes immediately invoke `deleteAllSessionsByUserId`, revoking all active sessions across all devices for that user.
+
 ### Rationale
 
 - **Flexible Security Posture:** Allows low-friction consumer deployments to minimize cross-device disruption while giving enterprise or zero-trust deployments full global containment capability without code changes.
+- **Fail-Secure Threat Containment:** Ensures that even during Redis cache outages, the system fails closed by enforcing replay protection rather than permitting unauthorized token re-issuance.
 
 ---
 
