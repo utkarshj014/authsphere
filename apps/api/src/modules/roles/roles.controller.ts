@@ -18,6 +18,20 @@ const updatePermissions = asyncHandler(async (req: Request, res: Response) => {
   );
 });
 
+const getRolePermissions = asyncHandler(async (req: Request, res: Response) => {
+  const result = await rolesService.getRolePermissions(
+    req.params.roleName as RoleName,
+  );
+
+  return ApiResponse.success(
+    res,
+    result,
+    "Role permissions retrieved successfully",
+    200,
+  );
+});
+
 export const rolesController = {
   updatePermissions,
+  getRolePermissions,
 };

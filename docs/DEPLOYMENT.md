@@ -3,6 +3,7 @@
 > **Single Source of Truth (SSOT)** for AuthSphere's cloud deployment architecture, infrastructure engineering, continuous release pipelines, configuration standards, and operational workflows across serverless (AWS Lambda), containerized (AWS ECS Fargate), and edge (Vercel) environments.
 >
 > **Companion Guides:**
+>
 > - System Architecture & Component Design: [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
 > - Architectural Decision Records (ADRs): [`docs/Engineering-Decisions.md`](Engineering-Decisions.md)
 > - OAuth 2.0 & OIDC Federation Guide: [`docs/OAUTH.md`](OAUTH.md)
@@ -182,6 +183,75 @@ AuthSphere routes frontend traffic through Vercel's Edge Reverse Proxy (`apps/we
    - On ECS Fargate: `TRUST_PROXY=2` (2 hops: `Browser -> Vercel -> ALB -> Container`).
    - **Accepted Security Limitation:** Express derives `req.ip` using the configured proxy trust depth. Because direct backend ingress is intentionally permitted for evaluator testing, client IP attribution is not guaranteed to be trustworthy. IP-based rate limiting and audit logging have this accepted limitation.
 
+### 4.3. Edge Route Mappings & Reverse Proxy Rewrites (`/api/*`)
+
+All public browser interactions route through Vercel's Edge Reverse Proxy declared in `apps/web/vercel.ts`:
+
+```typescript
+export const config: VercelConfig = {
+  redirects: [
+    {
+      source: "/api/docs",
+      destination: "/api/docs/",
+      permanent: true,
+    },
+  ],
+  rewrites: [
+    routes.rewrite("/api/(.*)", `${backendUrl}/$1`),
+    routes.rewrite("/(.*)", "/index.html"),
+  ],
+};
+```
+
+The edge proxy strips the leading `/api` prefix on incoming browser requests and forwards the path and query string upstream:
+
+```text
+Browser Ingress:   https://<PUBLIC_DOMAIN>/api/auth/login
+Edge Rewrite:      /api/(.*)  ->  ${BACKEND_URL}/$1
+Upstream Target:   https://<lambda-id>.lambda-url.ap-south-1.on.aws/auth/login
+```
+
+This single-origin routing ensures authentication cookies (`accessToken`, `refreshToken` on `Path=/`) and PKCE transaction cookies (`oauth_verifier_<state>` on `Path=/api/auth/oauth`) remain strictly first-party, while eliminating browser CORS preflight overhead.
+
+> [!NOTE]
+> For the complete canonical route inventory of all 33 endpoints, RBAC access guards, and request/response contracts, see [`docs/ARCHITECTURE.md#21-complete-route-inventory--openapi-31-operation-registry-33-operations`](ARCHITECTURE.md#21-complete-route-inventory--openapi-31-operation-registry-33-operations).
+
+> [!IMPORTANT]
+> **Edge Proxy Trailing Slash & Cookie Isolation:**
+>
+> 1. `BACKEND_URL` in Vercel project settings must omit trailing slashes (`https://<lambda-id>.lambda-url.ap-south-1.on.aws`).
+> 2. The PKCE transaction cookie is scoped to `Path=/api/auth/oauth` matching the public edge path.
+> 3. Session cookies (`accessToken`, `refreshToken`) are scoped to `Path=/`, allowing all `/api/*` and client requests to transmit credentials seamlessly without cross-origin partitioning.
+
+### 4.4. Rate Limiting Policies & Proxy Header Calibration
+
+AuthSphere deploys a multi-tier rate limiting architecture powered by an atomic Upstash Redis Lua script (`INCR` + conditional `EXPIRE`), protecting serverless compute against denial-of-service while preserving legitimate administrative traffic.
+
+#### Dual Rate Limit Key Resolution (`keyType: "user"` vs `keyType: "ip"`)
+
+Behind reverse proxies, standard IP-based rate limiting can mistakenly throttle entire corporate networks or shared NAT gateways. AuthSphere decouples rate limiting through dual key resolution:
+
+1. **User-Scoped Rate Limiting (`keyType: "user"`):**
+   - Applied to authenticated administrative and user endpoints (e.g. `USERS_LIST`, `ROLE_READ_PERMISSIONS`, `USER_READ`).
+   - **Key Format:** `rl:<name>:user:<userId>`.
+   - **Edge Proxy Advantage:** Keyed directly to `req.auth.userId`. Operates completely independently of edge proxy IP attribution, client IP shifts, or VPN gateways. Every administrator and user receives a dedicated request quota.
+2. **IP-Scoped Rate Limiting (`keyType: "ip"`):**
+   - Applied to public unauthenticated endpoints (e.g. `GLOBAL`, `SIGNUP`, `LOGIN`, `OAUTH_INITIATE`, `OAUTH_CALLBACK`).
+   - **Key Format:** `rl:<name>:ip:<clientIp>`.
+   - **Proxy Calibration:** Resolves client IP via `req.ip` using the configured `TRUST_PROXY` depth (1 for Lambda; 2 for ECS).
+
+> [!NOTE]
+> For the canonical policy registry and per-endpoint request limits across all routes, refer to [`docs/ARCHITECTURE.md#21-complete-route-inventory--openapi-31-operation-registry-33-operations`](ARCHITECTURE.md#21-complete-route-inventory--openapi-31-operation-registry-33-operations) and [`docs/Engineering-Decisions.md#adr-051--atomic-fixed-window-rate-limiting-via-eval-lua-scripting`](Engineering-Decisions.md#adr-051--atomic-fixed-window-rate-limiting-via-eval-lua-scripting).
+
+#### Edge Proxy Response Headers
+
+The API emits standardized rate limiting headers that pass transparently through the Vercel edge reverse proxy:
+
+- `RateLimit-Limit`: Maximum requests permitted within the 60-second fixed window.
+- `RateLimit-Remaining`: Remaining request quota in the active window.
+- `RateLimit-Reset`: Time remaining (in seconds) until the current window resets.
+- `Retry-After`: Returned on HTTP `429 Too Many Requests` indicating wait seconds required before retry.
+
 ---
 
 ## 5. CI/CD & Automated Release Pipeline
@@ -342,12 +412,24 @@ curl -i -X POST https://<ACTIVE_ENDPOINT>/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"probe-verification-1@example.com","password":"TestPassword123!"}'
 
-# 5. Verify atomic Upstash Redis rate limiting and quota enforcement
-# Loops requests while inspecting response headers to observe decreasing RateLimit-Remaining values and eventual HTTP 429:
+# 5. Verify atomic Upstash Redis rate limiting quota exhaustion (loops until HTTP 429)
 for i in {1..105}; do
   curl -s -D - -o /dev/null https://<ACTIVE_ENDPOINT>/openapi.json | grep -E "(HTTP\/|ratelimit-remaining)"
 done
-# Confirms HTTP 200 with decreasing ratelimit-remaining, transitioning to HTTP 429 Too Many Requests upon limit exhaustion
+
+# 6. Verify paginated admin user listing behind edge proxy
+curl -i "https://<PUBLIC_DOMAIN>/api/users?page=1&limit=10" \
+  -H "Authorization: Bearer <ADMIN_ACCESS_TOKEN>"
+
+# 7. Verify role permissions read endpoint behind edge proxy
+curl -i "https://<PUBLIC_DOMAIN>/api/roles/ADMIN/permissions" \
+  -H "Authorization: Bearer <ADMIN_ACCESS_TOKEN>"
+
+# 8. Verify user-scoped rate limiting enforcement on USERS_LIST (30 req / 1 min)
+for i in {1..35}; do
+  curl -s -D - -o /dev/null "https://<PUBLIC_DOMAIN>/api/users?page=1&limit=1" \
+    -H "Authorization: Bearer <ADMIN_ACCESS_TOKEN>" | grep -E "(HTTP\/|ratelimit-remaining)"
+done
 ```
 
 ### 8.3. Unified Environment Variables Reference
@@ -392,10 +474,10 @@ done
 
 #### Frontend & Edge Reverse Proxy Configuration:
 
-| Variable       | Target Location                                 | Description                                                                                                                                                                                                                                   |
-| :------------- | :---------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Variable       | Target Location                                 | Description                                                                                                                                                                                                                                                                                                                                                       |
+| :------------- | :---------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `BACKEND_URL`  | Vercel Project Settings → Environment Variables | Live backend base URL without trailing slash (`https://<LAMBDA_URL>` or `http://<ALB_DNS>`). **Important:** CloudFormation outputs `FunctionUrl` with a trailing slash (`https://...on.aws/`) which **must be stripped** before configuring Vercel to avoid double-slash (`//$1`) rewrite corruption. Used server-side by `apps/web/vercel.ts` for Edge rewrites. |
-| `VITE_API_URL` | `apps/web/.env` / Vercel Environment Variables  | Web client API base URL. **Leave empty** in production to route through Vercel's same-origin proxy (`/api/*`), preserving HttpOnly cookies and zeroing CORS.                                                                                 |
+| `VITE_API_URL` | `apps/web/.env` / Vercel Environment Variables  | Web client API base URL. **Leave empty** in production to route through Vercel's same-origin proxy (`/api/*`), preserving HttpOnly cookies and zeroing CORS.                                                                                                                                                                                                      |
 
 ---
 

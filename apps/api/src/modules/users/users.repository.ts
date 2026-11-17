@@ -114,8 +114,30 @@ const countUsersByRole = (roleName: RoleName) =>
     },
   });
 
+const findUsersPaginated = async (page: number, limit: number) => {
+  const skip = (page - 1) * limit;
+  const [users, totalCount] = await Promise.all([
+    prisma.user.findMany({
+      skip,
+      take: limit,
+      orderBy: { createdAt: "desc" },
+      include: {
+        role: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    }),
+    prisma.user.count(),
+  ]);
+
+  return { users, totalCount };
+};
+
 export const usersRepository = {
   findUserById,
+  findUsersPaginated,
   updateUserRole,
   countUsersByRole,
 };

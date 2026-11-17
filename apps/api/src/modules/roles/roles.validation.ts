@@ -5,6 +5,10 @@ const roleSchema = z.enum(ROLES);
 const permissionSchema = z.enum(PERMISSIONS);
 
 export const rolesRequestSchema = {
+  getRolePermissionsParams: z.object({
+    roleName: roleSchema,
+  }),
+
   updatePermissionsParams: z.object({
     roleName: roleSchema,
   }),
@@ -24,6 +28,9 @@ export const rolesResponseSchema = {
   }),
 };
 
+export type GetRolePermissionsParams = z.infer<
+  typeof rolesRequestSchema.getRolePermissionsParams
+>;
 export type UpdatePermissionsParams = z.infer<
   typeof rolesRequestSchema.updatePermissionsParams
 >;

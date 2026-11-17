@@ -17,6 +17,33 @@ export const UserProfileSchema = registry.register(
   }),
 );
 
+export const PaginatedUsersResponseSchema = registry.register(
+  "PaginatedUsers",
+  usersResponseSchema.paginatedUsers.openapi("PaginatedUsers", {
+    description: "Paginated user profiles with metadata",
+  }),
+);
+
+// ─── GET /users ───────────────────────────────────────────────────
+
+registry.registerPath({
+  method: "get",
+  path: "/users",
+  tags: ["Users"],
+  summary: "List users",
+  description:
+    "Returns a paginated list of all registered users. Requires admin role.",
+  security: cookieSecurity,
+  request: {
+    query: usersRequestSchema.listUsersQuery,
+  },
+  responses: {
+    200: successResponse("Paginated list of users", PaginatedUsersResponseSchema),
+    ...authedErrors,
+    403: errorResponse("Forbidden — admin role required"),
+  },
+});
+
 // ─── GET /users/{id} ───────────────────────────────────────────────
 
 registry.registerPath({

@@ -5,7 +5,7 @@ This document provides a comprehensive overview of **AuthSphere's** system archi
 > **AuthSphere Architecture & Engineering Documentation Suite:**
 >
 > - [ARCHITECTURE.md](./ARCHITECTURE.md) — System Design, Component Topology & Core Data Models
-> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 98 Formal ADRs, Security Invariants & Technical Trade-offs
+> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 101 Formal ADRs, Security Invariants & Technical Trade-offs
 > - [OAUTH.md](./OAUTH.md) — OAuth 2.0 PKCE Social Authentication & Integration Protocols
 > - [DEPLOYMENT.md](./DEPLOYMENT.md) — Cloud Infrastructure, Dual-Compute (Lambda/ECS) & Runbooks
 > - [TESTING.md](./TESTING.md) — Hermetic Test Pyramid, Invariant Verification & CI Strategies
@@ -88,7 +88,7 @@ flowchart TD
         IPRL["Route Rate Limiter (Dual-Key: Client IP)"]
         ZodValPublic["Zod Validation (Body, Params)"]
 
-        Router -->|"Protected (/sessions, /roles, etc.)"| AuthGuard
+        Router -->|"Protected (/sessions, /roles, /users, etc.)"| AuthGuard
         AuthGuard --> UserRL
         UserRL --> ZodValProtected
         ZodValProtected --> RBACGuard
@@ -146,6 +146,46 @@ flowchart TD
 | **Infrastructure Layer**       | Singleton clients for PostgreSQL (`prisma`), Redis (`ioredis`), Logging (`pino`), and background email delivery (`emailQueue` / `emailService`).                                                                                              | Singletons instantiated in `src/lib/`. Decoupled from application framework.                                                                               |
 
 > **Related Architectural Decisions:** See [Validation, Middleware & Authorization ADRs](./Engineering-Decisions.md#validation-middleware--authorization) for pipeline ordering, Zod validation contracts, and rate limiting policies.
+
+### 2.1 Complete Route Inventory & OpenAPI 3.1 Operation Registry (33 Operations)
+
+AuthSphere enforces a strict 1:1 bidirectional parity invariant (`apps/api/tests/unit/openapi.test.ts`) between mounted Express route stacks and code-first OpenAPI 3.1 documentation (`[ADR-071]`). The system exposes and registers exactly **33 distinct operations** across 5 public feature modules:
+
+| Module       | Method   | Route Path                            | Access / Authorization Guards                                 | Rate Limit Policy                                       | Operation Description & Egress Contract                                                                                                                   |
+| :----------- | :------- | :------------------------------------ | :------------------------------------------------------------ | :------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Health**   | `GET`    | `/health`                             | Public                                                        | None                                                    | Root alias liveness probe; returns `LivenessData` (`status: "UP"`).                                                                                       |
+| **Health**   | `GET`    | `/health/live`                        | Public                                                        | None                                                    | AWS ALB zero-I/O in-memory liveness probe; returns `LivenessData`.                                                                                        |
+| **Health**   | `GET`    | `/health/ready`                       | Public                                                        | None                                                    | Deep readiness probe concurrently evaluating PostgreSQL and Redis connectivity; returns `ReadinessData` (503 on dependency outage).                       |
+| **Auth**     | `POST`   | `/auth/signup`                        | Public                                                        | `SIGNUP`<br/>(5 req / 15m, IP)                          | Registers new user with Argon2id password; enqueues verification email; returns user metadata.                                                            |
+| **Auth**     | `POST`   | `/auth/verify-email`                  | Public                                                        | `VERIFY_EMAIL`<br/>(10 req / 5m, IP)                    | Verifies email via cryptographic token; marks user verified and timestamps `verifiedAt`.                                                                  |
+| **Auth**     | `POST`   | `/auth/resend-verification`           | Public                                                        | `RESEND_VERIFICATION`<br/>(5 req / 15m, IP)             | Resends email verification token; enumeration-safe silent return on unregistered email.                                                                   |
+| **Auth**     | `POST`   | `/auth/login`                         | Public                                                        | `LOGIN`<br/>(10 req / 1m, IP)                           | Verifies credentials; sets `accessToken` & `refreshToken` cookies, or yields ephemeral 5m `mfaToken` challenge if MFA enabled.                            |
+| **Auth**     | `POST`   | `/auth/refresh-token`                 | Public<br/>_(HttpOnly Cookie)_                                | `REFRESH_TOKEN`<br/>(30 req / 1m, IP)                   | Performs atomic CAS refresh token rotation; leverages 30s Redis leeway cache for concurrent request grace periods.                                        |
+| **Auth**     | `POST`   | `/auth/logout`                        | Public<br/>_(HttpOnly Cookie)_                                | None                                                    | Revokes active session corresponding to `refreshToken` cookie and clears authentication cookies.                                                          |
+| **Auth**     | `POST`   | `/auth/logout-all`                    | Protected (`auth`)                                            | None                                                    | Revokes all active database sessions owned by caller and clears authentication cookies.                                                                   |
+| **Auth**     | `GET`    | `/auth/me`                            | Protected (`auth`)                                            | None                                                    | Resolves caller identity; returns `CurrentUserProfile` including `mfaEnabled` boolean and verification status `[ADR-101]`.                                |
+| **Auth**     | `POST`   | `/auth/forgot-password`               | Public                                                        | `FORGOT_PASSWORD`<br/>(5 req / 15m, IP)                 | Dispatches password reset link token; returns enumeration-safe silent success.                                                                            |
+| **Auth**     | `POST`   | `/auth/reset-password`                | Public                                                        | `RESET_PASSWORD`<br/>(10 req / 5m, IP)                  | Resets password via token; mandates MFA verification code if account has `mfaEnabled: true`.                                                              |
+| **Auth**     | `POST`   | `/auth/change-password`               | Protected (`auth`)                                            | `CHANGE_PASSWORD`<br/>(5 req / 15m, User)               | Updates password for authenticated user; requires MFA code verification if MFA enabled.                                                                   |
+| **Auth**     | `POST`   | `/auth/mfa/setup`                     | Protected (`auth`)                                            | `MFA_VERIFY_SETUP`<br/>(5 req / 5m, User)               | Generates AES-256-GCM encrypted TOTP secret and returns `otpauth://` QR setup URI.                                                                        |
+| **Auth**     | `POST`   | `/auth/mfa/verify-setup`              | Protected (`auth`)                                            | `MFA_VERIFY_SETUP`<br/>(5 req / 5m, User)               | Confirms initial TOTP 6-digit code, activates MFA on account, and returns single-use recovery codes.                                                      |
+| **Auth**     | `POST`   | `/auth/mfa/verify`                    | Public                                                        | `MFA_VERIFY`<br/>(10 req / 1m, IP)                      | Verifies second factor (TOTP or recovery code) against ephemeral `mfaToken`; creates session and issues auth cookies.                                     |
+| **Auth**     | `POST`   | `/auth/mfa/disable`                   | Protected (`auth`)                                            | `MFA_DISABLE`<br/>(5 req / 15m, User)                   | Deactivates MFA after verifying current password or TOTP code; purges encrypted secrets and recovery codes.                                               |
+| **Auth**     | `POST`   | `/auth/mfa/regenerate-recovery-codes` | Protected (`auth`)                                            | `MFA_REGENERATE_RECOVERY_CODES`<br/>(5 req / 15m, User) | Replaces existing recovery codes with fresh set of single-use codes (requires password/TOTP).                                                             |
+| **Auth**     | `POST`   | `/auth/magic-link`                    | Public                                                        | `MAGIC_LINK_REQUEST`<br/>(5 req / 15m, IP)              | Requests passwordless login magic link email; enumeration-safe silent return on non-existent accounts.                                                    |
+| **Auth**     | `POST`   | `/auth/magic-link/verify`             | Public                                                        | `MAGIC_LINK_VERIFY`<br/>(10 req / 5m, IP)               | Consumes single-use magic link token; yields active session or ephemeral `mfaToken` if MFA enabled.                                                       |
+| **Auth**     | `GET`    | `/auth/security-events`               | Protected (`auth`)                                            | `SECURITY_EVENTS_READ`<br/>(60 req / 1m, User)          | Returns paginated audit trail of security-sensitive events (`LOGIN_SUCCESS`, `LOGOUT`, `MFA_...`).                                                        |
+| **Auth**     | `GET`    | `/auth/oauth/google`                  | Public (`optionalAuth`)                                       | `OAUTH_INITIATE`<br/>(20 req / 1m, IP)                  | Initiates Google OAuth 2.0 PKCE flow; issues browser-bound transaction cookie `oauth_verifier_<state>`.                                                   |
+| **Auth**     | `GET`    | `/auth/oauth/google/callback`         | Public                                                        | `OAUTH_CALLBACK`<br/>(20 req / 1m, IP)                  | Completes Google OAuth PKCE exchange; links to active session or registers/authenticates federated identity.                                              |
+| **Auth**     | `GET`    | `/auth/oauth/github`                  | Public (`optionalAuth`)                                       | `OAUTH_INITIATE`<br/>(20 req / 1m, IP)                  | Initiates GitHub OAuth 2.0 PKCE flow; issues browser-bound transaction cookie `oauth_verifier_<state>`.                                                   |
+| **Auth**     | `GET`    | `/auth/oauth/github/callback`         | Public                                                        | `OAUTH_CALLBACK`<br/>(20 req / 1m, IP)                  | Completes GitHub OAuth PKCE exchange; links to active session or registers/authenticates federated identity.                                              |
+| **Sessions** | `GET`    | `/sessions`                           | Protected (`auth`)                                            | `SESSIONS_READ`<br/>(60 req / 1m, User)                 | Lists all active device sessions for current user (`id`, `ipAddress`, `userAgent`, `expiresAt`, `isCurrent`).                                             |
+| **Sessions** | `DELETE` | `/sessions/:id`                       | Protected (`auth`)                                            | `SESSION_REVOKE`<br/>(20 req / 1m, User)                | Revokes active session by UUIDv7 ID; enforces ownership; wipes auth cookies if revoking current session.                                                  |
+| **Users**    | `GET`    | `/users`                              | Protected (`auth` +<br/>`requireRole(ADMIN)`)                 | `USERS_LIST`<br/>(30 req / 1m, User)                    | Administrative paginated listing of all registered users (`page`, `limit`); returns user summaries with `mfaEnabled` and pagination metadata `[ADR-099]`. |
+| **Users**    | `GET`    | `/users/:id`                          | Protected (`auth` +<br/>`requireSelfOrPermission(USER_READ)`) | `USER_READ`<br/>(60 req / 1m, User)                     | Retrieves user profile by ID with `mfaEnabled` and verification status; egress sanitization via `UserProfileSchema`.                                      |
+| **Users**    | `PATCH`  | `/users/:id/role`                     | Protected (`auth` +<br/>`requireRole(ADMIN)`)                 | `USER_CHANGE_ROLE`<br/>(10 req / 1m, User)              | Reassigns user role; blocks self-role modification; acquires exclusive `ADMIN` row lock preventing last-admin demotion `[ADR-067]`.                       |
+| **Roles**    | `GET`    | `/roles/:roleName/permissions`        | Protected (`auth` +<br/>`requireRole(ADMIN)`)                 | `ROLE_READ_PERMISSIONS`<br/>(60 req / 1m, User)         | Reads permissions assigned to role (`USER` or `ADMIN`); cached in Redis (24h TTL) with transparent DB fallback `[ADR-100]`.                               |
+| **Roles**    | `PUT`    | `/roles/:roleName/permissions`        | Protected (`auth` +<br/>`requireRole(ADMIN)`)                 | `ROLE_UPDATE_PERMISSIONS`<br/>(10 req / 1m, User)       | Updates role permissions; enforces `ADMIN` immutability (403); deduplicates permissions via Zod; invalidates Redis cache post-commit `[ADR-037]`.         |
 
 ---
 
@@ -318,7 +358,7 @@ sequenceDiagram
         Redis-->>API: ["profile.read", "profile.update"]
     end
     API->>API: Attach req.auth context { userId, role, sid, permissions }
-    API-->>Client: 200 OK { success: true, data: userProfile }
+    API-->>Client: 200 OK { success: true, data: userProfile (including mfaEnabled) }
 
     Note over Client, Redis: Phase 3 — Refresh Token Rotation (CAS + Bounded Cache Retry)
     Client->>API: POST /auth/refresh-token (refreshToken cookie)
@@ -358,6 +398,14 @@ sequenceDiagram
         end
     end
 ```
+
+#### User Profile Introspection (`GET /auth/me`)
+
+When the client hydrates an active session, `GET /auth/me` resolves caller identity through `authResponseSchema.currentUserProfile` as a runtime egress sanitization firewall (`[ADR-088]`):
+
+- **Sanitized Profile Payload:** `{ id, email, firstName, lastName, role, mfaEnabled, verifiedAt, createdAt }`.
+- **Immediate MFA Awareness:** Exposing `mfaEnabled: boolean` directly within current user profile responses gives frontend applications instant awareness of whether second-factor authentication is configured on the account, eliminating the need for speculative challenge probing or extra API roundtrips `[ADR-101]`.
+- **Credential & Secret Protection:** Password hashes, symmetric encryption keys, encrypted TOTP secrets (`mfaSecret`), and backup recovery code hashes are strictly excluded from the serialization envelope.
 
 > **Related Architectural Decisions:** See [Authentication & Session Management ADRs](./Engineering-Decisions.md#authentication--session-management) for token rotation invariants, CAS concurrency semantics, and replay scope policies.
 
@@ -684,7 +732,7 @@ graph TD
 
 ### Verification Philosophy
 
-- **Layer 1: Focused Unit Tests (Zero I/O):** Pure in-memory verification of cryptographic primitives (Argon2id, AES-256-GCM, HMAC), TOTP RFC 6238 window stepping, Zod input sanitization, OpenAPI 3.1 router parity, email template rendering, BullMQ enqueue semantics, and the deterministic ADR-076 CAS vs. Redis race condition state machine (verified hermetically via method spies in `refresh-token-race.test.ts`).
+- **Layer 1: Focused Unit Tests (Zero I/O):** Pure in-memory verification of cryptographic primitives (Argon2id, AES-256-GCM, HMAC), TOTP RFC 6238 window stepping, Zod input sanitization, OpenAPI 3.1 router parity (verifying exact 1:1 bidirectional alignment across all 33 registered operations and mounted Express routers), email template rendering, BullMQ enqueue semantics, and the deterministic ADR-076 CAS vs. Redis race condition state machine (verified hermetically via method spies in `refresh-token-race.test.ts`).
 - **Layer 2: Critical Integration Tests (Database & Redis DB 1):** Full-stack HTTP request lifecycles across registration, login, MFA challenge/verify/disable, OAuth strategies, active sessions, RBAC guards, rate limits, error envelopes, the live ADR-076 rotation race window, and Redis fail-open degradation (in `auth.test.ts`).
 - **Layer 3: Stateful E2E User Journeys:** Multi-step workflows verifying the complete auth lifecycle (signup -> verify -> login -> refresh -> logout), multi-device session revocation, and administrative privilege elevation and demotion.
 - **Deterministic Controls:** Test suites run with `fileParallelism: false` to eliminate database contention. `cleanTestState()` performs cascade truncations on user tables and flushes Redis DB 1 between tests while preserving baseline roles and permissions. Outbound emails are captured via in-memory spies with zero network calls.

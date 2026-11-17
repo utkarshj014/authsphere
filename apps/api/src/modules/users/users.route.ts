@@ -18,6 +18,14 @@ const router = Router();
 
 router
   .get(
+    "/",
+    auth,
+    requireRole(ROLES.ADMIN),
+    rateLimiter(RATE_LIMIT_POLICIES.USERS_LIST),
+    validate(usersRequestSchema.listUsersQuery, ValidationTarget.QUERY),
+    usersController.listUsers,
+  )
+  .get(
     "/:id",
     auth,
     rateLimiter(RATE_LIMIT_POLICIES.USER_READ),

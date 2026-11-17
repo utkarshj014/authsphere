@@ -88,6 +88,44 @@ describe("Authorization & RBAC Middleware Integration", () => {
     expect(res.body.data.id).toBe(target.id);
   });
 
+  it("GET /users unauthenticated returns 401", async () => {
+    const res = await request(app).get("/users");
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /users non-admin user is rejected with 403 Forbidden", async () => {
+    const { cookieHeader } = await authenticate(app, { role: "USER" });
+
+    const res = await request(app).get("/users").set("Cookie", cookieHeader);
+
+    expect(res.status).toBe(403);
+  });
+
+  it("GET /users admin user successfully retrieves paginated user list", async () => {
+    const { cookieHeader, user: adminUser } = await authenticate(app, {
+      role: "ADMIN",
+    });
+
+    const res = await request(app)
+      .get("/users?page=1&limit=10")
+      .set("Cookie", cookieHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data.users)).toBe(true);
+    expect(res.body.data.pagination).toBeDefined();
+    expect(res.body.data.pagination.page).toBe(1);
+    expect(res.body.data.pagination.limit).toBe(10);
+    expect(res.body.data.users.length).toBeGreaterThanOrEqual(1);
+
+    const selfInList = res.body.data.users.find(
+      (u: any) => u.id === adminUser.id,
+    );
+    expect(selfInList).toBeDefined();
+    expect(selfInList.mfaEnabled).toBeDefined();
+    expect(selfInList.role).toBe("ADMIN");
+  });
+
   describe("requireRole Middleware Unit Checks", () => {
     it("rejects request without req.auth with 401 UnauthorizedError", async () => {
       const middleware = requireRole(ROLES.ADMIN);

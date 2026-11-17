@@ -98,8 +98,8 @@ describe("OpenAPI specification", () => {
       Object.keys(methods).map((method) => `${method.toUpperCase()} ${path}`),
     );
 
-    // Invariant: Exact count equality (31 operations) and identical operation set
-    expect(openApiOperations).toHaveLength(31);
+    // Invariant: Exact count equality (33 operations) and identical operation set
+    expect(openApiOperations).toHaveLength(33);
     expect(openApiOperations.sort()).toEqual(expressOperations.sort());
   });
 

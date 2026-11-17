@@ -4,6 +4,8 @@ import {
   usersResponseSchema,
   type RoleInput,
   type UserProfileResponse,
+  type ListUsersQueryInput,
+  type PaginatedUsersResponse,
 } from "./users.validation.js";
 
 const getUser = async (userId: string): Promise<UserProfileResponse> => {
@@ -19,8 +21,44 @@ const getUser = async (userId: string): Promise<UserProfileResponse> => {
     firstName: user.firstName,
     lastName: user.lastName,
     role: user.role.name,
+    mfaEnabled: user.mfaEnabled,
     isEmailVerified: user.isEmailVerified,
     createdAt: user.createdAt,
+  });
+};
+
+const listUsers = async (
+  query: ListUsersQueryInput,
+): Promise<PaginatedUsersResponse> => {
+  const page = query.page ?? 1;
+  const limit = query.limit ?? 20;
+
+  const { users, totalCount } = await usersRepository.findUsersPaginated(
+    page,
+    limit,
+  );
+
+  const totalPages = Math.ceil(totalCount / limit);
+
+  return usersResponseSchema.paginatedUsers.parse({
+    users: users.map((u) => ({
+      id: u.id,
+      email: u.email,
+      firstName: u.firstName,
+      lastName: u.lastName,
+      role: u.role.name,
+      mfaEnabled: u.mfaEnabled,
+      isEmailVerified: u.isEmailVerified,
+      createdAt: u.createdAt,
+    })),
+    pagination: {
+      page,
+      limit,
+      totalCount,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPreviousPage: page > 1,
+    },
   });
 };
 
@@ -45,6 +83,7 @@ const changeRole = async (
     firstName: updatedUser.firstName,
     lastName: updatedUser.lastName,
     role: updatedUser.role.name,
+    mfaEnabled: updatedUser.mfaEnabled,
     isEmailVerified: updatedUser.isEmailVerified,
     createdAt: updatedUser.createdAt,
   });
@@ -52,5 +91,6 @@ const changeRole = async (
 
 export const usersService = {
   getUser,
+  listUsers,
   changeRole,
 };

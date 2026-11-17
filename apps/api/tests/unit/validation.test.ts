@@ -164,7 +164,7 @@ describe("Validation Schemas & Utilities Unit Tests", () => {
       ).toBe(false);
     });
 
-    it("validates usersResponseSchema.userProfile strict roles", () => {
+    it("validates usersResponseSchema.userProfile strict roles and mfaEnabled", () => {
       expect(
         usersResponseSchema.userProfile.safeParse({
           id: "018f4a7b-3b32-7264-b0cf-5b1234567890",
@@ -172,10 +172,26 @@ describe("Validation Schemas & Utilities Unit Tests", () => {
           firstName: "John",
           lastName: "Doe",
           role: "USER",
+          mfaEnabled: true,
           isEmailVerified: true,
           createdAt: new Date(),
         }).success,
       ).toBe(true);
+
+      // Defaults mfaEnabled to false when omitted
+      const resWithoutMfa = usersResponseSchema.userProfile.safeParse({
+        id: "018f4a7b-3b32-7264-b0cf-5b1234567890",
+        email: "user@example.com",
+        firstName: "John",
+        lastName: "Doe",
+        role: "USER",
+        isEmailVerified: true,
+        createdAt: new Date(),
+      });
+      expect(resWithoutMfa.success).toBe(true);
+      if (resWithoutMfa.success) {
+        expect(resWithoutMfa.data.mfaEnabled).toBe(false);
+      }
 
       expect(
         usersResponseSchema.userProfile.safeParse({
@@ -190,7 +206,76 @@ describe("Validation Schemas & Utilities Unit Tests", () => {
       ).toBe(false);
     });
 
-    it("validates and deduplicates role permissions update body", () => {
+    it("validates usersSchema.listUsersQuery pagination parameters", () => {
+      const parsedDefault = usersSchema.listUsersQuery.parse({});
+      expect(parsedDefault.page).toBe(1);
+      expect(parsedDefault.limit).toBe(20);
+
+      const parsedExplicit = usersSchema.listUsersQuery.parse({
+        page: "3",
+        limit: "50",
+      });
+      expect(parsedExplicit.page).toBe(3);
+      expect(parsedExplicit.limit).toBe(50);
+
+      // Rejects negative/zero page
+      expect(usersSchema.listUsersQuery.safeParse({ page: 0 }).success).toBe(
+        false,
+      );
+      expect(usersSchema.listUsersQuery.safeParse({ page: -1 }).success).toBe(
+        false,
+      );
+
+      // Rejects limit exceeding 100
+      expect(usersSchema.listUsersQuery.safeParse({ limit: 101 }).success).toBe(
+        false,
+      );
+    });
+
+    it("validates usersResponseSchema.paginatedUsers response shape", () => {
+      const parsed = usersResponseSchema.paginatedUsers.safeParse({
+        users: [
+          {
+            id: "018f4a7b-3b32-7264-b0cf-5b1234567890",
+            email: "admin@example.com",
+            firstName: "Admin",
+            lastName: "User",
+            role: "ADMIN",
+            mfaEnabled: true,
+            isEmailVerified: true,
+            createdAt: new Date(),
+          },
+        ],
+        pagination: {
+          page: 1,
+          limit: 20,
+          totalCount: 1,
+          totalPages: 1,
+          hasNextPage: false,
+          hasPreviousPage: false,
+        },
+      });
+
+      expect(parsed.success).toBe(true);
+    });
+
+    it("validates role permissions query and update schemas", () => {
+      expect(
+        rolesSchema.getRolePermissionsParams.safeParse({
+          roleName: "USER",
+        }).success,
+      ).toBe(true);
+      expect(
+        rolesSchema.getRolePermissionsParams.safeParse({
+          roleName: "ADMIN",
+        }).success,
+      ).toBe(true);
+      expect(
+        rolesSchema.getRolePermissionsParams.safeParse({
+          roleName: "SUPERADMIN",
+        }).success,
+      ).toBe(false);
+
       expect(
         rolesSchema.updatePermissionsParams.safeParse({
           roleName: "USER",

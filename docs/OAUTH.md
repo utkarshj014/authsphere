@@ -90,23 +90,25 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Browser as User Browser
-    participant API as AuthSphere API
+    actor SPA as User Browser (SPA Main Window)
+    actor Popup as OAuth Popup Window / Context
+    participant API as AuthSphere API (/api/auth/oauth)
     participant Redis as Redis Store
     participant IDP as Identity Provider (Google / GitHub)
     participant DB as PostgreSQL
 
-    Note over Browser, API: Phase 1 — Initiation & PKCE Generation
-    Browser->>API: GET /auth/oauth/:provider (optional accessToken cookie)
+    Note over SPA, API: Phase 1 — Initiation & PKCE Generation (Popup Handshake)
+    SPA->>Popup: window.open('/api/auth/oauth/:provider')
+    Popup->>API: GET /auth/oauth/:provider (optionalAuth inspects accessToken cookie)
     API->>Redis: SET oauth:state:<token> { provider, userId?, sessionId? } (10m TTL)
-    API-->>Browser: Set-Cookie: oauth_verifier_<state> (Path=/api/auth/oauth) & 302 Redirect to IDP (PKCE S256)
+    API-->>Popup: Set-Cookie: oauth_verifier_<state> (Path=/api/auth/oauth) & 302 Redirect to IDP (PKCE S256)
 
-    Note over Browser, IDP: Phase 2 — External Consent
-    Browser->>IDP: User authenticates & approves scopes
-    IDP-->>Browser: 302 Redirect to callback?code=...&state=...
+    Note over Popup, IDP: Phase 2 — External Consent
+    Popup->>IDP: User authenticates & approves requested scopes
+    IDP-->>Popup: 302 Redirect to callback?code=...&state=...
 
-    Note over Browser, DB: Phase 3 — Callback, Validation & Profile Exchange
-    Browser->>API: GET callback?code=...&state=... (Cookie: oauth_verifier_<state>)
+    Note over Popup, DB: Phase 3 — Callback, Validation & Profile Exchange
+    Popup->>API: GET callback?code=...&state=... (Cookie: oauth_verifier_<state>)
     API->>API: Extract & clear verifier cookie (oauth_verifier_<state>)
     API->>Redis: GETDEL oauth:state:<token> (Atomic single-use)
     API->>IDP: POST token exchange (code + verifier) & fetch profile (7s deadline)
@@ -118,16 +120,24 @@ sequenceDiagram
     API->>DB: Identity Resolution (Link, Authenticate, or Create User + OAuthAccount)
     alt MFA Required
         API->>DB: Create MfaChallenge (5m TTL)
-        API-->>Browser: 200 OK { mfaRequired: true, mfaToken }
+        API-->>Popup: 200 OK { mfaRequired: true, mfaToken }
+        Note over Popup, SPA: Phase 6 — postMessage Completion Bridge
+        Popup->>SPA: window.opener.postMessage({ type: 'AUTH_OAUTH_MFA_REQUIRED', mfaToken }, origin)
+        Popup->>Popup: window.close()
+        SPA->>SPA: Prompt user for 6-digit TOTP / recovery code
     else Direct Session Issuance
         API->>DB: Create Session & issue JWT tokens
-        API-->>Browser: Set-Cookie: accessToken, refreshToken (Path=/) & 200 OK
+        API-->>Popup: Set-Cookie: accessToken, refreshToken (Path=/) & 200 OK
+        Note over Popup, SPA: Phase 6 — postMessage Completion Bridge
+        Popup->>SPA: window.opener.postMessage({ type: 'AUTH_OAUTH_SUCCESS', provider }, origin)
+        Popup->>Popup: window.close()
+        SPA->>API: GET /api/auth/me (Hydrate user session via first-party root cookies)
     end
 ```
 
 ---
 
-## 3. Five-Phase Implementation Lifecycle
+## 3. End-to-End Implementation Lifecycle
 
 ### 3.1. Phase 1 — Initiation & State Generation
 
@@ -135,13 +145,21 @@ sequenceDiagram
 - **Rate Limit:** `rateLimiter(RATE_LIMIT_POLICIES.OAUTH_INITIATE)` (20 requests per minute per IP)
 - **Middleware Pipeline:** `rateLimiter` → `optionalAuth` → `initiateOAuthHandler(provider)`
 
-#### Context Detection (`optionalAuth`)
+#### Context Detection & Account Linking Intent (`optionalAuth`)
 
-The `optionalAuth` middleware (`apps/api/src/middlewares/auth.ts`) inspects `req.cookies.accessToken`:
+The `optionalAuth` middleware (`apps/api/src/middlewares/auth.ts`) inspects incoming cookies for `req.cookies.accessToken`:
 
-- **Valid Access Token Detected:** Validates and decodes the cryptographically signed JWT access token (`{ sub, sid, role }`), resolves permissions via `authorizationService.getPermissionsByRole()`, and populates `req.auth = { userId, role, sessionId, permissions }`. Both `userId` and `sessionId` are captured so the flow can act as an **explicit account-linking request**.
-- **No Valid Access Token:** Leaves `req.auth` as `undefined`. This flow acts as an **unauthenticated login/signup request**.
-- **Silent Degradation:** `optionalAuth` never throws on missing, expired, or invalid tokens; unauthenticated states degrade gracefully to standard login/signup flows without aborting initiation.
+- **Valid Access Token Detected (Authenticated Account Linking):**
+  1. Validates and decodes the cryptographically signed JWT access token (`{ sub, sid, role }`).
+  2. Resolves active permissions dynamically via `authorizationService.getPermissionsByRole()`.
+  3. Populates `req.auth = { userId, role, sessionId, permissions }`.
+  4. The initiation controller captures both `userId` and `sessionId`, storing them in the Redis state payload. This designates the flow as an **explicit account-linking request**.
+- **No Valid Access Token (Unauthenticated Login / Registration):**
+  1. Leaves `req.auth` as `undefined`.
+  2. The initiation controller stores only `{ provider }` in the Redis state payload.
+  3. This designates the flow as an **unauthenticated social login or new account creation**.
+- **Silent Degradation & Failure Boundaries:**
+  `optionalAuth` never throws on missing, expired, or invalid tokens. Unauthenticated states degrade gracefully to standard login/signup flows without aborting initiation. If a user was previously logged in but their access token expired, the flow treats them safely as unauthenticated. Subsequent session linking is prevented unless the session is actively authenticated and valid.
 
 #### PKCE Verifier Generation & Browser-Binding Cookie
 
@@ -358,6 +376,79 @@ If MFA is disabled (or during in-session account linking):
 
 ---
 
+### 3.6. Phase 6 — Frontend Completion Handshake (Popup Bridge vs Redirect)
+
+The callback controller (`oauthCallbackHandler`) concludes backend authentication by delivering root-scoped HttpOnly cookies (`accessToken` and `refreshToken` on `Path=/`) and returning a standardized JSON envelope (`ApiResponse.success`). Because the endpoint responds with JSON rather than issuing an HTTP 302/303 redirect to a frontend URL, client applications coordinate the completion flow using one of two integration patterns:
+
+#### Pattern A: Popup Handshake with `postMessage` Completion Bridge (Recommended for SPAs)
+
+The popup handshake pattern isolates third-party identity provider consent screens within a secondary browser window, maintaining the Single Page Application (SPA) in the primary window without unmounting or reloading:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User
+    participant App as SPA (Primary Window)
+    participant Popup as OAuth Popup Window
+    participant API as AuthSphere API (/api/auth/oauth)
+    participant IDP as Identity Provider
+
+    User->>App: Clicks "Sign in with Google / GitHub"
+    App->>App: Registers window "message" listener
+    App->>Popup: window.open('/api/auth/oauth/:provider', 'auth_popup', ...)
+    Popup->>API: GET /auth/oauth/:provider (Initiation + optionalAuth)
+    API-->>Popup: 302 Redirect to IDP Consent Screen (PKCE S256)
+    Popup->>IDP: User authenticates and grants requested scopes
+    IDP-->>Popup: 302 Redirect to /auth/oauth/:provider/callback?code=...&state=...
+    Popup->>API: GET /auth/oauth/:provider/callback
+    API-->>Popup: Set-Cookie: accessToken, refreshToken (Path=/) & 200 OK JSON
+    Note over Popup, App: Completion Bridge (postMessage Handshake)
+    Popup->>App: window.opener.postMessage(eventPayload, origin)
+    Popup->>Popup: window.close()
+    App->>App: Validates event.origin === window.location.origin
+    App->>API: GET /api/auth/me (Hydrates user profile & mfaEnabled status)
+    API-->>App: 200 OK { user, permissions, mfaEnabled }
+    App->>User: Renders authenticated state
+```
+
+##### Handshake Mechanics & Protocol:
+
+1. **Auxiliary Context:** The SPA initiates authentication by opening `/api/auth/oauth/:provider` in an auxiliary popup window (`window.open`).
+2. **First-Party Transport:** Operating under the same-origin `/api` prefix, cookies set by the backend (`accessToken`, `refreshToken` on `Path=/`) are stored directly in the shared browser cookie jar.
+3. **`postMessage` Event Bridge:** Upon receiving the callback response, the popup dispatches an event to `window.opener` and closes itself (`window.close()`):
+   - **Direct Authentication:** Dispatches `{ type: "AUTH_OAUTH_SUCCESS", provider, mfaRequired: false }`.
+   - **MFA Required:** Dispatches `{ type: "AUTH_OAUTH_MFA_REQUIRED", provider, mfaToken }` when `user.mfaEnabled === true`.
+   - **Error Encountered:** Dispatches `{ type: "AUTH_OAUTH_ERROR", message }`.
+4. **Parent Window Session Hydration:** The main window validates `event.origin === window.location.origin`. On success, it calls `GET /api/auth/me` to hydrate user profile and permissions; if MFA is required, it prompts for the 6-digit TOTP / recovery code using `mfaToken`.
+
+##### Security Invariants:
+
+- **Strict Target Origin:** `postMessage` targets `window.location.origin` (never wildcard `*`), preventing rogue windows from capturing completion signals.
+- **Strict Receiver Origin Validation:** Receivers verify `event.origin === window.location.origin` before processing payloads.
+- **Credential Decoupling:** Sensitive JWT credentials flow exclusively through HttpOnly, Secure cookies. `postMessage` carries only event flags and ephemeral challenge tokens.
+- **Clickjacking & Framing Immunity:** Express Helmet enforces `X-Frame-Options: DENY`. Popups execute as top-level browsing contexts, while malicious `<iframe>` embeds are rejected by the browser.
+
+#### Pattern B: Full-Page Redirect Flow
+
+For non-SPA clients or restricted environments where popup windows are blocked (e.g. mobile in-app webviews):
+
+1. **Top-Level Navigation:** Navigates directly to `/api/auth/oauth/:provider`.
+2. **Provider Redirect & Callback:** The provider redirects to `/api/auth/oauth/:provider/callback`.
+3. **Client Routing Coordination:** Because the callback returns a JSON envelope, clients configure `OAUTH_CALLBACK_BASE_URL` to route through a dedicated frontend page (e.g. `/auth/callback`) that captures `code` and `state`, executes the callback request, and programmatically transitions to the dashboard or MFA prompt.
+
+#### Architectural Comparison: Popup Bridge vs Full-Page Redirect
+
+| Dimension                    | Popup Handshake (`postMessage` Bridge)                                                        | Full-Page Redirect Flow                                                                         |
+| :--------------------------- | :-------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------- |
+| **SPA State Preservation**   | **Preserved:** Primary window retains in-memory application state, form data, and routes.     | **Lost:** Full browser navigation clears SPA memory, requiring re-render and re-initialization. |
+| **User Experience**          | Seamless modal window closing automatically upon completion.                                  | Full-page navigation hops across provider consent screens and application routes.               |
+| **MFA Integration**          | Seamless: Parent window displays MFA challenge modal immediately upon receiving bridge event. | Requires dedicated intermediate redirect routes or URL parameters to convey `mfaToken`.         |
+| **Cookie Scope & Transport** | First-party HttpOnly cookies set on `Path=/`; available immediately to subsequent calls.      | Identical first-party HttpOnly cookie delivery on `Path=/`.                                     |
+| **Browser Compatibility**    | Requires user gesture to trigger `window.open` to avoid popup blockers.                       | Works natively without popup blockers; optimal fallback for restricted webviews.                |
+| **Clickjacking Protection**  | Compatible with `X-Frame-Options: DENY` (popups are top-level browsing contexts).             | Compatible with `X-Frame-Options: DENY`.                                                        |
+
+---
+
 ## 4. Provider Strategy Comparison
 
 | Technical Dimension           | Google Provider Strategy                                           | GitHub Provider Strategy                                                        |
@@ -449,6 +540,8 @@ By pointing `OAUTH_CALLBACK_BASE_URL` or `FRONTEND_URL` to the public Vercel dom
 | **Credential & Secret Leakage**      | Client secrets exposed via client bundles or public endpoints.                                     | **Server-Side Secret Isolation:** Secrets stored in environment variables, validated at boot by Zod, and used only server-to-server.                                                                                                               |
 | **Information Disclosure**           | Upstream provider outage or invalid credentials leaking system details.                            | **Error Masking:** Upstream error bodies logged internally via Pino; generic client errors returned.                                                                                                                                               |
 | **Endpoint Denial of Service**       | Flooding initiation or callback routes to exhaust Redis or rate limits.                            | **IP Rate Limiting:** Fixed-window limits of 20 requests per minute per IP on initiation and callback routes.                                                                                                                                      |
+| **`postMessage` Eavesdropping**      | Malicious origin listens to browser broadcast messages to intercept auth state.                    | **Strict Target Origin & Cookie Decoupling:** `postMessage` transmits only event status flags (never raw tokens or passwords) explicitly targeting `window.location.origin`. Session credentials flow strictly via first-party HttpOnly cookies.   |
+| **UI Redress & Clickjacking**        | Attacker frames the OAuth flow within an `<iframe>` to intercept user consent or callbacks.        | **`X-Frame-Options: DENY` Enforcement:** Express Helmet configuration strictly denies framing across all endpoints. Popups execute as top-level auxiliary browsing contexts, while embedded iframes are rejected by the browser.                   |
 
 ---
 

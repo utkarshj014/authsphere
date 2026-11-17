@@ -470,6 +470,7 @@ const getCurrentUser = async (
     firstName: user.firstName,
     lastName: user.lastName,
     role: user.role.name,
+    mfaEnabled: user.mfaEnabled,
     verifiedAt: user.verifiedAt,
     createdAt: user.createdAt,
   });

@@ -90,6 +90,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-049: Proactive Low Recovery Code Warning Threshold](#adr-049--proactive-low-recovery-code-warning-threshold)
 - [ADR-057: Ephemeral Multi-Challenge MFA Architecture with Single-Use Invalidation](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation)
 - [ADR-091: Polymorphic Unified MFA Input Resolution (TOTP vs Recovery Code)](#adr-091--polymorphic-unified-mfa-input-resolution-totp-vs-recovery-code)
+- [ADR-101: Zero-Side-Effect Client MFA State Introspection via Current User Profile Contract](#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)
 
 </details>
 
@@ -113,6 +114,8 @@ This document records the architectural and engineering decisions made during th
 - [ADR-066: Multi-Tier Rate Limiting for OAuth Callbacks and Passwordless Magic Links](#adr-066--multi-tier-rate-limiting-for-oauth-callbacks-and-passwordless-magic-links)
 - [ADR-067: Atomic Last-Admin Demotion Guard via Exclusive Role Row-Locking](#adr-067--atomic-last-admin-demotion-guard-via-exclusive-role-row-locking)
 - [ADR-071: Code-First OpenAPI 3.1 Specification and Interactive Swagger UI Documentation via Zod Registry](#adr-071--code-first-openapi-31-specification-and-interactive-swagger-ui-documentation-via-zod-registry)
+- [ADR-099: Paginated Administrative User Directory and Standard Offset Query Strategy](#adr-099--paginated-administrative-user-directory-and-standard-offset-query-strategy)
+- [ADR-100: Dedicated Role Permission Introspection with Cached Read Path and Administrative Immutability](#adr-100--dedicated-role-permission-introspection-with-cached-read-path-and-administrative-immutability)
 
 </details>
 
@@ -166,7 +169,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-098)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-101)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -266,6 +269,9 @@ This document records the architectural and engineering decisions made during th
 - [ADR-096: Multi-Stage Container Architecture with Non-Root Execution and PID 1 Signal Reaping (`dumb-init`)](#adr-096--multi-stage-container-architecture-with-non-root-execution-and-pid-1-signal-reaping-dumb-init)
 - [ADR-097: Single-File Tree-Shaken ESM Lambda Bundling with Native C++ Addon Externalization (`tsup`)](#adr-097--single-file-tree-shaken-esm-lambda-bundling-with-native-c-addon-externalization-tsup)
 - [ADR-098: Unified Dual-Target Deployment Pipeline (Serverless Lambda vs Containerized ECS Fargate)](#adr-098--unified-dual-target-deployment-pipeline-serverless-lambda-vs-containerized-ecs-fargate)
+- [ADR-099: Paginated Administrative User Directory and Standard Offset Query Strategy](#adr-099--paginated-administrative-user-directory-and-standard-offset-query-strategy)
+- [ADR-100: Dedicated Role Permission Introspection with Cached Read Path and Administrative Immutability](#adr-100--dedicated-role-permission-introspection-with-cached-read-path-and-administrative-immutability)
+- [ADR-101: Zero-Side-Effect Client MFA State Introspection via Current User Profile Contract](#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)
 
 </details>
 
@@ -1065,7 +1071,7 @@ export type PermissionName = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
 ## ADR-035 — Redis Permission Caching with Fail-Safe Bypass
 
-**Status:** Accepted
+**Status:** Accepted _(Extended by ADR-100)_
 
 ### Context
 
@@ -1111,7 +1117,7 @@ Middleware is ordered predictably: `auth` -> `validate` -> `requireRole` / `requ
 
 ## ADR-037 — Atomic Role-Permission Replacement via Nested Prisma Mutations
 
-**Status:** Accepted
+**Status:** Accepted _(Extended by ADR-100)_
 
 ### Context
 
@@ -1493,13 +1499,7 @@ Rate limit parameters (window duration, request quota, key strategy) scattered a
 
 Define all rate limit policies as a single typed constant `RATE_LIMIT_POLICIES` in `src/middlewares/rate-limit.ts`, typed via `as const satisfies Record<string, RateLimitPolicy>`. The `rateLimiter(policy)` middleware factory consumes any policy from the dictionary.
 
-| Policy Tier           | Quota Window | Key Strategy | Primary Protection Scope                                   |
-| :-------------------- | :----------- | :----------- | :--------------------------------------------------------- |
-| **Global Baseline**   | 100 / 1 min  | IP           | All incoming HTTP traffic via top-level Express middleware |
-| **Standard Reads**    | 60 / 1 min   | User ID / IP | Profile queries, session introspection, audit history      |
-| **Authentication**    | 10–20 / 1m   | IP           | Login, MFA challenge verification, token rotation          |
-| **Account Mutations** | 5–10 / 1m    | User ID      | Role assignments, permission updates                       |
-| **Token Dispatches**  | 5 / 15 min   | IP / User ID | Password resets, email verification, magic link dispatches |
+Policy tiers define standard quotas and keying strategies across endpoints (Global Baseline, Standard Reads, Administrative Queries, Authentication, Account Mutations, and Token Dispatches). For the authoritative mapping of routes and access tiers to rate-limiting policies, see [ARCHITECTURE.md (Complete Route Inventory)](ARCHITECTURE.md#21-complete-route-inventory--openapi-31-operation-registry-33-operations).
 
 ### Rationale
 
@@ -1931,14 +1931,7 @@ OAuth initiation, OAuth callback redirection, magic link request, and magic link
 
 ### Decision
 
-Add specialized rate limit policies to `RATE_LIMIT_POLICIES` in `src/middlewares/rate-limit.ts`:
-
-| Policy               | Quota | Window | Key Type | Target Endpoints                     |
-| :------------------- | :---- | :----- | :------- | :----------------------------------- |
-| `OAUTH_INITIATE`     | 20    | 1 min  | IP       | `GET /auth/oauth/:provider`          |
-| `OAUTH_CALLBACK`     | 20    | 1 min  | IP       | `GET /auth/oauth/:provider/callback` |
-| `MAGIC_LINK_REQUEST` | 5     | 15 min | IP       | `POST /auth/magic-link`              |
-| `MAGIC_LINK_VERIFY`  | 10    | 5 min  | IP       | `POST /auth/magic-link/verify`       |
+Add specialized rate limit policies (`OAUTH_INITIATE`, `OAUTH_CALLBACK`, `MAGIC_LINK_REQUEST`, `MAGIC_LINK_VERIFY`) to `RATE_LIMIT_POLICIES` in `src/middlewares/rate-limit.ts`. For exact endpoint rate limits, quotas, and keying strategies, see [ARCHITECTURE.md (Complete Route Inventory)](ARCHITECTURE.md#21-complete-route-inventory--openapi-31-operation-registry-33-operations).
 
 ### Rationale
 
@@ -2806,7 +2799,7 @@ Adopt `jose` (standard Web Cryptography API) and enforce dual-secret cryptograph
 
 ## ADR-088 — Runtime Egress Data Sanitization Firewall via Zod Response Schemas
 
-**Status:** Accepted _(Extends ADR-004, ADR-026, ADR-038)_
+**Status:** Accepted _(Extends ADR-004, ADR-026, ADR-038; Extended by ADR-099, ADR-101)_
 
 ### Context
 
@@ -2829,11 +2822,14 @@ const getUser = async (userId: string): Promise<UserProfileResponse> => {
     firstName: user.firstName,
     lastName: user.lastName,
     role: user.role.name,
+    mfaEnabled: user.mfaEnabled,
     isEmailVerified: user.isEmailVerified,
     createdAt: user.createdAt,
   });
 };
 ```
+
+Identical schema-enforced runtime sanitization applies across `usersResponseSchema.paginatedUsers` (for `GET /users` [ADR-099]) and `authResponseSchema.currentUserProfile` (for `GET /auth/me` [ADR-101]), guaranteeing that only non-sensitive attributes (such as `mfaEnabled` boolean status) are returned to the client while internal cryptographic secrets remain unexposed.
 
 ### Rationale
 
@@ -2973,7 +2969,7 @@ Standardize on UUIDv7 (`@id @default(uuid(7))` in Prisma) as the ubiquitous prim
 
 ## ADR-094 — Relational Deletion Cascades and Administrative Role Immutability
 
-**Status:** Accepted _(Extends ADR-005, ADR-013, ADR-037)_
+**Status:** Accepted _(Extends ADR-005, ADR-013, ADR-037; Extended by ADR-100)_
 
 ### Context
 
@@ -2985,7 +2981,7 @@ Enforce relational integrity constraints at the PostgreSQL schema and service le
 
 1. **Atomic Deletion Cascades:** All user-dependent child models (`Session`, `OAuthAccount`, `EmailVerificationToken`, `PasswordResetToken`, `MfaChallenge`, `MfaRecoveryCode`, `MagicLinkToken`, `SecurityEvent`) specify `onDelete: Cascade` in `schema.prisma`. Deleting a `User` cascades atomically in a single database transaction. This reflects a deliberate architectural trade-off prioritizing automated orphan cleanup and complete user record removal over immutable audit log preservation.
 2. **Role Deletion Restrict:** `User.role` enforces `onDelete: Restrict`, prohibiting the deletion of any role currently assigned to one or more users.
-3. **Admin Role Permission Guard:** `roles.service.ts` explicitly guards the `ADMIN` role permissions from mutation via the API: `if (roleName === ROLES.ADMIN) throw new ForbiddenError("Cannot update permissions for the admin role.");`.
+3. **Admin Role Permission Guard:** `roles.service.ts` explicitly guards the `ADMIN` role permissions from mutation via the API: `if (roleName === ROLES.ADMIN) throw new ForbiddenError("Cannot update permissions for the admin role.");` (while read-only inspection is exposed via `GET /roles/:roleName/permissions` [ADR-100]).
 
 ### Rationale
 
@@ -3104,3 +3100,78 @@ Implement a unified GitHub Actions deployment pipeline (`.github/workflows/deplo
 - **Single Pipeline Source of Truth:** A declarative workflow manages both serverless and container deployments.
 - **Infrastructure Portability:** Deployment targets can be switched between AWS Lambda and AWS ECS Fargate via repository configuration without code modifications.
 - **Operations & Runbooks:** Full SAM parameters, task definitions, rollback procedures, and environment matrix are documented in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+---
+
+## ADR-099 — Paginated Administrative User Directory and Standard Offset Query Strategy
+
+**Status:** Accepted _(Extends ADR-026, ADR-036, ADR-051, ADR-088)_
+
+### Context
+
+Back-office administration consoles require global visibility across registered user accounts. Returning unpaginated datasets causes unbounded memory consumption, query latency, and payload bloat. Administrative workflows require arbitrary page jumps, bidirectional traversal, and total record counts (`totalCount`, `totalPages`) that cursor-based pagination cannot satisfy without traversing intermediate pages.
+
+### Decision
+
+Implement an administrative user directory endpoint at `GET /users` with standardized offset pagination. The endpoint accepts validated `page` (default `1`) and `limit` (default `20`, max `100`) query parameters, executes `usersRepository.findUsersPaginated` concurrently with `prisma.user.count()` via `Promise.all`, and returns a structured `{ users, pagination }` metadata envelope. Route access is restricted to `ADMIN` roles and throttled by user-keyed rate limiting (`USERS_LIST`). For complete route definitions, see [ARCHITECTURE.md](ARCHITECTURE.md#21-complete-route-inventory--openapi-31-operation-registry-33-operations).
+
+### Consequences
+
+- **Positive:** Enables arbitrary page navigation, total record estimation, and standardized dashboard table controls.
+- **Negative:** Deep offset traversal (`OFFSET > 1000`) incurs increasing relational scan costs, mitigated by capping `limit` at 100 and applying strict user-keyed rate limits.
+
+### Security Invariants
+
+- **Role Boundary:** Guarded by `requireRole(ROLES.ADMIN)`; unauthorized requests or non-admin users receive immediate `403 Forbidden`.
+- **Egress Sanitization:** Output is strictly filtered via `usersResponseSchema.paginatedUsers` [ADR-088], stripping `passwordHash`, `mfaSecret`, and internal security attributes.
+- **Anti-Scraping Defense:** Throttled via `RATE_LIMIT_POLICIES.USERS_LIST` (30 req/min, keyed by authenticated user ID) to prevent bulk account harvesting.
+
+---
+
+## ADR-100 — Dedicated Role Permission Introspection with Cached Read Path and Administrative Immutability
+
+**Status:** Accepted _(Extends ADR-035, ADR-036, ADR-037, ADR-051, ADR-094)_
+
+### Context
+
+AuthSphere uses dynamic Role-Based Access Control (RBAC) where permissions are assigned to roles. While permissions could be modified via `PUT /roles/:roleName/permissions`, the system lacked a dedicated, idempotent read-only endpoint for inspecting assigned permissions, forcing admin consoles and audit tools to infer state or query data stores directly.
+
+### Decision
+
+Implement a dedicated read-only role permission introspection endpoint at `GET /roles/:roleName/permissions` guarded by `auth`, `requireRole(ROLES.ADMIN)`, and `rateLimiter(ROLE_READ_PERMISSIONS)`. Read requests resolve permissions via `authorizationService.getPermissionsByRole`, backed by 24-hour Redis caching (`role:permissions:<roleName>`) with transparent fallback to PostgreSQL. On permission updates (`PUT /roles/:roleName/permissions`), atomic database updates immediately invalidate the cached Redis key (`redis.del`). Updates targeting the foundational `ADMIN` role are rejected at the service layer. For route specifications, see [ARCHITECTURE.md](ARCHITECTURE.md#21-complete-route-inventory--openapi-31-operation-registry-33-operations).
+
+### Consequences
+
+- **Positive:** Completes read/write API symmetry, eliminates repeated relational joins on hot authorization read paths (~1ms cached), and guarantees zero stale privilege windows upon permission modification.
+- **Negative:** Couples permission mutation workflows directly to Redis cache key eviction logic.
+
+### Security Invariants
+
+- **Administrative Immutability:** Server enforces rejection (`403 Forbidden`) of any modification attempt against the `ADMIN` role's permissions, preserving system integrity and preventing lockout.
+- **Synchronous Cache Invalidation:** Updating role permissions invalidates the cache synchronously, ensuring all active sessions evaluate updated privileges on their subsequent request.
+- **Fail-Open Resilience:** Redis connectivity failures degrade transparently to direct PostgreSQL queries without rejecting administrative inspection requests.
+
+---
+
+## ADR-101 — Zero-Side-Effect Client MFA State Introspection via Current User Profile Contract
+
+**Status:** Accepted _(Extends ADR-040, ADR-045, ADR-057, ADR-088, ADR-091)_
+
+### Context
+
+Frontend applications need to ascertain the user's Multi-Factor Authentication (MFA) posture to render dynamic security settings, post-login reminders, and step-up authentication prompts. Previously, clients had to infer enrollment by invoking setup endpoints (`POST /auth/mfa/setup`) or tracking fragile client-side flags. Calling mutation endpoints to probe status generates ephemeral secrets, polluting database state and introducing cryptographic overhead.
+
+### Decision
+
+Expose `mfaEnabled: boolean` as a first-class attribute in the authenticated user profile returned by `GET /auth/me`. The field is read directly from the `User` database record and validated via `authResponseSchema.currentUserProfile` [ADR-088]. Parity is maintained across administrative user endpoints (`GET /users/:id` and `GET /users` [ADR-099]). For the complete API route map, see [ARCHITECTURE.md](ARCHITECTURE.md#21-complete-route-inventory--openapi-31-operation-registry-33-operations).
+
+### Consequences
+
+- **Positive:** Provides idempotent, zero-side-effect posture introspection on application bootstrap and navigation without creating challenge records or generating ephemeral secrets.
+- **Negative:** Expands the user profile response schema contract, requiring synchronized types across frontend clients.
+
+### Security Invariants
+
+- **Cryptographic Secret Sealing:** Only the boolean enrollment flag is exposed; internal encrypted secrets (`mfaSecret`), IVs, auth tags, monotonic counter windows, and recovery codes remain sealed within the database boundary.
+- **Runtime Egress Sanitization:** All profile responses pass through strict Zod output validation schemas (`currentUserProfile`, `userProfile`, `paginatedUsers`), preventing accidental column leakage.
+- **Zero Mutation Side-Effects:** Read-only inspection generates no challenge tokens, modifies no database rows, and cannot interfere with ongoing MFA enrollment lifecycles.
