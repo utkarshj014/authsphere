@@ -346,6 +346,9 @@ const refreshToken = async (
     // Validate active session in DB to prevent cached token return after explicit revocation (logout / remote termination)
     const activeSession = await authRepository.findSessionById(payload.sid);
     if (!activeSession || activeSession.userId !== payload.sub) {
+      if (redis.status === "ready") {
+        await redis.del(leewayKey).catch(() => {});
+      }
       throw new UnauthorizedError("Invalid session");
     }
     return JSON.parse(cached) as AuthTokens;
@@ -414,6 +417,13 @@ const logout = async (token?: string) => {
   }
 
   await authRepository.deleteSessionById(session.id);
+
+  if (redis.status === "ready") {
+    const tokenHash = hashToken(token);
+    await redis
+      .del(`auth:refresh-leeway:${session.id}:${tokenHash}`)
+      .catch(() => {});
+  }
 
   await recordSecurityEvent(
     session.userId,

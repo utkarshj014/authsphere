@@ -6,7 +6,7 @@ This document provides a comprehensive overview of **AuthSphere's** system archi
 >
 > - [ARCHITECTURE.md](./ARCHITECTURE.md) — System Design, Component Topology & Core Data Models
 > - [Engineering-Decisions.md](./Engineering-Decisions.md) — 98 Formal ADRs, Security Invariants & Technical Trade-offs
-> - [OAUTH.md](./OAUTH.md) — OAuth 2.0 / OIDC Relying Party Integration & PKCE Protocols
+> - [OAUTH.md](./OAUTH.md) — OAuth 2.0 PKCE Social Authentication & Integration Protocols
 > - [DEPLOYMENT.md](./DEPLOYMENT.md) — Cloud Infrastructure, Dual-Compute (Lambda/ECS) & Runbooks
 > - [TESTING.md](./TESTING.md) — Hermetic Test Pyramid, Invariant Verification & CI Strategies
 
@@ -330,6 +330,7 @@ sequenceDiagram
         alt Active Session Exists
             API-->>Client: 200 OK (Return synchronized token pair)
         else Session Revoked/Purged
+            API->>Redis: DEL auth:refresh-leeway:{sid}:{oldTokenHash} (Purge dead leeway cache)
             API-->>Client: 401 Unauthorized ("Invalid session")
         end
     end
@@ -405,14 +406,14 @@ sequenceDiagram
 
 ### 4.3 OAuth 2.0 PKCE & Identity Resolution Architecture
 
-AuthSphere acts strictly as an **OAuth 2.0 / OIDC Relying Party (Client)**, enabling federated social authentication and account linking across external identity providers (Google and GitHub):
+AuthSphere acts strictly as an **OAuth 2.0 Client** using the **Authorization Code Flow with PKCE (RFC 7636 / RFC 9700)**, enabling federated social authentication and account linking across external identity providers (Google and GitHub):
 
 - **Protocol Standard:** Implements the OAuth 2.0 Authorization Code Grant with Proof Key for Code Exchange (RFC 7636 / RFC 9700 PKCE using `S256`).
 - **Cryptographic Binding:** The 32-byte code verifier is stored in a browser-bound, per-transaction HttpOnly cookie (`oauth_verifier_<state>`) scoped to `/api/auth/oauth` with a 10-minute TTL, isolating multi-tab authentication flows.
 - **Atomic Single-Use State:** Random 32-byte CSRF state tokens are cached in Redis (`oauth:state:<state>`, 600s TTL) and consumed atomically via `GETDEL` upon callback processing to prevent replay attacks.
 - **Pre-Resolution Session Gate:** If initiating linking from an authenticated state, AuthSphere validates the active session in PostgreSQL before token exchange; revoked or invalid sessions fail immediately with `401 Unauthorized`.
 - **Anti-Account Takeover Guard:** Unauthenticated OAuth logins attempting to claim an existing local password-registered email are rejected with `409 Conflict`, requiring password verification before linking.
-- **Provider Normalization:** User profiles are retrieved over authenticated TLS (Google via authenticated UserInfo endpoint; GitHub via user emails API) and normalized into unified identity records.
+- **Provider Normalization & Trust Boundary:** User profiles are retrieved over authenticated TLS (Google via authenticated UserInfo endpoint over TLS without local ID-token signature validation against JWKS; GitHub via user emails API) and normalized into unified identity records.
 
 For complete end-to-end sequence flows, provider attribute matrices, security invariants, and curl test scripts, refer to the authoritative specification in [OAUTH.md](./OAUTH.md).
 

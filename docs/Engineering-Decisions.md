@@ -1710,6 +1710,8 @@ The core service (`oauth.service.ts`) dispatches requests dynamically via a prov
 > [!NOTE]
 > **Relying Party Trust Boundary (Google):**
 > AuthSphere acts strictly as an OAuth 2.0 / OIDC Relying Party (Client). For Google social login, user identity claims (`email`, `email_verified`, `sub`) are retrieved directly from Google's authenticated UserInfo endpoint (`https://openidconnect.googleapis.com/v1/userinfo`) over TLS using the bearer access token [ADR-062], rather than locally verifying cryptographic signatures of Google's `id_token` against Google JWKS. Full protocol contracts are specified in [OAUTH.md](OAUTH.md).
+> **Client Trust Boundary (Google):**
+> AuthSphere acts strictly as an OAuth 2.0 Client implementing Authorization Code Flow with PKCE (RFC 7636 / RFC 9700). For Google social login, user identity claims (`email`, `email_verified`, `sub`) are retrieved directly from Google's authenticated UserInfo endpoint (`https://openidconnect.googleapis.com/v1/userinfo`) over TLS using the bearer access token [ADR-062], rather than locally verifying cryptographic signatures of Google's `id_token` against Google JWKS. AuthSphere does not claim full OIDC Relying Party compliance. Full protocol contracts are specified in [OAUTH.md](OAUTH.md).
 
 ### Rationale
 
@@ -2343,16 +2345,18 @@ Implement single-statement atomic Compare-And-Swap (CAS) session rotation paired
 Because PostgreSQL CAS and Redis cache publication are separate operations, execution handles the concurrency gap explicitly:
 
 1. **Pre-CAS Leeway Check with Active Session Verification:** When a refresh request arrives, it checks Redis for cached tokens under the old token hash. If found, it queries PostgreSQL to confirm the session remains active (`findSessionById(payload.sid)`). If the session was explicitly revoked (via logout, password reset, or admin termination), the request is rejected with `401 Unauthorized ("Invalid session")`. If active, the cached tokens are returned immediately.
-2. **Atomic CAS Mutation:** If not cached, the request generates new tokens and executes an atomic CAS update on PostgreSQL via `prisma.session.updateMany` conditioned on both `id` and `tokenHash`.
-3. **Winner Publication:** The winning caller (`rotated.count > 0`) stores the newly generated token pair in Redis with a 30-second TTL and returns the tokens.
-4. **Loser Bounded Cache-Retry:** If the CAS returns 0 (a concurrent request won the database update), the loser does not immediately revoke the session. It checks the leeway cache; if not yet populated (winner is mid-publication), it waits 150ms and polls Redis once more. If populated, it returns the winner's cached tokens.
-5. **Replay Revocation & Redis Degraded Behavior:** If the leeway cache remains unpopulated after the bounded retry, the request is treated as a token replay outside the leeway window, triggering session revocation (either local session or global account revocation governed by `AUTH_REUSE_DELETION_MODE` [ADR-092]). If Redis is unavailable or unpopulated, concurrent requests cannot be collapsed; under this degraded scenario, strict replay security takes precedence over concurrency tolerance, resulting in session revocation.
+1. **Pre-CAS Leeway Check with Active Session Verification & Dead Key Purge:** When a refresh request arrives, it checks Redis for cached tokens under the old token hash. If found, it queries PostgreSQL to confirm the session remains active (`findSessionById(payload.sid)`). If the session was explicitly revoked (via logout, password reset, or admin termination), the dead leeway key is immediately purged from Redis (`redis.del(leewayKey)`) and the request is rejected with `401 Unauthorized ("Invalid session")`. Furthermore, explicit session termination (`logout()`, `logoutAll()`) proactively purges any active leeway key. If active, the cached tokens are returned immediately.
+1. **Atomic CAS Mutation:** If not cached, the request generates new tokens and executes an atomic CAS update on PostgreSQL via `prisma.session.updateMany` conditioned on both `id` and `tokenHash`.
+1. **Winner Publication:** The winning caller (`rotated.count > 0`) stores the newly generated token pair in Redis with a 30-second TTL and returns the tokens.
+1. **Loser Bounded Cache-Retry:** If the CAS returns 0 (a concurrent request won the database update), the loser does not immediately revoke the session. It checks the leeway cache; if not yet populated (winner is mid-publication), it waits 150ms and polls Redis once more. If populated, it returns the winner's cached tokens.
+1. **Replay Revocation & Redis Degraded Behavior:** If the leeway cache remains unpopulated after the bounded retry, the request is treated as a token replay outside the leeway window, triggering session revocation (either local session or global account revocation governed by `AUTH_REUSE_DELETION_MODE` [ADR-092]). If Redis is unavailable or unpopulated, concurrent requests cannot be collapsed; under this degraded scenario, strict replay security takes precedence over concurrency tolerance, resulting in session revocation.
 
 ```typescript
 const cached = await getLeewayCache(leewayKey);
 if (cached) {
   const activeSession = await authRepository.findSessionById(payload.sid);
   if (!activeSession || activeSession.userId !== payload.sub) {
+    await redis.del(leewayKey).catch(() => {});
     throw new UnauthorizedError("Invalid session");
   }
   return JSON.parse(cached) as AuthTokens;

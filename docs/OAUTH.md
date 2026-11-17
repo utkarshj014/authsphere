@@ -14,15 +14,18 @@ This document specifies the OAuth 2.0 social authentication and account-linking 
 ## 1. System Overview & Architecture Snapshot
 
 > [!IMPORTANT]
-> **Architectural Role — Relying Party (Client) Only:**
-> AuthSphere acts strictly as an **OAuth 2.0 / OIDC Relying Party (Client)** for federated social login and account linking with external identity providers. AuthSphere is **not an Identity Provider (IdP) or OAuth 2.0 Authorization Server**; it does not issue authorization codes or OAuth tokens to third parties, host public token endpoints for external integrations, or implement `client_credentials`, `resource_owner_password_credentials`, or `device_code` grant types.
+> **Architectural Role — OAuth 2.0 Client Only (No Local OIDC ID-Token Validation):**
+> AuthSphere acts strictly as an **OAuth 2.0 Client** implementing the **Authorization Code Grant with PKCE (RFC 7636 / RFC 9700)** for federated social login and account linking with external identity providers.
+>
+> - **Not an Authorization Server:** AuthSphere is **not an Identity Provider (IdP) or OAuth 2.0 Authorization Server**; it does not issue authorization codes or OAuth tokens to third parties, host public token endpoints for external integrations, or implement `client_credentials`, `resource_owner_password_credentials`, or `device_code` grant types.
+> - **Trust Model & ID-Token Limitation:** For Google social login, AuthSphere requests `openid email profile` scopes and exchanges the authorization code for an access token. Identity claims (`sub`, `email`, `email_verified`) are resolved by querying Google's authenticated UserInfo endpoint (`https://openidconnect.googleapis.com/v1/userinfo`) over TLS. AuthSphere does **not** perform local cryptographic validation of Google's `id_token` JWT signatures against Google JWKS. Rather than claiming full OpenID Connect (OIDC) Relying Party compliance, AuthSphere is described specifically as an **OAuth 2.0 Authorization Code client utilizing authenticated UserInfo over TLS**. GitHub social login similarly uses standard OAuth 2.0 Web Application Flow via GitHub's REST API.
 
 AuthSphere implements the standard **OAuth 2.0 Authorization Code Grant with Proof Key for Code Exchange (PKCE, RFC 7636 / RFC 9700)** across two external identity providers:
 
-| Provider   | Protocol / Specification       | Initiation Endpoint      | Callback Endpoint                 | Default Scopes         | Stable Identity Claim             |
-| :--------- | :----------------------------- | :----------------------- | :-------------------------------- | :--------------------- | :-------------------------------- |
-| **Google** | OAuth 2.0 + OIDC UserInfo      | `GET /auth/oauth/google` | `GET /auth/oauth/google/callback` | `openid email profile` | `sub` (OpenID Connect Subject ID) |
-| **GitHub** | OAuth 2.0 Web Application Flow | `GET /auth/oauth/github` | `GET /auth/oauth/github/callback` | `read:user user:email` | `String(id)` (Numeric Account ID) |
+| Provider   | Protocol / Specification       | Initiation Endpoint      | Callback Endpoint                 | Default Scopes         | Stable Identity Claim             | Profile Resolution Mechanism                 |
+| :--------- | :----------------------------- | :----------------------- | :-------------------------------- | :--------------------- | :-------------------------------- | :------------------------------------------- |
+| **Google** | OAuth 2.0 + UserInfo over TLS  | `GET /auth/oauth/google` | `GET /auth/oauth/google/callback` | `openid email profile` | `sub` (OpenID Connect Subject ID) | Authenticated UserInfo GET over TLS (Bearer) |
+| **GitHub** | OAuth 2.0 Web Application Flow | `GET /auth/oauth/github` | `GET /auth/oauth/github/callback` | `read:user user:email` | `String(id)` (Numeric Account ID) | Authenticated GitHub User & Emails API       |
 
 Both flows share a unified strategy abstraction, Redis-backed state management, identity resolution logic, session issuance, and cookie delivery pipeline. Only provider-specific details (authorization URL parameters, token exchange endpoints, and profile normalization) are isolated in provider strategies.
 
