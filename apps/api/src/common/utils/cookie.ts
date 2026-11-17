@@ -31,13 +31,19 @@ export const setAuthCookies = (
   );
 };
 
-export const clearAuthCookies = (res: Response) => {
-  const { maxAge: _noNeed1, ...clearAccessOptions } = accessTokenCookieOptions;
-  const { maxAge: _noNeed2, ...clearRefreshOptions } =
-    refreshTokenCookieOptions;
-
+export const clearAccessTokenCookie = (res: Response) => {
+  const { maxAge: _noNeed, ...clearAccessOptions } = accessTokenCookieOptions;
   res.clearCookie("accessToken", clearAccessOptions);
+};
+
+export const clearRefreshTokenCookie = (res: Response) => {
+  const { maxAge: _noNeed, ...clearRefreshOptions } = refreshTokenCookieOptions;
   res.clearCookie("refreshToken", clearRefreshOptions);
+};
+
+export const clearAuthCookies = (res: Response) => {
+  clearAccessTokenCookie(res);
+  clearRefreshTokenCookie(res);
 };
 
 export const OAUTH_VERIFIER_COOKIE_PREFIX = "oauth_verifier_";

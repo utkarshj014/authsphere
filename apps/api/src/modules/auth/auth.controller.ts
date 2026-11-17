@@ -65,17 +65,22 @@ const refreshToken = asyncHandler(async (req: Request, res: Response) => {
   const ipAddress = getClientIp(req);
   const userAgent = req.header("user-agent");
 
-  // Cannot pass the required parameter (ipAddress) after the optional parameters
-  // So, passing ipAddress first then userAgent and refreshToken
-  const authTokens = await authService.refreshToken(
-    ipAddress,
-    userAgent,
-    refreshToken,
-  );
+  try {
+    // Cannot pass the required parameter (ipAddress) after the optional parameters
+    // So, passing ipAddress first then userAgent and refreshToken
+    const authTokens = await authService.refreshToken(
+      ipAddress,
+      userAgent,
+      refreshToken,
+    );
 
-  setAuthCookies(res, authTokens);
+    setAuthCookies(res, authTokens);
 
-  return ApiResponse.success(res, null, "Refresh token successful", 200);
+    return ApiResponse.success(res, null, "Refresh token successful", 200);
+  } catch (error) {
+    clearAuthCookies(res);
+    throw error;
+  }
 });
 
 const logout = asyncHandler(async (req: Request, res: Response) => {

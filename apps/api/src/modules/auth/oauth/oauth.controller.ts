@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import type { Request, Response } from "express";
 import { OAUTH_PROVIDERS, type OAuthProviderName } from "@authsphere/shared";
+import { env } from "../../../config/env.js";
 import { asyncHandler, AppError } from "../../../common/errors/index.js";
 import { initiateOAuth, handleOAuthCallback } from "./oauth.service.js";
-import { ApiResponse } from "../../../common/responses/index.js";
 import {
   setAuthCookies,
   getClientIp,
@@ -48,6 +48,17 @@ export const initiateOAuthHandler = (provider: OAuthProviderName) =>
  */
 export const oauthCallbackHandler = (provider: OAuthProviderName) =>
   asyncHandler(async (req: Request, res: Response) => {
+    // 0. Handle provider error redirects (e.g., user clicked cancel at Google/GitHub consent)
+    if (req.query.error) {
+      const errorDescription =
+        req.query.error_description ||
+        req.query.error ||
+        "Authentication cancelled";
+      return res.redirect(
+        `${env.FRONTEND_URL}/login?error=${encodeURIComponent(String(errorDescription))}`,
+      );
+    }
+
     const code = req.query.code as string;
     const state = req.query.state as string;
     const ipAddress = getClientIp(req);
@@ -77,24 +88,20 @@ export const oauthCallbackHandler = (provider: OAuthProviderName) =>
     );
 
     if (result.mfaRequired) {
-      return ApiResponse.success(
-        res,
-        result,
-        "MFA verification required to complete login",
-        200,
+      return res.redirect(
+        `${env.FRONTEND_URL}/login?mfa=true&mfaToken=${encodeURIComponent(result.mfaToken)}&provider=${encodeURIComponent(provider.toLowerCase())}`,
       );
     }
 
     setAuthCookies(res, result.tokens);
 
-    const providerLabel = provider.charAt(0) + provider.slice(1).toLowerCase();
+    if (result.isLinked) {
+      return res.redirect(
+        `${env.FRONTEND_URL}/app/security?linked=${encodeURIComponent(provider.toLowerCase())}`,
+      );
+    }
 
-    return ApiResponse.success(
-      res,
-      null,
-      `Authenticated successfully via ${providerLabel} OAuth`,
-      200,
-    );
+    return res.redirect(`${env.FRONTEND_URL}/app`);
   });
 
 // Specific provider controller instances for explicit route mounting

@@ -119,6 +119,10 @@ export const initiateOAuth = async (
   return { redirectUrl: authUrl.toString(), state };
 };
 
+export type OAuthCallbackResult =
+  | { mfaRequired: false; tokens: AuthTokens; isLinked: boolean }
+  | { mfaRequired: true; mfaToken: string; isLinked: false };
+
 /**
  * Handles the OAuth 2.0 callback: verifies state, exchanges authorization code for provider profile,
  * resolves identity (linking vs signup vs login), and issues AuthSphere session tokens.
@@ -130,10 +134,7 @@ export const handleOAuthCallback = async (
   ipAddress: string,
   userAgent?: string,
   codeVerifier?: string,
-): Promise<
-  | { mfaRequired: false; tokens: AuthTokens }
-  | { mfaRequired: true; mfaToken: string }
-> => {
+): Promise<OAuthCallbackResult> => {
   if (!code || typeof code !== "string" || code.trim().length === 0) {
     throw new AppError("Missing or invalid authorization code", 400);
   }
@@ -284,6 +285,7 @@ export const handleOAuthCallback = async (
     return {
       mfaRequired: true,
       mfaToken: challenge.id,
+      isLinked: false,
     };
   }
 
@@ -306,5 +308,6 @@ export const handleOAuthCallback = async (
   return {
     mfaRequired: false,
     tokens,
+    isLinked: Boolean(stateData.userId),
   };
 };

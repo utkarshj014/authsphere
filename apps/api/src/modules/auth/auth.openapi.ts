@@ -446,11 +446,15 @@ registry.registerPath({
     query: authRequestSchema.oauthCallbackQuery,
   },
   responses: {
-    200: loginOrMfaResponse(
-      "Authenticated via Google (or MFA challenge returned)",
-    ),
+    302: {
+      description:
+        "Redirect to frontend application (/app, /app/security?linked=google, or /login?mfa=true...)",
+    },
     400: errorResponse(
       "OAuth callback failed, invalid or expired state parameter",
+    ),
+    409: errorResponse(
+      "Account email conflict or already linked to another user",
     ),
     429: standardErrors[429],
     500: standardErrors[500],
@@ -482,11 +486,15 @@ registry.registerPath({
     query: authRequestSchema.oauthCallbackQuery,
   },
   responses: {
-    200: loginOrMfaResponse(
-      "Authenticated via GitHub (or MFA challenge returned)",
-    ),
+    302: {
+      description:
+        "Redirect to frontend application (/app, /app/security?linked=github, or /login?mfa=true...)",
+    },
     400: errorResponse(
       "OAuth callback failed, invalid or expired state parameter",
+    ),
+    409: errorResponse(
+      "Account email conflict or already linked to another user",
     ),
     429: standardErrors[429],
     500: standardErrors[500],

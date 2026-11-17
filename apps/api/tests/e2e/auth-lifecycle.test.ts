@@ -255,11 +255,12 @@ describe("E2E Journey — Auth Lifecycles", () => {
       avatarUrl: null,
     });
 
-    // 4. Valid callback with transaction cookie completes authentication
+    // 4. Valid callback with transaction cookie completes authentication and redirects to frontend
     const callbackRes = await request(app)
       .get(`/auth/oauth/google/callback?code=mock-code&state=${state}`)
       .set("Cookie", verifierNameVal);
-    expect(callbackRes.status).toBe(200);
+    expect(callbackRes.status).toBe(302);
+    expect(callbackRes.headers.location).toBe("http://localhost:5173/app");
 
     const authCookies = getAuthCookies(callbackRes);
     expect(authCookies.accessToken).toBeDefined();
@@ -336,12 +337,14 @@ describe("E2E Journey — Auth Lifecycles", () => {
     const tab1Callback = await request(app)
       .get(`/auth/oauth/google/callback?code=code-tab-1&state=${state1}`)
       .set("Cookie", cookie1Val);
-    expect(tab1Callback.status).toBe(200);
+    expect(tab1Callback.status).toBe(302);
+    expect(tab1Callback.headers.location).toBe("http://localhost:5173/app");
 
     // 6. Tab 2 completes callback with its own cookie (unaffected by Tab 1 completion)
     const tab2Callback = await request(app)
       .get(`/auth/oauth/github/callback?code=code-tab-2&state=${state2}`)
       .set("Cookie", cookie2Val);
-    expect(tab2Callback.status).toBe(200);
+    expect(tab2Callback.status).toBe(302);
+    expect(tab2Callback.headers.location).toBe("http://localhost:5173/app");
   });
 });

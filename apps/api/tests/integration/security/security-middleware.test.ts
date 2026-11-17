@@ -115,7 +115,7 @@ describe("Security Middleware Integration (Headers, CSRF, Rate Limiting, Errors)
       expect(res.body.errors.length).toBeGreaterThanOrEqual(1);
     });
 
-    it("UnauthorizedError returns 401 and sets cookie-clearing headers", async () => {
+    it("UnauthorizedError returns 401 and clears only accessToken cookie, preserving refreshToken", async () => {
       const res = await request(app).get("/auth/me");
 
       expect(res.status).toBe(401);
@@ -127,6 +127,24 @@ describe("Security Middleware Integration (Headers, CSRF, Rate Limiting, Errors)
         ? setCookie.join(";")
         : setCookie;
       expect(cookieString).toContain("accessToken=");
+      expect(cookieString).not.toContain("refreshToken=");
+    });
+
+    it("Failed refresh token clears both accessToken and refreshToken cookies", async () => {
+      const res = await request(app)
+        .post("/auth/refresh-token")
+        .set("Cookie", "refreshToken=invalid.token");
+
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+
+      const setCookie = res.headers["set-cookie"];
+      expect(setCookie).toBeDefined();
+      const cookieString = Array.isArray(setCookie)
+        ? setCookie.join(";")
+        : setCookie;
+      expect(cookieString).toContain("accessToken=");
+      expect(cookieString).toContain("refreshToken=");
     });
 
     it("404 handler returns structured JSON response", async () => {

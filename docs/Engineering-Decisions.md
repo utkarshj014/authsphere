@@ -616,21 +616,23 @@ const sessionId = existingSessionId ?? uuidv7();
 
 ## ADR-016 — Centralized Auth Cookie Sanitization in Error Middleware
 
-**Status:** Accepted
+**Status:** Accepted _(Amended for Silent Token Rotation)_
 
 ### Context
 
-Stale auth cookies after authentication failure cause redundant failed requests.
+Stale auth cookies after authentication failure cause redundant failed requests. However, unconditionally clearing both `accessToken` and `refreshToken` cookies on any `UnauthorizedError` destroyed valid 7-day `refreshToken` cookies when short-lived 15-minute access tokens expired on protected routes, breaking silent refresh token rotation.
 
 ### Decision
 
-Clear `accessToken` and `refreshToken` cookies in the global `errorHandler` whenever `UnauthorizedError` is caught. Cookie clearing reuses the same `CookieOptions` (path, httpOnly, secure, sameSite) defined in `common/utils/cookie.ts`.
+In the global `errorHandler`, catch `UnauthorizedError` and call `clearAccessTokenCookie(res)`, clearing only `accessToken` while preserving `refreshToken`. Cookie clearing reuses the standard `CookieOptions` defined in `common/utils/cookie.ts`.
+
+In contrast, refresh token failure, replay rejection, explicit logout (`POST /auth/logout`), "Sign Out Everywhere" (`POST /auth/logout-all`), password change, MFA disablement, and current session revocation explicitly clear both cookies (`clearAuthCookies(res)`).
 
 ### Rationale
 
-- Automatically purges invalid cookies on auth failure.
-- Eliminates duplicated `res.clearCookie()` across controllers.
-- Guarantees matching cookie attributes between set and clear.
+- Automatically purges expired/invalid access tokens on protected request failure.
+- Preserves the valid `refreshToken` cookie so the client Axios response interceptor can seamlessly execute silent token rotation (`POST /auth/refresh-token`).
+- Explicitly purges both cookies when a refresh token fails validation or when sessions are intentionally terminated.
 
 ---
 
