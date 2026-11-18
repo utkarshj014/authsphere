@@ -29,6 +29,7 @@ export interface UserProfile {
   mfaEnabled: boolean;
   verifiedAt?: string | null;
   createdAt?: string;
+  oauthProviders?: OAuthProviderName[];
 }
 
 /**

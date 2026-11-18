@@ -77,6 +77,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-076: Refresh Token Rotation with Atomic CAS and Ephemeral Leeway Window](#adr-076--refresh-token-rotation-with-atomic-cas-and-ephemeral-leeway-window)
 - [ADR-082: Pre-Resolution Session Gate for Authenticated Account Linking](#adr-082--pre-resolution-session-gate-for-authenticated-account-linking)
 - [ADR-092: Configurable Replay Revocation Scope (`AUTH_REUSE_DELETION_MODE`)](#adr-092--configurable-replay-revocation-scope-auth_reuse_deletion_mode)
+- [ADR-102: Client-Device Session Supersession on Authentication](#adr-102--client-device-session-supersession-on-authentication)
 
 </details>
 
@@ -169,7 +170,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-101)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-102)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -272,6 +273,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-099: Paginated Administrative User Directory and Standard Offset Query Strategy](#adr-099--paginated-administrative-user-directory-and-standard-offset-query-strategy)
 - [ADR-100: Dedicated Role Permission Introspection with Cached Read Path and Administrative Immutability](#adr-100--dedicated-role-permission-introspection-with-cached-read-path-and-administrative-immutability)
 - [ADR-101: Zero-Side-Effect Client MFA State Introspection via Current User Profile Contract](#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)
+- [ADR-102: Client-Device Session Supersession on Authentication](#adr-102--client-device-session-supersession-on-authentication)
 
 </details>
 
@@ -3177,3 +3179,53 @@ Expose `mfaEnabled: boolean` as a first-class attribute in the authenticated use
 - **Cryptographic Secret Sealing:** Only the boolean enrollment flag is exposed; internal encrypted secrets (`mfaSecret`), IVs, auth tags, monotonic counter windows, and recovery codes remain sealed within the database boundary.
 - **Runtime Egress Sanitization:** All profile responses pass through strict Zod output validation schemas (`currentUserProfile`, `userProfile`, `paginatedUsers`), preventing accidental column leakage.
 - **Zero Mutation Side-Effects:** Read-only inspection generates no challenge tokens, modifies no database rows, and cannot interfere with ongoing MFA enrollment lifecycles.
+
+---
+
+## ADR-102 — Client-Device Session Supersession on Authentication
+
+**Status:** Accepted _(Extends ADR-012, ADR-013, ADR-029, ADR-039, ADR-068)_
+
+### Context
+
+When a user authenticates (via password, OAuth 2.0, magic link, or MFA challenge) on a browser that already possesses an active session without prior explicit logout, issuing a new session overwrites the client's HttpOnly cookie. Because the browser can only hold a single rotating refresh token cookie per domain, the previous session record becomes an un-rotatable orphan in PostgreSQL. During active session introspection (`GET /sessions` [ADR-068]), both sessions were presented, causing the client device to be replicated and displayed twice (one flagged as current, the other erroneously labeled as remote).
+
+### Decision
+
+Enforce atomic client-device session supersession directly within `authRepository.createSession` via a Prisma interactive transaction:
+
+1. **Atomic Pruning:** Before inserting a new session record, delete any pre-existing sessions matching the exact same client device context:
+   ```typescript
+   prisma.$transaction(async (tx) => {
+     if (sessionData.userAgent && sessionData.ipAddress) {
+       await tx.session.deleteMany({
+         where: {
+           userId,
+           userAgent: sessionData.userAgent,
+           ipAddress: sessionData.ipAddress,
+         },
+       });
+     }
+
+     return tx.user.update({
+       where: { id: userId },
+       data: {
+         lastLoginAt: new Date(),
+         sessions: { create: sessionData },
+       },
+     });
+   });
+   ```
+2. **Encapsulated Lifecycle:** Centralizing this logic within `authRepository.createSession` ensures that all authentication entry points (`login`, `mfaVerifyLogin`, `oauthCallback`, `verifyMagicLink` [ADR-039]) automatically benefit without service-layer or controller-layer orchestration.
+3. **Purity of Read Path:** `sessionsService.getActiveSessions` reads strictly from the database without ad-hoc in-memory filtering, preserving the database as the authoritative single source of truth.
+
+### Consequences
+
+- **Positive:** Guarantees zero duplicate session listings for the same client device across login flows, eliminates orphan database rows, and keeps device inventories accurate in both overview telemetry and session management.
+- **Positive:** Atomic transactional execution prevents race conditions during concurrent logins.
+- **Negative:** Re-authenticating on the exact same browser and network terminates any previous session token for that specific client, which aligns with expected web session replacement semantics.
+
+### Security Invariants
+
+- **Transactional Hard Deletion:** Orphaned refresh token hashes are hard-deleted in the same database transaction [ADR-013, ADR-029], instantly revoking replay vectors.
+- **Scoped Invalidation:** Deletion is strictly scoped to the tuple `(userId, userAgent, ipAddress)`, guaranteeing that distinct physical devices and remote sessions remain unaffected.

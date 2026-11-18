@@ -113,16 +113,29 @@ const createSession = (
     userAgent?: string;
   },
 ) =>
-  prisma.user.update({
-    where: { id: userId },
-    data: {
-      lastLoginAt: new Date(),
-      sessions: {
-        create: {
-          ...sessionData,
+  prisma.$transaction(async (tx) => {
+    // Atomically prune superseded orphan sessions from the exact same client device/browser
+    if (sessionData.userAgent && sessionData.ipAddress) {
+      await tx.session.deleteMany({
+        where: {
+          userId,
+          userAgent: sessionData.userAgent,
+          ipAddress: sessionData.ipAddress,
+        },
+      });
+    }
+
+    return tx.user.update({
+      where: { id: userId },
+      data: {
+        lastLoginAt: new Date(),
+        sessions: {
+          create: {
+            ...sessionData,
+          },
         },
       },
-    },
+    });
   });
 
 const findSessionById = (sessionId: string) =>
@@ -180,6 +193,11 @@ const findUserById = (userId: string) =>
       role: {
         select: {
           name: true,
+        },
+      },
+      oauthAccounts: {
+        select: {
+          provider: true,
         },
       },
     },

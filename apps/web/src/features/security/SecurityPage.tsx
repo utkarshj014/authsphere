@@ -1,7 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import QRCode from "qrcode";
+import { OAUTH_PROVIDERS } from "@authsphere/shared";
 import { useAuthStore } from "../../stores/auth.store.js";
 import { authApi, mfaApi, getApiErrorMessage } from "../../api/index.js";
 import {
@@ -29,11 +31,44 @@ export const SecurityPage: React.FC = () => {
   const [isSetupModalOpen, setIsSetupModalOpen] = useState(false);
   const [setupSecret, setSetupSecret] = useState<string | null>(null);
   const [setupOtpUri, setSetupOtpUri] = useState<string | null>(null);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
+  const [qrCodeError, setQrCodeError] = useState<string | null>(null);
   const [verifyCode, setVerifyCode] = useState("");
   const [setupError, setSetupError] = useState<string | null>(null);
   const [isStartingSetup, setIsStartingSetup] = useState(false);
   const [isVerifyingSetup, setIsVerifyingSetup] = useState(false);
   const [copiedSecret, setCopiedSecret] = useState(false);
+
+  useEffect(() => {
+    if (!setupOtpUri) return;
+
+    let isMounted = true;
+
+    QRCode.toDataURL(setupOtpUri, {
+      width: 200,
+      margin: 1,
+      color: {
+        dark: "#0f172a",
+        light: "#ffffff",
+      },
+    })
+      .then((url) => {
+        if (isMounted) {
+          setQrCodeDataUrl(url);
+          setQrCodeError(null);
+        }
+      })
+      .catch((err: unknown) => {
+        if (isMounted) {
+          console.error("Failed to render QR Code", err);
+          setQrCodeError("Failed to generate QR code");
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [setupOtpUri]);
 
   // Recovery Codes Modal
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
@@ -402,11 +437,17 @@ export const SecurityPage: React.FC = () => {
                 </div>
               </div>
 
-              <a href={OAUTH_URLS.GOOGLE}>
-                <Button variant="secondary" size="sm">
-                  Connect
-                </Button>
-              </a>
+              {user?.oauthProviders?.includes(OAUTH_PROVIDERS.GOOGLE) ? (
+                <Badge variant="ok" size="sm" isMono>
+                  CONNECTED
+                </Badge>
+              ) : (
+                <a href={OAUTH_URLS.GOOGLE}>
+                  <Button variant="secondary" size="sm">
+                    Connect
+                  </Button>
+                </a>
+              )}
             </div>
 
             <div className="p-4 bg-[var(--color-paper-3)] border border-[var(--color-rule)] rounded-[var(--radius-pill)] flex items-center justify-between">
@@ -431,11 +472,17 @@ export const SecurityPage: React.FC = () => {
                 </div>
               </div>
 
-              <a href={OAUTH_URLS.GITHUB}>
-                <Button variant="secondary" size="sm">
-                  Connect
-                </Button>
-              </a>
+              {user?.oauthProviders?.includes(OAUTH_PROVIDERS.GITHUB) ? (
+                <Badge variant="ok" size="sm" isMono>
+                  CONNECTED
+                </Badge>
+              ) : (
+                <a href={OAUTH_URLS.GITHUB}>
+                  <Button variant="secondary" size="sm">
+                    Connect
+                  </Button>
+                </a>
+              )}
             </div>
           </div>
         </div>
@@ -448,16 +495,45 @@ export const SecurityPage: React.FC = () => {
           setIsSetupModalOpen(false);
           setSetupError(null);
           setVerifyCode("");
+          setQrCodeDataUrl(null);
         }}
         title="Enroll Two-Factor Authentication"
-        description="Scan the authenticator URI or manually enter the key into your authenticator app"
+        description="Scan the QR code with your authenticator app or enter the key manually"
       >
         <div className="space-y-4">
           {setupError && <Alert variant="bad">{setupError}</Alert>}
 
-          <div className="p-4 bg-[var(--color-paper-3)] border border-[var(--color-rule)] rounded-[var(--radius-pill)] space-y-3">
+          {/* Visual QR Code Scanner Card */}
+          <div className="flex flex-col items-center justify-center p-4 bg-[var(--color-paper-3)] border border-[var(--color-rule)] rounded-[var(--radius-card)] text-center space-y-2">
+            <span className="text-xs font-medium text-[var(--color-ink)]">
+              1. Scan with Authenticator App
+            </span>
+            <div className="p-2.5 bg-white rounded-lg border border-[var(--color-rule)] shadow-xs inline-block my-1">
+              {qrCodeDataUrl ? (
+                <img
+                  src={qrCodeDataUrl}
+                  alt="MFA QR Code"
+                  className="w-44 h-44 block mx-auto"
+                />
+              ) : qrCodeError ? (
+                <div className="w-44 h-44 flex items-center justify-center text-xs text-[var(--color-bad)]">
+                  {qrCodeError}
+                </div>
+              ) : (
+                <div className="w-44 h-44 flex items-center justify-center text-xs text-[var(--color-muted)]">
+                  Generating QR code…
+                </div>
+              )}
+            </div>
+            <p className="text-[11px] text-[var(--color-muted)] max-w-xs">
+              Scan with Google Authenticator, Authy, 1Password, Microsoft
+              Authenticator, or Bitwarden.
+            </p>
+          </div>
+
+          <div className="p-3 bg-[var(--color-paper-3)] border border-[var(--color-rule)] rounded-[var(--radius-card)] space-y-2">
             <span className="text-xs text-[var(--color-muted)] font-medium block">
-              1. Base32 Secret Key (Manual Entry)
+              Or enter key manually
             </span>
             <div className="flex items-center justify-between gap-2">
               <code className="text-xs font-mono font-semibold text-[var(--color-accent)] tracking-wider break-all select-all">
@@ -475,7 +551,7 @@ export const SecurityPage: React.FC = () => {
               </Button>
             </div>
             {setupOtpUri && (
-              <div className="pt-1">
+              <div className="pt-0.5">
                 <a
                   href={setupOtpUri}
                   className="text-xs text-[var(--color-cool)] hover:underline block"

@@ -105,6 +105,7 @@ export const authResponseSchema = {
     mfaEnabled: z.boolean().default(false),
     verifiedAt: z.date().or(z.string()),
     createdAt: z.date().or(z.string()),
+    oauthProviders: z.array(z.string()).default([]),
   }),
 
   securityEventItem: securityEventItemSchema,

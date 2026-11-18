@@ -148,7 +148,31 @@ apiClient.interceptors.response.use(
 );
 
 /**
- * Extracts a human-readable, safe error message from an API error response.
+ * Detects whether an error message contains raw database, internal server, or driver details.
+ */
+const isTechnicalOrInternalError = (msg: string): boolean => {
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes("prisma") ||
+    lower.includes("syntax error") ||
+    lower.includes("foreign key") ||
+    lower.includes("unique constraint") ||
+    lower.includes("column") ||
+    lower.includes("table") ||
+    lower.includes("database") ||
+    lower.includes("relation") ||
+    lower.includes("connection pool") ||
+    lower.includes("timed out") ||
+    lower.includes("failed to query") ||
+    lower.includes("internal server") ||
+    lower.includes("econnrefused") ||
+    lower.includes("nullpointer") ||
+    lower.includes("cannot read properties")
+  );
+};
+
+/**
+ * Extracts a human-readable, safe, and sanitized error message from an API error response.
  */
 export const getApiErrorMessage = (error: unknown): string => {
   if (axios.isAxiosError<ApiErrorResponse>(error)) {
@@ -156,36 +180,55 @@ export const getApiErrorMessage = (error: unknown): string => {
       return "Unable to reach the AuthSphere server. Please verify your internet connection or try again shortly.";
     }
 
+    const status = error.response.status;
+
+    // Never leak 5xx server internals or stack traces
+    if (status >= 500) {
+      return "An unexpected server error occurred. Please try again later.";
+    }
+
     const data = error.response.data;
 
     // Schema validation errors array
     if (data?.errors && Array.isArray(data.errors) && data.errors.length > 0) {
-      return data.errors.map((e) => e.message).join(", ");
+      const messages = data.errors
+        .map((e) => e.message)
+        .filter(Boolean)
+        .filter((m) => !isTechnicalOrInternalError(m));
+      if (messages.length > 0) {
+        return messages.join(", ");
+      }
+      return "The submitted data is invalid. Please check your inputs.";
     }
 
-    if (data?.message) {
+    if (data?.message && typeof data.message === "string") {
+      if (isTechnicalOrInternalError(data.message)) {
+        return "A request processing error occurred. Please check your inputs and try again.";
+      }
       return data.message;
     }
 
-    if (error.response.status === 429) {
+    if (status === 429) {
       return "Too many requests. Please slow down and try again in a few moments.";
     }
 
-    if (error.response.status === 403) {
+    if (status === 403) {
       return "Access denied. You do not have permission to perform this action.";
     }
 
-    if (error.response.status === 404) {
-      return "The requested resource was not found.";
+    if (status === 401) {
+      return "Authentication required. Please sign in to continue.";
     }
 
-    if (error.response.status >= 500) {
-      return "An unexpected server error occurred. Please try again later.";
+    if (status === 404) {
+      return "The requested resource was not found.";
     }
   }
 
   if (error instanceof Error) {
-    return error.message;
+    if (!isTechnicalOrInternalError(error.message)) {
+      return error.message;
+    }
   }
 
   return "An unexpected error occurred. Please try again.";

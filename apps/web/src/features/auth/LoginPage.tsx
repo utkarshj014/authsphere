@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button, Input, Alert } from "../../components/ui/index.js";
 import { authApi, mfaApi, getApiErrorMessage } from "../../api/index.js";
@@ -14,6 +14,12 @@ import {
 } from "../../schemas/auth.schemas.js";
 import { SocialAuthButtons } from "../../components/auth/SocialAuthButtons.js";
 
+const isUnverifiedErrorMessage = (msg: string | null | undefined): boolean => {
+  if (!msg) return false;
+  const lower = msg.toLowerCase();
+  return lower.includes("verif") || lower.includes("unverified");
+};
+
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -24,11 +30,17 @@ export const LoginPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<"password" | "magic-link">(
     "password",
   );
-  const [globalError, setGlobalError] = useState<string | null>(urlError);
-  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
+  const isUrlUnverified = isUnverifiedErrorMessage(urlError);
+  const [globalError, setGlobalError] = useState<string | null>(
+    isUrlUnverified ? null : urlError,
+  );
+  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(() =>
+    isUrlUnverified ? searchParams.get("email") || "" : null,
+  );
   const [resendStatus, setResendStatus] = useState<"idle" | "sending" | "sent">(
     "idle",
   );
+  const [resendError, setResendError] = useState<string | null>(null);
   const [magicLinkSent, setMagicLinkSent] = useState(false);
 
   // MFA Challenge State
@@ -43,6 +55,7 @@ export const LoginPage: React.FC = () => {
   const {
     register: registerPassword,
     handleSubmit: handlePasswordSubmit,
+    control: controlPassword,
     formState: { errors: passwordErrors, isSubmitting: isLoggingIn },
   } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
@@ -52,15 +65,32 @@ export const LoginPage: React.FC = () => {
   const {
     register: registerMagic,
     handleSubmit: handleMagicSubmit,
+    control: controlMagic,
     formState: { errors: magicErrors, isSubmitting: isSendingMagic },
   } = useForm<MagicLinkFormData>({
     resolver: zodResolver(magicLinkSchema),
   });
 
+  const watchedPasswordEmail = useWatch({
+    control: controlPassword,
+    name: "email",
+  });
+  const watchedMagicEmail = useWatch({ control: controlMagic, name: "email" });
+
+  const effectiveEmail =
+    unverifiedEmail ||
+    (activeTab === "password" ? watchedPasswordEmail : watchedMagicEmail) ||
+    searchParams.get("email") ||
+    "";
+
+  const isUnverifiedState =
+    Boolean(unverifiedEmail) || isUnverifiedErrorMessage(globalError);
+
   const onPasswordSubmit = async (data: LoginFormData) => {
     setGlobalError(null);
     setUnverifiedEmail(null);
     setResendStatus("idle");
+    setResendError(null);
 
     try {
       const res = await authApi.login(data);
@@ -74,25 +104,34 @@ export const LoginPage: React.FC = () => {
       navigate(returnTo, { replace: true });
     } catch (err: unknown) {
       const errorMsg = getApiErrorMessage(err);
-      setGlobalError(errorMsg);
 
-      // Check if this is an unverified email 403 error
-      const isUnverified =
-        errorMsg.toLowerCase().includes("verify") ||
-        errorMsg.toLowerCase().includes("unverified");
-      if (isUnverified) {
+      if (isUnverifiedErrorMessage(errorMsg)) {
         setUnverifiedEmail(data.email);
+        setGlobalError(null);
+      } else {
+        setGlobalError(errorMsg);
       }
     }
   };
 
   const onMagicSubmit = async (data: MagicLinkFormData) => {
     setGlobalError(null);
+    setUnverifiedEmail(null);
+    setResendStatus("idle");
+    setResendError(null);
+
     try {
       await authApi.sendMagicLink(data.email);
       setMagicLinkSent(true);
     } catch (err: unknown) {
-      setGlobalError(getApiErrorMessage(err));
+      const errorMsg = getApiErrorMessage(err);
+
+      if (isUnverifiedErrorMessage(errorMsg)) {
+        setUnverifiedEmail(data.email);
+        setGlobalError(null);
+      } else {
+        setGlobalError(errorMsg);
+      }
     }
   };
 
@@ -115,13 +154,14 @@ export const LoginPage: React.FC = () => {
   };
 
   const handleResendVerification = async () => {
-    if (!unverifiedEmail) return;
+    if (!effectiveEmail.trim()) return;
     setResendStatus("sending");
+    setResendError(null);
     try {
-      await authApi.resendVerification(unverifiedEmail);
+      await authApi.resendVerification(effectiveEmail.trim());
       setResendStatus("sent");
     } catch (err: unknown) {
-      setGlobalError(getApiErrorMessage(err));
+      setResendError(getApiErrorMessage(err));
       setResendStatus("idle");
     }
   };
@@ -203,31 +243,50 @@ export const LoginPage: React.FC = () => {
         </Alert>
       )}
 
-      {globalError && (
+      {globalError && !isUnverifiedState && (
         <Alert variant="bad" onClose={() => setGlobalError(null)}>
           {globalError}
         </Alert>
       )}
 
-      {unverifiedEmail && (
+      {isUnverifiedState && (
         <Alert variant="warn" title="Email Verification Required">
           <p className="text-xs text-[var(--color-ink-2)] mb-2">
-            Your email address has not been verified yet. Check your inbox or
-            request a new link below.
+            {effectiveEmail ? (
+              <>
+                Your email address (<strong>{effectiveEmail}</strong>) has not
+                been verified yet. Please verify your email before signing in.
+              </>
+            ) : (
+              <>
+                Your email address has not been verified yet. Check your inbox
+                or request a new verification link below.
+              </>
+            )}
           </p>
           {resendStatus === "sent" ? (
             <p className="text-xs text-[var(--color-ok)] font-medium">
-              A new verification link has been sent to {unverifiedEmail}.
+              A new verification link has been sent to{" "}
+              {effectiveEmail || "your email"}. Please check your inbox or spam
+              folder.
             </p>
           ) : (
-            <Button
-              variant="secondary"
-              size="sm"
-              isLoading={resendStatus === "sending"}
-              onClick={handleResendVerification}
-            >
-              Resend Verification Link
-            </Button>
+            <div className="pt-1">
+              <Button
+                variant="secondary"
+                size="sm"
+                isLoading={resendStatus === "sending"}
+                disabled={!effectiveEmail.trim()}
+                onClick={handleResendVerification}
+              >
+                Resend Verification Link
+              </Button>
+            </div>
+          )}
+          {resendError && (
+            <p className="text-xs text-[var(--color-bad)] mt-2">
+              {resendError}
+            </p>
           )}
         </Alert>
       )}

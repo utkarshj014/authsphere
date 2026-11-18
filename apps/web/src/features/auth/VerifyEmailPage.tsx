@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Button, Alert, Skeleton } from "../../components/ui/index.js";
+import { Button, Alert, Skeleton, Input } from "../../components/ui/index.js";
 import { authApi, getApiErrorMessage } from "../../api/index.js";
 import { ROUTES } from "../../routes/routes.config.js";
 
@@ -9,11 +9,18 @@ type VerificationStatus = "verifying" | "success" | "error" | "missing_token";
 export const VerifyEmailPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const token = searchParams.get("token");
+  const emailParam = searchParams.get("email") || "";
 
   const [status, setStatus] = useState<VerificationStatus>(
     token ? "verifying" : "missing_token",
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Resend verification state
+  const [resendEmail, setResendEmail] = useState(emailParam);
+  const [isResending, setIsResending] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState(false);
+  const [resendError, setResendError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -41,64 +48,79 @@ export const VerifyEmailPage: React.FC = () => {
     };
   }, [token]);
 
-  return (
-    <div className="space-y-5 text-center">
-      <div className="w-12 h-12 rounded-[var(--radius-pill)] bg-[var(--color-cool-soft)] text-[var(--color-cool)] border border-[var(--color-cool)]/30 flex items-center justify-center mx-auto">
-        <svg
-          className="w-6 h-6"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <rect width="20" height="16" x="2" y="4" rx="2" />
-          <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
-        </svg>
-      </div>
+  const handleResend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resendEmail.trim()) return;
 
+    setIsResending(true);
+    setResendError(null);
+    try {
+      await authApi.resendVerification(resendEmail.trim());
+      setResendSuccess(true);
+    } catch (err: unknown) {
+      setResendError(getApiErrorMessage(err));
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  const getHeaderInfo = () => {
+    switch (status) {
+      case "verifying":
+        return {
+          title: "Verifying Email",
+          subtitle:
+            "Validating your verification token against the security registry…",
+        };
+      case "success":
+        return {
+          title: "Email Confirmed",
+          subtitle:
+            "Your identity credentials have been successfully activated",
+        };
+      case "error":
+        return {
+          title: "Verification Failed",
+          subtitle:
+            "The verification link is invalid, expired, or has already been used",
+        };
+      case "missing_token":
+      default:
+        return {
+          title: "Email Verification",
+          subtitle: "Request a fresh verification link to confirm your account",
+        };
+    }
+  };
+
+  const { title, subtitle } = getHeaderInfo();
+
+  return (
+    <div className="space-y-5 animate-in fade-in duration-200">
       <div>
         <h1 className="font-display font-medium text-lg text-[var(--color-ink)]">
-          Email Verification
+          {title}
         </h1>
-        <p className="text-xs text-[var(--color-muted)] mt-0.5">
-          Confirming identity credentials with AuthSphere
-        </p>
+        <p className="text-xs text-[var(--color-muted)] mt-0.5">{subtitle}</p>
       </div>
 
-      {status === "missing_token" && (
-        <div className="space-y-4">
-          <Alert variant="bad">
-            No verification token was found in the link. Please check your email
-            or request a new verification link.
-          </Alert>
-          <div className="pt-2">
-            <Link to={ROUTES.LOGIN} className="w-full block">
-              <Button variant="secondary" className="w-full">
-                Return to Sign In
-              </Button>
-            </Link>
-          </div>
-        </div>
-      )}
-
       {status === "verifying" && (
-        <div className="space-y-3 py-4">
-          <Skeleton className="h-6 w-3/4 mx-auto" />
-          <p className="text-xs text-[var(--color-muted)]">
-            Validating verification token against security registry…
+        <div className="space-y-3 py-6">
+          <Skeleton className="h-5 w-3/4" />
+          <Skeleton className="h-4 w-1/2" />
+          <p className="text-xs text-[var(--color-muted)] pt-2">
+            Confirming security credentials with AuthSphere…
           </p>
         </div>
       )}
 
       {status === "success" && (
-        <div className="space-y-4 animate-in fade-in duration-200">
-          <Alert variant="ok" title="Email Confirmed">
-            Your email address has been successfully verified! Your identity is
-            now fully activated.
+        <div className="space-y-4">
+          <Alert variant="ok" title="Identity Activated">
+            Your email address has been verified. You can now access all
+            protected features of the AuthSphere control plane.
           </Alert>
+
           <div className="pt-2">
             <Link to={ROUTES.LOGIN} className="w-full block">
               <Button variant="primary" className="w-full">
@@ -109,19 +131,67 @@ export const VerifyEmailPage: React.FC = () => {
         </div>
       )}
 
-      {status === "error" && (
-        <div className="space-y-4 animate-in fade-in duration-200">
-          <Alert variant="bad" title="Verification Failed">
-            {errorMessage ||
-              "The verification token is invalid, expired, or has already been used."}
-          </Alert>
-          <div className="pt-2">
-            <Link to={ROUTES.LOGIN} className="w-full block">
-              <Button variant="secondary" className="w-full">
-                Return to Sign In
+      {(status === "missing_token" || status === "error") && (
+        <div className="space-y-4">
+          {status === "error" ? (
+            <Alert variant="bad" title="Invalid or Expired Link">
+              {errorMessage ||
+                "This verification token is invalid or has expired. Request a new link below to proceed."}
+            </Alert>
+          ) : (
+            <Alert variant="info" title="Verification Link Required">
+              No verification token was found in the URL. If you need a fresh
+              confirmation link, enter your email address below.
+            </Alert>
+          )}
+
+          {resendSuccess ? (
+            <div className="space-y-4 pt-1">
+              <Alert variant="ok" title="Verification Link Dispatched">
+                If an account with <strong>{resendEmail}</strong> exists, a
+                fresh confirmation link has been sent to your inbox.
+              </Alert>
+              <Link to={ROUTES.LOGIN} className="w-full block">
+                <Button variant="secondary" className="w-full">
+                  Return to Sign In
+                </Button>
+              </Link>
+            </div>
+          ) : (
+            <form onSubmit={handleResend} className="space-y-4 pt-1">
+              {resendError && <Alert variant="bad">{resendError}</Alert>}
+
+              <Input
+                label="Email Address"
+                type="email"
+                required
+                autoFocus={!emailParam}
+                placeholder="name@example.com"
+                value={resendEmail}
+                onChange={(e) => setResendEmail(e.target.value)}
+                hint="We'll send a single-use verification link to this address"
+              />
+
+              <Button
+                type="submit"
+                variant="primary"
+                isLoading={isResending}
+                disabled={!resendEmail.trim()}
+                className="w-full"
+              >
+                Send Verification Link
               </Button>
-            </Link>
-          </div>
+
+              <div className="pt-1 text-center">
+                <Link
+                  to={ROUTES.LOGIN}
+                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)] transition-colors inline-block"
+                >
+                  Return to Sign In
+                </Link>
+              </div>
+            </form>
+          )}
         </div>
       )}
     </div>

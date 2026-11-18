@@ -473,6 +473,7 @@ const getCurrentUser = async (
     mfaEnabled: user.mfaEnabled,
     verifiedAt: user.verifiedAt,
     createdAt: user.createdAt,
+    oauthProviders: user.oauthAccounts?.map((a) => a.provider) ?? [],
   });
 };
 
