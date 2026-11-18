@@ -24,6 +24,7 @@ infra/lambda/lambda.mjs*
 
 # Agent & workspace artifacts
 .agents/
+.hallmark/
 
 # Logs
 logs/

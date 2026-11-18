@@ -1,23 +1,25 @@
 {
   "name": "@authsphere/web",
+  "version": "1.0.0",
   "private": true,
-  "version": "0.0.0",
   "type": "module",
+  "license": "ISC",
   "engines": {
     "node": "24.x || 25.x"
   },
   "scripts": {
     "dev": "vite",
+    "clean": "node -e \"import('fs').then(fs => fs.rmSync('dist', { recursive: true, force: true }))\"",
     "typecheck": "tsc -b --noEmit",
-    "build": "tsc -b && vite build",
+    "build": "npm run clean && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@authsphere/shared": "*",
     "@hookform/resolvers": "^5.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "axios": "^1.18.1",
-    "framer-motion": "^12.42.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-hook-form": "^7.81.0",

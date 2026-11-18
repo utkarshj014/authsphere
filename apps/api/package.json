@@ -19,7 +19,9 @@
     "start": "node --enable-source-maps dist/server.js",
     "start:email-worker": "node --enable-source-maps dist/workers/email.worker.js",
     "db:migrate:deploy": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -61,7 +63,6 @@
     "@types/express": "^5.0.6",
     "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.20.0",
-    "@types/pino": "^7.0.4",
     "@types/supertest": "^7.2.1",
     "@types/swagger-ui-express": "^4.1.8",
     "@vitest/coverage-v8": "^4.1.11",

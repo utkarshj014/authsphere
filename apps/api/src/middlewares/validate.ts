@@ -23,7 +23,12 @@ export const validate = (
         throw new ValidationError(formatZodError(input.error));
       }
 
-      req[target] = input.data;
+      Object.defineProperty(req, target, {
+        value: input.data,
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
 
       next();
     },

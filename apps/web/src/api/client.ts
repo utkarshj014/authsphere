@@ -1,21 +1,189 @@
-import axios from "axios";
+import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios";
+import type { ApiErrorResponse } from "../types/auth.types.js";
+import { ROUTES, PUBLIC_AUTH_ROUTES } from "../routes/routes.config.js";
+
+// Endpoints that bypass automatic 401 refresh rotation
+const AUTH_BYPASS_URLS: readonly string[] = [
+  "/auth/login",
+  "/auth/signup",
+  "/auth/refresh-token",
+  "/auth/magic-link",
+  "/auth/magic-link/verify",
+  "/auth/mfa/verify",
+  "/auth/forgot-password",
+  "/auth/reset-password",
+];
+
+type AuthFailureReason = "unauthenticated" | "unavailable";
+type AuthFailureHandler = (reason: AuthFailureReason) => void;
+let onAuthFailure: AuthFailureHandler | null = null;
 
 /**
- * Standard AuthSphere API Client
- *
- * Architecture Invariant (No Custom Domain):
- * - Default baseURL: "/api", routing directly through Vercel Edge Reverse Proxy rewrites.
- * - Same-Origin Security: The browser only communicates with https://<project>.vercel.app/api/*,
- *   guaranteeing first-party cookie handling (SameSite=Lax), zero third-party cookie blocking in
- *   Safari ITP / Chrome, and eliminating cross-origin CORS preflight latency.
- * - withCredentials: true ensures HttpOnly session and access tokens flow securely.
+ * Register a callback invoked when authentication cannot be recovered or service is unavailable.
+ * Breaks circular dependencies between the HTTP client and auth store.
  */
+export const registerAuthFailureHandler = (
+  handler: AuthFailureHandler,
+): void => {
+  onAuthFailure = handler;
+};
+
+interface RetryQueueItem {
+  resolve: (value?: unknown) => void;
+  reject: (reason?: unknown) => void;
+}
+
+let isRefreshing = false;
+let failedQueue: RetryQueueItem[] = [];
+
+const processQueue = (error: unknown): void => {
+  failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve();
+    }
+  });
+  failedQueue = [];
+};
+
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "/api",
+  baseURL: "/api",
   withCredentials: true,
+  timeout: 10000,
   headers: {
     "Content-Type": "application/json",
   },
 });
 
-export default apiClient;
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error: AxiosError<ApiErrorResponse>) => {
+    const originalRequest = error.config as InternalAxiosRequestConfig & {
+      _retry?: boolean;
+    };
+
+    if (!originalRequest) {
+      return Promise.reject(error);
+    }
+
+    const requestUrl = originalRequest.url || "";
+    const isAuthBypass = AUTH_BYPASS_URLS.some((url) =>
+      requestUrl.includes(url),
+    );
+
+    // Intercept 401 on protected requests that haven't been retried yet
+    if (
+      error.response?.status === 401 &&
+      !isAuthBypass &&
+      !originalRequest._retry
+    ) {
+      if (isRefreshing) {
+        // Carry retry flag on queued concurrent requests to prevent recursive refresh loops
+        originalRequest._retry = true;
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        })
+          .then(() => apiClient(originalRequest))
+          .catch((err) => Promise.reject(err));
+      }
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      try {
+        // Single in-flight refresh request directly via raw axios to avoid interceptor recursion
+        await axios.post("/api/auth/refresh-token", null, {
+          withCredentials: true,
+          timeout: 10000,
+        });
+
+        processQueue(null);
+        return apiClient(originalRequest);
+      } catch (refreshError) {
+        processQueue(refreshError);
+
+        const isDefinitive401 =
+          axios.isAxiosError(refreshError) &&
+          refreshError.response?.status === 401;
+
+        if (isDefinitive401) {
+          // Refresh token invalid, expired, or replayed -> Unauthenticated
+          if (onAuthFailure) {
+            onAuthFailure("unauthenticated");
+          }
+
+          // Redirect to login if on a protected route
+          if (typeof window !== "undefined") {
+            const currentPath = window.location.pathname;
+            const isPublicRoute = PUBLIC_AUTH_ROUTES.some((route) =>
+              currentPath.startsWith(route),
+            );
+
+            if (!isPublicRoute) {
+              const returnTo = encodeURIComponent(
+                currentPath + window.location.search,
+              );
+              window.location.href = `${ROUTES.LOGIN}?session_expired=true&returnTo=${returnTo}`;
+            }
+          }
+        } else {
+          // Network failure, DNS outage, or 5xx server error -> Service Unavailable (retain session)
+          if (onAuthFailure) {
+            onAuthFailure("unavailable");
+          }
+        }
+
+        return Promise.reject(refreshError);
+      } finally {
+        isRefreshing = false;
+      }
+    }
+
+    return Promise.reject(error);
+  },
+);
+
+/**
+ * Extracts a human-readable, safe error message from an API error response.
+ */
+export const getApiErrorMessage = (error: unknown): string => {
+  if (axios.isAxiosError<ApiErrorResponse>(error)) {
+    if (!error.response) {
+      return "Unable to reach the AuthSphere server. Please verify your internet connection or try again shortly.";
+    }
+
+    const data = error.response.data;
+
+    // Schema validation errors array
+    if (data?.errors && Array.isArray(data.errors) && data.errors.length > 0) {
+      return data.errors.map((e) => e.message).join(", ");
+    }
+
+    if (data?.message) {
+      return data.message;
+    }
+
+    if (error.response.status === 429) {
+      return "Too many requests. Please slow down and try again in a few moments.";
+    }
+
+    if (error.response.status === 403) {
+      return "Access denied. You do not have permission to perform this action.";
+    }
+
+    if (error.response.status === 404) {
+      return "The requested resource was not found.";
+    }
+
+    if (error.response.status >= 500) {
+      return "An unexpected server error occurred. Please try again later.";
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "An unexpected error occurred. Please try again.";
+};
