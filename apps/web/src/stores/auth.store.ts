@@ -22,7 +22,9 @@ interface AuthState {
   logoutAll: () => Promise<void>;
 }
 
-export const useAuthStore = create<AuthState>((set, get) => ({
+let bootstrapSequence = 0;
+
+export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   status: "idle",
   mfaToken: null,
@@ -59,15 +61,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   setStatus: (status: AuthStatus) => set({ status }),
 
   bootstrapAuth: async () => {
-    // Resource consciousness: avoid duplicate in-flight network probes
-    if (get().status === "loading") {
-      return;
-    }
-
+    const seq = ++bootstrapSequence;
     set({ status: "loading" });
     try {
       const response =
         await apiClient.get<ApiSuccessResponse<UserProfile>>("/auth/me");
+
+      // Discard stale responses if a newer bootstrap was initiated
+      if (seq !== bootstrapSequence) return;
+
       if (response.data?.data) {
         set({
           user: response.data.data,
@@ -80,6 +82,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         });
       }
     } catch (err: unknown) {
+      if (seq !== bootstrapSequence) return;
+
       const error = err as { response?: { status?: number } };
       if (error.response?.status === 401) {
         set({

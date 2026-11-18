@@ -30,6 +30,7 @@ export const OAUTH_URLS = {
  * Public route prefixes where session expiration redirects should not be triggered
  */
 export const PUBLIC_AUTH_ROUTES: readonly string[] = [
+  ROUTES.ROOT,
   ROUTES.LOGIN,
   ROUTES.REGISTER,
   ROUTES.FORGOT_PASSWORD,

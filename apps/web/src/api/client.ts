@@ -117,10 +117,13 @@ apiClient.interceptors.response.use(
           if (typeof window !== "undefined") {
             const currentPath = window.location.pathname;
             const isPublicRoute = PUBLIC_AUTH_ROUTES.some((route) =>
-              currentPath.startsWith(route),
+              route === "/"
+                ? currentPath === "/"
+                : currentPath.startsWith(route),
             );
 
-            if (!isPublicRoute) {
+            // Only redirect with session_expired if currently within a protected application route
+            if (!isPublicRoute && currentPath.startsWith(ROUTES.APP.ROOT)) {
               const returnTo = encodeURIComponent(
                 currentPath + window.location.search,
               );
