@@ -66,7 +66,7 @@ export type ResetPasswordFormData = z.infer<typeof resetPasswordSchema>;
 
 export const changePasswordSchema = z
   .object({
-    oldPassword: z.string().min(1, "Current password is required"),
+    oldPassword: z.string().optional(),
     newPassword: passwordComplexitySchema,
     confirmPassword: z.string().min(1, "Please confirm your new password"),
     code: z.string().optional(),

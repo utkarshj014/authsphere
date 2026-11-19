@@ -24,7 +24,7 @@ export interface ResetPasswordInput {
 }
 
 export interface ChangePasswordInput {
-  oldPassword: string;
+  oldPassword?: string;
   newPassword: string;
   code?: string;
 }
@@ -99,7 +99,8 @@ export const authApi = {
   },
 
   getMe: async () => {
-    const res = await apiClient.get<ApiSuccessResponse<UserProfile>>("/auth/me");
+    const res =
+      await apiClient.get<ApiSuccessResponse<UserProfile>>("/auth/me");
     return res.data;
   },
 
@@ -109,7 +110,8 @@ export const authApi = {
   },
 
   logoutAll: async () => {
-    const res = await apiClient.post<ApiSuccessResponse<null>>("/auth/logout-all");
+    const res =
+      await apiClient.post<ApiSuccessResponse<null>>("/auth/logout-all");
     return res.data;
   },
 };

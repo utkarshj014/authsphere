@@ -2,6 +2,8 @@ import { sessionsRepository } from "./sessions.repository.js";
 import { recordSecurityEvent } from "../auth/index.js";
 import { AppError, ForbiddenError } from "../../common/errors/index.js";
 import { SECURITY_EVENT_TYPES } from "@authsphere/shared";
+import { redis } from "../../lib/redis.js";
+import { env } from "../../config/env.js";
 import type { SessionItemResponse } from "./sessions.validation.js";
 
 const getActiveSessions = async (
@@ -32,6 +34,13 @@ const revokeSession = async (
   }
 
   await sessionsRepository.deleteSessionByIdAndUserId(sessionId, userId);
+
+  if (redis.status === "ready") {
+    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
+    await redis
+      .set(`auth:revoked-session:${sessionId}`, "1", "EX", ttlSeconds)
+      .catch(() => {});
+  }
 
   await recordSecurityEvent(
     userId,

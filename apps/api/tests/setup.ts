@@ -8,6 +8,11 @@ dotenv.config({
 });
 
 import { vi, beforeAll, afterAll, beforeEach, expect } from "vitest";
+import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
+import { z } from "zod";
+
+extendZodWithOpenApi(z);
+
 import { prisma } from "../src/lib/prisma.js";
 import { redis } from "../src/lib/redis.js";
 import {

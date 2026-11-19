@@ -44,6 +44,7 @@ import {
   enqueuePasswordResetEmail,
   enqueueMagicLinkEmail,
   enqueueSecurityNotificationEmail,
+  enqueueSocialAccountReminderEmail,
 } from "../email/email.queue.js";
 import { SECURITY_NOTIFICATION_EVENTS } from "../email/email.types.js";
 import {
@@ -272,8 +273,11 @@ const login = async (
   }
 
   if (!user.passwordHash) {
+    const providers =
+      user.oauthAccounts?.map((a) => a.provider).join(", ") || "";
+    const providerDetail = providers ? ` (${providers})` : "";
     throw new AppError(
-      "This account uses social login. Please login using your social account",
+      `This account uses social login${providerDetail}. Please continue with ${providers || "social login"}.`,
       403,
     );
   }
@@ -420,9 +424,15 @@ const logout = async (token?: string) => {
 
   if (redis.status === "ready") {
     const tokenHash = hashToken(token);
-    await redis
-      .del(`auth:refresh-leeway:${session.id}:${tokenHash}`)
-      .catch(() => {});
+    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
+    await Promise.all([
+      redis
+        .del(`auth:refresh-leeway:${session.id}:${tokenHash}`)
+        .catch(() => {}),
+      redis
+        .set(`auth:revoked-session:${session.id}`, "1", "EX", ttlSeconds)
+        .catch(() => {}),
+    ]);
   }
 
   await recordSecurityEvent(
@@ -445,6 +455,18 @@ const logoutAll = async (
   }
 
   await authRepository.deleteAllSessionsByUserId(user.id);
+
+  if (redis.status === "ready") {
+    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
+    await redis
+      .set(
+        `auth:user-revoked-at:${user.id}`,
+        Date.now().toString(),
+        "EX",
+        ttlSeconds,
+      )
+      .catch(() => {});
+  }
 
   await recordSecurityEvent(
     user.id,
@@ -474,12 +496,23 @@ const getCurrentUser = async (
     verifiedAt: user.verifiedAt,
     createdAt: user.createdAt,
     oauthProviders: user.oauthAccounts?.map((a) => a.provider) ?? [],
+    hasPassword: user.passwordHash !== null,
   });
 };
 
 const forgotPassword = async (input: ForgotPasswordInput) => {
   const user = await authRepository.findUserByEmail(input.email);
-  if (!user || !user.passwordHash) {
+  if (!user) {
+    return;
+  }
+
+  if (!user.passwordHash) {
+    const userWithOauth = await authRepository.findUserByEmailWithRole(
+      input.email,
+    );
+    const providers =
+      userWithOauth?.oauthAccounts?.map((a) => a.provider) ?? [];
+    await enqueueSocialAccountReminderEmail(user.email, providers);
     return;
   }
 
@@ -498,6 +531,8 @@ const forgotPassword = async (input: ForgotPasswordInput) => {
 
 const resetPassword = async (
   input: ResetPasswordInput,
+  ipAddress?: string,
+  userAgent?: string,
 ): Promise<{ mfaRequired: false } | { mfaRequired: true }> => {
   const tokenHash = hashToken(input.token);
 
@@ -526,7 +561,24 @@ const resetPassword = async (
 
   await authRepository.resetPasswordAndDeleteToken(user.id, newPasswordHash);
 
-  await recordSecurityEvent(user.id, SECURITY_EVENT_TYPES.PASSWORD_RESET);
+  if (redis.status === "ready") {
+    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
+    await redis
+      .set(
+        `auth:user-revoked-at:${user.id}`,
+        Date.now().toString(),
+        "EX",
+        ttlSeconds,
+      )
+      .catch(() => {});
+  }
+
+  await recordSecurityEvent(
+    user.id,
+    SECURITY_EVENT_TYPES.PASSWORD_RESET,
+    ipAddress,
+    userAgent,
+  );
 
   await enqueueSecurityNotificationEmail(
     user.email,
@@ -539,33 +591,34 @@ const resetPassword = async (
 const changePassword = async (
   userId: string,
   input: ChangePasswordInput,
+  ipAddress?: string,
+  userAgent?: string,
 ): Promise<{ mfaRequired: false } | { mfaRequired: true }> => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
     throw new AppError("User not found", 404);
   }
-  if (!user.passwordHash) {
-    throw new AppError(
-      "This account uses social login. You cannot change your password.",
-      403,
+
+  if (user.passwordHash) {
+    if (!input.oldPassword) {
+      throw new AppError("Current password is required", 400);
+    }
+    const passwordMatch = await verifyPassword(
+      user.passwordHash,
+      input.oldPassword,
     );
-  }
+    if (!passwordMatch) {
+      // Not using UnauthorizedError because the user is already authenticated, just password is wrong
+      throw new AppError("Invalid old password", 400);
+    }
 
-  const passwordMatch = await verifyPassword(
-    user.passwordHash,
-    input.oldPassword,
-  );
-  if (!passwordMatch) {
-    // Not using UnauthorizedError because the user is already authenticated, just password is wrong
-    throw new AppError("Invalid old password", 400);
-  }
-
-  const samePassword = await verifyPassword(
-    user.passwordHash,
-    input.newPassword,
-  );
-  if (samePassword) {
-    throw new AppError("New password cannot be same as old password", 400);
+    const samePassword = await verifyPassword(
+      user.passwordHash,
+      input.newPassword,
+    );
+    if (samePassword) {
+      throw new AppError("New password cannot be same as old password", 400);
+    }
   }
 
   if (user.mfaEnabled) {
@@ -585,7 +638,24 @@ const changePassword = async (
 
   await authRepository.changePassword(userId, newPasswordHash);
 
-  await recordSecurityEvent(userId, SECURITY_EVENT_TYPES.PASSWORD_CHANGED);
+  if (redis.status === "ready") {
+    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
+    await redis
+      .set(
+        `auth:user-revoked-at:${userId}`,
+        Date.now().toString(),
+        "EX",
+        ttlSeconds,
+      )
+      .catch(() => {});
+  }
+
+  await recordSecurityEvent(
+    userId,
+    SECURITY_EVENT_TYPES.PASSWORD_CHANGED,
+    ipAddress,
+    userAgent,
+  );
 
   await enqueueSecurityNotificationEmail(
     user.email,
@@ -620,6 +690,8 @@ const mfaSetup = async (userId: string): Promise<MfaSetupResponse> => {
 const mfaVerifySetup = async (
   userId: string,
   input: MfaVerifySetupInput,
+  ipAddress?: string,
+  userAgent?: string,
 ): Promise<MfaRecoveryCodesResponse> => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
@@ -649,7 +721,12 @@ const mfaVerifySetup = async (
     recoveryCodeHashes,
   );
 
-  await recordSecurityEvent(userId, SECURITY_EVENT_TYPES.MFA_ENABLED);
+  await recordSecurityEvent(
+    userId,
+    SECURITY_EVENT_TYPES.MFA_ENABLED,
+    ipAddress,
+    userAgent,
+  );
 
   return {
     recoveryCodes,
@@ -731,7 +808,12 @@ const mfaVerifyLogin = async (
   return { tokens };
 };
 
-const mfaDisable = async (userId: string, input: MfaDisableInput) => {
+const mfaDisable = async (
+  userId: string,
+  input: MfaDisableInput,
+  ipAddress?: string,
+  userAgent?: string,
+) => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
     throw new AppError("User not found", 404);
@@ -746,7 +828,24 @@ const mfaDisable = async (userId: string, input: MfaDisableInput) => {
 
   await authRepository.disableMfaAndRevokeSessions(userId);
 
-  await recordSecurityEvent(userId, SECURITY_EVENT_TYPES.MFA_DISABLED);
+  if (redis.status === "ready") {
+    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
+    await redis
+      .set(
+        `auth:user-revoked-at:${userId}`,
+        Date.now().toString(),
+        "EX",
+        ttlSeconds,
+      )
+      .catch(() => {});
+  }
+
+  await recordSecurityEvent(
+    userId,
+    SECURITY_EVENT_TYPES.MFA_DISABLED,
+    ipAddress,
+    userAgent,
+  );
 
   await enqueueSecurityNotificationEmail(
     user.email,

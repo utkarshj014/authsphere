@@ -59,33 +59,46 @@ export const oauthCallbackHandler = (provider: OAuthProviderName) =>
       );
     }
 
-    const code = req.query.code as string;
     const state = req.query.state as string;
-    const ipAddress = getClientIp(req);
-    const userAgent = req.header("user-agent");
+    if (state && typeof state === "string") {
+      clearOAuthVerifierCookie(res, state);
+    }
 
     if (!state || typeof state !== "string" || state.trim().length === 0) {
       throw new AppError("Invalid or missing OAuth state parameter", 400);
     }
 
-    // 1. Extract and clear the transaction-specific PKCE verifier cookie
     const cookieName = getOAuthVerifierCookieName(state);
     const codeVerifier = req.cookies?.[cookieName] as string | undefined;
-
-    clearOAuthVerifierCookie(res, state);
 
     if (!codeVerifier) {
       throw new AppError("Missing or expired OAuth transaction cookie", 400);
     }
 
-    const result = await handleOAuthCallback(
-      provider,
-      code,
-      state,
-      ipAddress,
-      userAgent,
-      codeVerifier,
-    );
+    const code = req.query.code as string;
+    const ipAddress = getClientIp(req);
+    const userAgent = req.header("user-agent");
+
+    let result;
+    try {
+      result = await handleOAuthCallback(
+        provider,
+        code,
+        state,
+        ipAddress,
+        userAgent,
+        codeVerifier,
+      );
+    } catch (err: unknown) {
+      if (err instanceof AppError && err.statusCode === 400) {
+        throw err;
+      }
+      const errorMessage =
+        err instanceof AppError ? err.message : "Authentication failed";
+      return res.redirect(
+        `${env.FRONTEND_URL}/login?error=${encodeURIComponent(errorMessage)}`,
+      );
+    }
 
     if (result.mfaRequired) {
       return res.redirect(

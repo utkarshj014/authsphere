@@ -240,8 +240,19 @@ export const handleOAuthCallback = async (
 
     if (existingUserByEmail) {
       // SECURITY BOUNDARY: Do NOT auto-link accounts by email alone!
+      if (existingUserByEmail.passwordHash) {
+        throw new AppError(
+          `An account with this email already exists. Please log in with your password and link ${provider} in settings.`,
+          409,
+        );
+      }
+
+      const linkedProviders =
+        existingUserByEmail.oauthAccounts?.map((a) => a.provider).join(", ") ||
+        "social login";
+
       throw new AppError(
-        "An account with this email already exists. Please log in with your password and link your account in settings.",
+        `This account is registered with ${linkedProviders}. Please sign in with ${linkedProviders} and link ${provider} in settings.`,
         409,
       );
     }

@@ -168,4 +168,40 @@ export const emailTemplates = {
     );
     return { subject, html };
   },
+
+  socialAccountReminder(
+    providers: string[],
+    frontendUrl: string = env.FRONTEND_URL,
+  ) {
+    const formattedProviders =
+      providers.length > 0 ? providers.join(", ") : "social login";
+    const loginUrl = `${frontendUrl}/login`;
+    const subject = "Password reset request on AuthSphere";
+    const html = baseTemplate(
+      subject,
+      `
+      <h2 style="margin: 0 0 16px 0; font-size: 20px; color: #0f172a;">Password Reset Request</h2>
+      <p style="margin: 0 0 16px 0; font-size: 15px; color: #475569;">
+        We received a request to reset the password for your AuthSphere account.
+      </p>
+      <div style="background-color: #f1f5f9; border-left: 4px solid #2563eb; padding: 16px 20px; border-radius: 4px; margin: 24px 0;">
+        <p style="margin: 0; font-size: 14px; color: #334155; line-height: 1.5;">
+          Your account was registered using <strong>${escapeHtml(formattedProviders)}</strong> and does not currently have a password.
+        </p>
+      </div>
+      <p style="margin: 0 0 24px 0; font-size: 15px; color: #475569;">
+        To access your account, please return to the login page and authenticate using <strong>${escapeHtml(formattedProviders)}</strong>.
+      </p>
+      <div style="text-align: center; margin: 32px 0;">
+        <a href="${loginUrl}" style="display: inline-block; padding: 12px 32px; background-color: #2563eb; color: #ffffff; text-decoration: none; font-weight: 600; font-size: 15px; border-radius: 6px;">
+          Proceed to Sign In
+        </a>
+      </div>
+      <p style="margin: 24px 0 0 0; font-size: 13px; color: #94a3b8;">
+        If you did not initiate this request, you can safely ignore this email. Your account remains secure.
+      </p>
+    `,
+    );
+    return { subject, html };
+  },
 };

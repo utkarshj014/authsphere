@@ -7,15 +7,28 @@ const CACHE_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 
 const getPermissionsByRole = async (
   roleName: RoleName,
+  cachedData?: string | null,
 ): Promise<PermissionName[]> => {
   const cacheKey = `role:permissions:${roleName}`;
 
-  if (redis.status === "ready") {
+  if (cachedData) {
     try {
-      const cachedData = await redis.get(cacheKey);
-      if (cachedData) {
+      logger.debug({ roleName, cacheKey }, "Role permissions cache hit");
+      return JSON.parse(cachedData) as PermissionName[];
+    } catch (err) {
+      logger.error(
+        { err, roleName, cacheKey },
+        "Error parsing cached permissions",
+      );
+    }
+  }
+
+  if (cachedData === undefined && redis.status === "ready") {
+    try {
+      const data = await redis.get(cacheKey);
+      if (data) {
         logger.debug({ roleName, cacheKey }, "Role permissions cache hit");
-        return JSON.parse(cachedData) as PermissionName[];
+        return JSON.parse(data) as PermissionName[];
       }
       logger.debug({ roleName, cacheKey }, "Role permissions cache miss");
     } catch (err) {
@@ -24,7 +37,7 @@ const getPermissionsByRole = async (
         "Error reading from Redis cache",
       );
     }
-  } else {
+  } else if (cachedData === undefined) {
     logger.debug(
       { roleName, cacheKey },
       "Redis client is not open; bypassing cache read",

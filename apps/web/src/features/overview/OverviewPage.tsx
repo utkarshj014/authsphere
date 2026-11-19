@@ -5,7 +5,11 @@ import { sessionsApi, activityApi } from "../../api/index.js";
 import type { SessionItem, SecurityEventItem } from "../../types/auth.types.js";
 import { Badge, Button, Skeleton } from "../../components/ui/index.js";
 import { ROUTES } from "../../routes/routes.config.js";
-import { formatEventType, formatDate } from "../../utils/formatters.js";
+import {
+  formatEventType,
+  formatDate,
+  formatClient,
+} from "../../utils/formatters.js";
 
 export const OverviewPage: React.FC = () => {
   const { user } = useAuthStore();
@@ -207,8 +211,11 @@ export const OverviewPage: React.FC = () => {
                   <span className="text-[var(--color-muted)] shrink-0">
                     Client
                   </span>
-                  <span className="text-right text-[var(--color-ink-2)] truncate max-w-[240px]">
-                    {currentSession.userAgent || "Unknown client"}
+                  <span
+                    className="text-right text-[var(--color-ink-2)] truncate max-w-[240px]"
+                    title={currentSession.userAgent || undefined}
+                  >
+                    {formatClient(currentSession.userAgent)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between p-2.5 bg-[var(--color-paper-3)] rounded-[var(--radius-pill)] border border-[var(--color-rule)]">

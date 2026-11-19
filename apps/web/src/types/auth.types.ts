@@ -30,6 +30,7 @@ export interface UserProfile {
   verifiedAt?: string | null;
   createdAt?: string;
   oauthProviders?: OAuthProviderName[];
+  hasPassword?: boolean;
 }
 
 /**

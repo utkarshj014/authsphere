@@ -28,6 +28,7 @@ export const EMAIL_JOB_TYPES = {
   PASSWORD_RESET: "email.password-reset",
   MAGIC_LINK: "email.magic-link",
   SECURITY_NOTIFICATION: "email.security-notification",
+  SOCIAL_ACCOUNT_REMINDER: "email.social-account-reminder",
 } as const;
 
 export interface VerificationEmailJobData {
@@ -46,6 +47,12 @@ export interface MagicLinkEmailJobData {
   type: typeof EMAIL_JOB_TYPES.MAGIC_LINK;
   email: string;
   token: string;
+}
+
+export interface SocialAccountReminderEmailJobData {
+  type: typeof EMAIL_JOB_TYPES.SOCIAL_ACCOUNT_REMINDER;
+  email: string;
+  providers: string[];
 }
 
 export const SECURITY_NOTIFICATION_EVENTS = {
@@ -67,4 +74,5 @@ export type EmailJobData =
   | VerificationEmailJobData
   | PasswordResetEmailJobData
   | MagicLinkEmailJobData
-  | SecurityNotificationEmailJobData;
+  | SecurityNotificationEmailJobData
+  | SocialAccountReminderEmailJobData;

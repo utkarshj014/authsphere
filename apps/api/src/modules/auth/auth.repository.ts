@@ -100,6 +100,11 @@ const findUserByEmailWithRole = (email: string) =>
           name: true,
         },
       },
+      oauthAccounts: {
+        select: {
+          provider: true,
+        },
+      },
     },
   });
 

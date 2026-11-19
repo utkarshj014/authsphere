@@ -146,6 +146,44 @@ describe("Validation Schemas & Utilities Unit Tests", () => {
         }).success,
       ).toBe(false);
     });
+
+    it("validates changePassword payload supporting both change and hybrid setup", () => {
+      expect(
+        authSchema.changePassword.safeParse({
+          oldPassword: "OldPassword123!",
+          newPassword: "NewPassword123!",
+        }).success,
+      ).toBe(true);
+
+      expect(
+        authSchema.changePassword.safeParse({
+          newPassword: "NewPassword123!",
+        }).success,
+      ).toBe(true);
+
+      expect(
+        authSchema.changePassword.safeParse({
+          newPassword: "short",
+        }).success,
+      ).toBe(false);
+    });
+
+    it("validates currentUserProfile response shape with hasPassword", () => {
+      expect(
+        authResponseSchema.currentUserProfile.safeParse({
+          id: "0193132e-4b68-7517-8e50-74d6f4618a8b",
+          email: "user@example.com",
+          firstName: "John",
+          lastName: "Doe",
+          role: "USER",
+          mfaEnabled: false,
+          verifiedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          oauthProviders: ["GOOGLE"],
+          hasPassword: false,
+        }).success,
+      ).toBe(true);
+    });
   });
 
   describe("Users & Roles Validation Schemas", () => {

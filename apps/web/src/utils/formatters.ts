@@ -2,13 +2,15 @@
  * Single source of truth for presentation formatters across AuthSphere.
  */
 
-export const formatClient = (ua: string): string => {
+export const formatClient = (ua?: string | null): string => {
   if (!ua) return "Unknown Client";
   if (ua.includes("Firefox")) return "Firefox";
   if (ua.includes("Edg/")) return "Microsoft Edge";
   if (ua.includes("Chrome") && !ua.includes("Edg/")) return "Google Chrome";
   if (ua.includes("Safari") && !ua.includes("Chrome")) return "Apple Safari";
-  return ua.slice(0, 32);
+  if (ua.includes("PostmanRuntime")) return "Postman";
+  if (ua.includes("curl/")) return "cURL";
+  return ua.length > 32 ? `${ua.slice(0, 32)}…` : ua;
 };
 
 export const formatEventType = (type: string): string => {

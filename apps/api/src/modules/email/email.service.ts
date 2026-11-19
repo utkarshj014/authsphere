@@ -29,6 +29,10 @@ const processJob = async (
       template = emailTemplates.securityNotification(data.eventType);
       break;
 
+    case EMAIL_JOB_TYPES.SOCIAL_ACCOUNT_REMINDER:
+      template = emailTemplates.socialAccountReminder(data.providers);
+      break;
+
     default: {
       const exhaustiveCheck: never = data;
       const { UnrecoverableError } = await import("bullmq");

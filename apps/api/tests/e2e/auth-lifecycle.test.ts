@@ -10,6 +10,7 @@ import {
 import { generateSync } from "otplib";
 import { googleOAuthProvider } from "../../src/modules/auth/oauth/google.provider.js";
 import { githubOAuthProvider } from "../../src/modules/auth/oauth/github.provider.js";
+import { getOAuthVerifierCookiePath } from "../../src/common/utils/cookie.js";
 
 describe("E2E Journey — Auth Lifecycles", () => {
   const app = getTestApp();
@@ -235,7 +236,7 @@ describe("E2E Journey — Auth Lifecycles", () => {
     );
     expect(verifierCookie).toBeDefined();
     expect(verifierCookie).toContain("HttpOnly");
-    expect(verifierCookie).toContain("Path=/api/auth/oauth");
+    expect(verifierCookie).toContain(`Path=${getOAuthVerifierCookiePath()}`);
 
     const [verifierNameVal] = verifierCookie!.split(";");
 

@@ -4,4 +4,5 @@ export interface TokenPayload {
   sub: string; // userId
   sid: string; // sessionId
   role: RoleName;
+  iat?: number;
 }

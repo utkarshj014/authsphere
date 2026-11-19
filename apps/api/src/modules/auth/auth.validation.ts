@@ -55,7 +55,7 @@ export const authRequestSchema = {
   }),
 
   changePassword: z.object({
-    oldPassword: passwordSchema,
+    oldPassword: passwordSchema.optional(),
     newPassword: passwordSchema,
     code: z.union([totpCodeSchema, backupCodeSchema]).optional(),
   }),
@@ -107,6 +107,7 @@ export const authResponseSchema = {
     verifiedAt: z.date().or(z.string()),
     createdAt: z.date().or(z.string()),
     oauthProviders: z.array(z.string()).default([]),
+    hasPassword: z.boolean().default(false),
   }),
 
   securityEventItem: securityEventItemSchema,

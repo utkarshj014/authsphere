@@ -75,3 +75,13 @@ export const enqueueSecurityNotificationEmail = (
     email,
     eventType,
   });
+
+export const enqueueSocialAccountReminderEmail = (
+  email: string,
+  providers: string[],
+): Promise<void> =>
+  enqueueEmailJob({
+    type: EMAIL_JOB_TYPES.SOCIAL_ACCOUNT_REMINDER,
+    email,
+    providers,
+  });

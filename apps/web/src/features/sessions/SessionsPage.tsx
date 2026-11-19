@@ -86,7 +86,7 @@ export const SessionsPage: React.FC = () => {
       // If user revoked their current session, sign them out
       if (sessionToRevoke.isCurrent) {
         clearAuthUser();
-        navigate(`${ROUTES.LOGIN}?session_revoked=true`);
+        navigate(ROUTES.LOGIN);
         return;
       }
 
@@ -105,7 +105,7 @@ export const SessionsPage: React.FC = () => {
     try {
       await authApi.logoutAll();
       clearAuthUser();
-      navigate(`${ROUTES.LOGIN}?signed_out_everywhere=true`);
+      navigate(ROUTES.LOGIN);
     } catch (err: unknown) {
       setGlobalError(getApiErrorMessage(err));
       setIsSigningOutEverywhere(false);
@@ -217,7 +217,10 @@ export const SessionsPage: React.FC = () => {
               >
                 <div className="space-y-1.5 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium text-sm text-[var(--color-ink)]">
+                    <span
+                      className="font-medium text-sm text-[var(--color-ink)]"
+                      title={item.userAgent || undefined}
+                    >
                       {formatClient(item.userAgent)}
                     </span>
                     {item.isCurrent ? (
@@ -236,10 +239,6 @@ export const SessionsPage: React.FC = () => {
                     <span>Created: {formatDate(item.createdAt)}</span>
                     <span>Expires: {formatDate(item.expiresAt)}</span>
                   </div>
-
-                  <p className="text-[11px] text-[var(--color-muted)] line-clamp-1 max-w-2xl">
-                    {item.userAgent}
-                  </p>
                 </div>
 
                 <div className="shrink-0 flex items-center">

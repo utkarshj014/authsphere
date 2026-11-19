@@ -93,6 +93,7 @@ export const SecurityPage: React.FC = () => {
     register: registerPassword,
     handleSubmit: handlePasswordSubmit,
     reset: resetPasswordForm,
+    setError: setPasswordError,
     formState: { errors: passwordErrors, isSubmitting: isChangingPassword },
   } = useForm<ChangePasswordFormData>({
     resolver: zodResolver(changePasswordSchema),
@@ -179,7 +180,7 @@ export const SecurityPage: React.FC = () => {
       await mfaApi.disable(disableCode.trim());
       setIsDisableModalOpen(false);
       clearAuthUser();
-      navigate(`${ROUTES.LOGIN}?mfa_disabled=true`);
+      navigate(ROUTES.LOGIN);
     } catch (err: unknown) {
       setDisableError(getApiErrorMessage(err));
     } finally {
@@ -191,9 +192,17 @@ export const SecurityPage: React.FC = () => {
   const onChangePassword = async (data: ChangePasswordFormData) => {
     setGlobalError(null);
     setGlobalSuccess(null);
+
+    if (user?.hasPassword !== false && !data.oldPassword) {
+      setPasswordError("oldPassword", {
+        message: "Current password is required",
+      });
+      return;
+    }
+
     try {
       const res = await authApi.changePassword({
-        oldPassword: data.oldPassword,
+        oldPassword: data.oldPassword || undefined,
         newPassword: data.newPassword,
         code: data.code?.trim() || undefined,
       });
@@ -206,7 +215,7 @@ export const SecurityPage: React.FC = () => {
       resetPasswordForm();
       setRequiresMfaForPassword(false);
       clearAuthUser();
-      navigate(`${ROUTES.LOGIN}?password_changed=true`);
+      navigate(ROUTES.LOGIN);
     } catch (err: unknown) {
       setGlobalError(getApiErrorMessage(err));
     }
@@ -324,15 +333,18 @@ export const SecurityPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Password Modification Card */}
+        {/* Password Modification / Setup Card */}
         <div className="bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded-[var(--radius-card)] p-5 sm:p-6 space-y-4">
           <div className="pb-3 border-b border-[var(--color-rule)]">
             <h2 className="font-display font-medium text-sm text-[var(--color-ink)]">
-              Password Modification
+              {user?.hasPassword === false
+                ? "Set Account Password"
+                : "Password Modification"}
             </h2>
             <p className="text-xs text-[var(--color-muted)]">
-              Update credentials. Changing password terminates all active
-              sessions across all devices.
+              {user?.hasPassword === false
+                ? "Set a password to enable password-based login alongside your connected social accounts."
+                : "Update credentials. Changing password terminates all active sessions across all devices."}
             </p>
           </div>
 
@@ -348,15 +360,17 @@ export const SecurityPage: React.FC = () => {
             className="space-y-4 max-w-lg"
             noValidate
           >
-            <Input
-              label="Current Password"
-              type="password"
-              autoComplete="current-password"
-              placeholder="••••••••••••"
-              passwordToggle
-              error={passwordErrors.oldPassword?.message}
-              {...registerPassword("oldPassword")}
-            />
+            {user?.hasPassword !== false && (
+              <Input
+                label="Current Password"
+                type="password"
+                autoComplete="current-password"
+                placeholder="••••••••••••"
+                passwordToggle
+                error={passwordErrors.oldPassword?.message}
+                {...registerPassword("oldPassword")}
+              />
+            )}
 
             <Input
               label="New Password"
@@ -397,7 +411,9 @@ export const SecurityPage: React.FC = () => {
               variant="secondary"
               isLoading={isChangingPassword}
             >
-              Update Password &amp; Revoke Other Sessions
+              {user?.hasPassword === false
+                ? "Set Password"
+                : "Update Password & Revoke Other Sessions"}
             </Button>
           </form>
         </div>

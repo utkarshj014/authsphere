@@ -12,7 +12,11 @@ import {
   Skeleton,
   Pagination,
 } from "../../components/ui/index.js";
-import { formatEventType, formatDateTime } from "../../utils/formatters.js";
+import {
+  formatEventType,
+  formatDateTime,
+  formatClient,
+} from "../../utils/formatters.js";
 
 export const ActivityPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -193,8 +197,11 @@ export const ActivityPage: React.FC = () => {
                     <td className="py-3 px-3 font-mono text-[var(--color-ink)]">
                       {evt.ipAddress || "—"}
                     </td>
-                    <td className="py-3 px-3 text-[var(--color-muted)] max-w-xs truncate">
-                      {evt.userAgent || "Unknown client"}
+                    <td
+                      className="py-3 px-3 text-[var(--color-ink-2)]"
+                      title={evt.userAgent || undefined}
+                    >
+                      {formatClient(evt.userAgent)}
                     </td>
                     <td className="py-3 px-3 text-right font-mono text-[var(--color-ink-2)] whitespace-nowrap">
                       {formatDateTime(evt.createdAt)}
