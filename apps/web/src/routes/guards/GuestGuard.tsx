@@ -31,9 +31,11 @@ export const GuestGuard: React.FC = () => {
 
   if (status === "authenticated") {
     const rawReturnTo = searchParams.get("returnTo");
-    const returnTo = isSafeLocalPath(rawReturnTo)
-      ? (rawReturnTo as string)
-      : ROUTES.APP.ROOT;
+    const returnTo =
+      isSafeLocalPath(rawReturnTo) &&
+      !rawReturnTo?.startsWith(ROUTES.APP.SECURITY)
+        ? (rawReturnTo as string)
+        : ROUTES.APP.ROOT;
 
     return <Navigate to={returnTo} replace />;
   }

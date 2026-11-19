@@ -23,7 +23,11 @@ const isUnverifiedErrorMessage = (msg: string | null | undefined): boolean => {
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const returnTo = searchParams.get("returnTo") || ROUTES.APP.ROOT;
+  const rawReturnTo = searchParams.get("returnTo");
+  const returnTo =
+    rawReturnTo && !rawReturnTo.startsWith(ROUTES.APP.SECURITY)
+      ? rawReturnTo
+      : ROUTES.APP.ROOT;
   const sessionExpired = searchParams.get("session_expired") === "true";
   const urlError = searchParams.get("error");
 

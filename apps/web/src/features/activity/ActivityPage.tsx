@@ -16,6 +16,7 @@ import {
   formatEventType,
   formatDateTime,
   formatClient,
+  getEventBadgeVariant,
 } from "../../utils/formatters.js";
 
 export const ActivityPage: React.FC = () => {
@@ -82,14 +83,6 @@ export const ActivityPage: React.FC = () => {
 
   const handlePageChange = (newPage: number) => {
     setSearchParams({ page: newPage.toString() });
-  };
-
-  const getEventBadgeVariant = (type: string) => {
-    const t = type.toUpperCase();
-    if (t.includes("LOGIN") || t.includes("VERIFY")) return "ok";
-    if (t.includes("LOGOUT") || t.includes("REVOKE")) return "bad";
-    if (t.includes("PASSWORD") || t.includes("MFA")) return "accent";
-    return "cool";
   };
 
   return (
