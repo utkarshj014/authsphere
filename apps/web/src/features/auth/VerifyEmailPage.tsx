@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Button, Alert, Skeleton, Input } from "../../components/ui/index.js";
 import { authApi, getApiErrorMessage } from "../../api/index.js";
@@ -22,30 +22,22 @@ export const VerifyEmailPage: React.FC = () => {
   const [resendSuccess, setResendSuccess] = useState(false);
   const [resendError, setResendError] = useState<string | null>(null);
 
+  const executedTokenRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!token) return;
+    if (executedTokenRef.current === token) return;
+    executedTokenRef.current = token;
 
-    let isMounted = true;
-
-    const performVerification = async () => {
-      try {
-        await authApi.verifyEmail(token);
-        if (isMounted) {
-          setStatus("success");
-        }
-      } catch (err: unknown) {
-        if (isMounted) {
-          setErrorMessage(getApiErrorMessage(err));
-          setStatus("error");
-        }
-      }
-    };
-
-    performVerification();
-
-    return () => {
-      isMounted = false;
-    };
+    authApi
+      .verifyEmail(token)
+      .then(() => {
+        setStatus("success");
+      })
+      .catch((err: unknown) => {
+        setErrorMessage(getApiErrorMessage(err));
+        setStatus("error");
+      });
   }, [token]);
 
   const handleResend = async (e: React.FormEvent) => {
@@ -148,12 +140,14 @@ export const VerifyEmailPage: React.FC = () => {
           {resendSuccess ? (
             <div className="space-y-4 pt-1">
               <Alert variant="ok" title="Verification Link Dispatched">
-                If an account with <strong>{resendEmail}</strong> exists, a
-                fresh confirmation link has been sent to your inbox.
+                If an account with <strong>{resendEmail}</strong> exists and
+                requires verification, a fresh confirmation link has been sent
+                to your inbox. If your account is already verified, you can
+                proceed directly to sign in.
               </Alert>
               <Link to={ROUTES.LOGIN} className="w-full block">
-                <Button variant="secondary" className="w-full">
-                  Return to Sign In
+                <Button variant="primary" className="w-full">
+                  Proceed to Sign In
                 </Button>
               </Link>
             </div>

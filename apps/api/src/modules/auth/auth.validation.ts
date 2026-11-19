@@ -4,6 +4,7 @@ import { ROLES, SECURITY_EVENT_TYPES } from "@authsphere/shared";
 
 const nameSchema = z.string().trim().min(1).max(50);
 const passwordSchema = z.string().min(8).max(128);
+const emailSchema = z.email().trim().toLowerCase();
 const totpCodeSchema = z
   .string()
   .trim()
@@ -24,7 +25,7 @@ const securityEventItemSchema = z.object({
 
 export const authRequestSchema = {
   signup: z.object({
-    email: z.email(),
+    email: emailSchema,
     password: passwordSchema,
     firstName: nameSchema.optional(),
     lastName: nameSchema.optional(),
@@ -35,16 +36,16 @@ export const authRequestSchema = {
   }),
 
   resendVerificationToken: z.object({
-    email: z.email(),
+    email: emailSchema,
   }),
 
   login: z.object({
-    email: z.email(),
+    email: emailSchema,
     password: passwordSchema,
   }),
 
   forgotPassword: z.object({
-    email: z.email(),
+    email: emailSchema,
   }),
 
   resetPassword: z.object({
@@ -77,7 +78,7 @@ export const authRequestSchema = {
   }),
 
   sendMagicLink: z.object({
-    email: z.email(),
+    email: emailSchema,
   }),
 
   verifyMagicLink: z.object({

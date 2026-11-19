@@ -10,6 +10,10 @@ import { logger } from "../lib/logger.js";
 
 const connection = createBullMQConnection();
 
+connection.on("error", (err) => {
+  logger.error({ err }, "BullMQ Redis connection error");
+});
+
 export const emailWorker = new Worker<EmailJobData>(
   EMAIL_QUEUE_NAME,
   async (job: Job<EmailJobData>) => {
@@ -20,14 +24,14 @@ export const emailWorker = new Worker<EmailJobData>(
       await emailService.processJob(data, provider);
       logger.info(
         { jobId: id, jobType: data.type, email: data.email },
-        "Email submission accepted by provider",
+        "Email delivered",
       );
     } catch (err: unknown) {
       if (err instanceof UnrecoverableError) throw err;
 
       if (err instanceof EmailDeliveryError && err.isPermanent) {
         logger.error(
-          { jobId: id, err },
+          { jobId: id, email: data.email, err: err.message },
           "Permanent email failure; aborting retries",
         );
         throw new UnrecoverableError(err.message);
@@ -38,12 +42,24 @@ export const emailWorker = new Worker<EmailJobData>(
 
       if (currentAttempt < maxAttempts) {
         logger.warn(
-          { jobId: id, attempt: currentAttempt, maxAttempts, err },
+          {
+            jobId: id,
+            email: data.email,
+            attempt: currentAttempt,
+            maxAttempts,
+            err,
+          },
           "Transient email failure; BullMQ will retry with backoff",
         );
       } else {
         logger.error(
-          { jobId: id, attemptsMade: currentAttempt, maxAttempts, err },
+          {
+            jobId: id,
+            email: data.email,
+            attemptsMade: currentAttempt,
+            maxAttempts,
+            err,
+          },
           "Email delivery exhausted all attempts; retained in failed-job storage",
         );
       }
@@ -53,12 +69,12 @@ export const emailWorker = new Worker<EmailJobData>(
   {
     connection,
     concurrency: 5,
-    // Idle poll timeout: waits 30s when queue is empty, safely below cloud TCP drop timeouts
-    drainDelay: 30,
-    // Stalled job check: rescues crashed in-flight jobs every 5m at minimal Redis command cost
-    stalledInterval: 300000,
   },
 );
+
+emailWorker.on("ready", () => {
+  logger.info({ queue: EMAIL_QUEUE_NAME }, "Email worker ready");
+});
 
 emailWorker.on("error", (err) => {
   logger.error({ err }, "BullMQ email worker internal error");
@@ -106,8 +122,3 @@ process.on("unhandledRejection", (reason) => {
   logger.error({ err: reason }, "Worker unhandled rejection");
   handleShutdown("unhandledRejection");
 });
-
-logger.info(
-  { queue: EMAIL_QUEUE_NAME },
-  "Email worker process initialized and listening for jobs",
-);

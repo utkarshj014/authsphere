@@ -5,6 +5,8 @@ import { EmailDeliveryError, type EmailProvider } from "./email.types.js";
 
 let transporter: Transporter | null = null;
 
+const TIMEOUT_MS = 5000; // Fast fail: Google SMTP & token exchange complete in <1s; bounds delays before BullMQ retries
+
 export const gmailOAuthProvider: EmailProvider = {
   name: "gmail",
 
@@ -21,20 +23,19 @@ export const gmailOAuthProvider: EmailProvider = {
       );
     }
 
-    // Lazy singleton: reuses the transporter instance and its in-memory OAuth2 token cache across invocations.
-    // SMTP connection pooling is disabled (one-shot per message) to prevent stale sockets across microVM pauses.
-    // Explicit timeouts bound connection setup and socket inactivity.
+    // Lazy singleton: reuses the transporter instance and in-memory OAuth2 token cache across invocations.
     transporter ??= nodemailer.createTransport({
       service: "gmail",
-      connectionTimeout: 5000,
-      greetingTimeout: 5000,
-      socketTimeout: 5000,
+      connectionTimeout: TIMEOUT_MS,
+      greetingTimeout: TIMEOUT_MS,
+      socketTimeout: TIMEOUT_MS,
       auth: {
         type: "OAuth2",
         user: env.GMAIL_USER,
         clientId: env.GOOGLE_CLIENT_ID,
         clientSecret: env.GOOGLE_CLIENT_SECRET,
         refreshToken: env.GMAIL_REFRESH_TOKEN,
+        requestTimeout: TIMEOUT_MS,
       },
     });
 
@@ -48,7 +49,17 @@ export const gmailOAuthProvider: EmailProvider = {
 
       return { id: info.messageId || "gmail-sent" };
     } catch (err: unknown) {
-      const errorObj = err as { message?: string; responseCode?: number };
+      transporter = null;
+
+      if (err instanceof EmailDeliveryError) {
+        throw err;
+      }
+
+      const errorObj = err as {
+        message?: string;
+        responseCode?: number;
+        code?: string;
+      };
       const message = errorObj?.message || "Unknown Gmail delivery error";
       const responseCode = errorObj?.responseCode || 0;
 
@@ -57,7 +68,7 @@ export const gmailOAuthProvider: EmailProvider = {
         /invalid|rejected|unauthorized|invalid_grant|recipient/i.test(message);
 
       throw new EmailDeliveryError(
-        `Gmail OAuth2 [${responseCode || "error"}]: ${message}`,
+        `Gmail OAuth2 [${responseCode || errorObj?.code || "error"}]: ${message}`,
         isPermanent,
       );
     }

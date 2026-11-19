@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Input, Alert, Skeleton } from "../../components/ui/index.js";
 import { authApi, mfaApi, getApiErrorMessage } from "../../api/index.js";
@@ -23,17 +23,16 @@ export const MagicLinkVerifyPage: React.FC = () => {
 
   const bootstrapAuth = useAuthStore((s) => s.bootstrapAuth);
 
+  const executedTokenRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!token) return;
+    if (executedTokenRef.current === token) return;
+    executedTokenRef.current = token;
 
-    let isMounted = true;
-
-    const verifyToken = async () => {
-      try {
-        const res = await authApi.verifyMagicLink(token);
-
-        if (!isMounted) return;
-
+    authApi
+      .verifyMagicLink(token)
+      .then(async (res) => {
         if (res.data?.mfaRequired && res.data.mfaToken) {
           setMfaToken(res.data.mfaToken);
           setIsLoading(false);
@@ -42,19 +41,11 @@ export const MagicLinkVerifyPage: React.FC = () => {
 
         await bootstrapAuth();
         navigate(ROUTES.APP.ROOT, { replace: true });
-      } catch (err: unknown) {
-        if (isMounted) {
-          setErrorMessage(getApiErrorMessage(err));
-          setIsLoading(false);
-        }
-      }
-    };
-
-    verifyToken();
-
-    return () => {
-      isMounted = false;
-    };
+      })
+      .catch((err: unknown) => {
+        setErrorMessage(getApiErrorMessage(err));
+        setIsLoading(false);
+      });
   }, [token, bootstrapAuth, navigate]);
 
   const handleMfaSubmit = async (e: React.FormEvent) => {
