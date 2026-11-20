@@ -84,6 +84,24 @@ const setLeewayCache = async (
   }
 };
 
+const setUserRevokedAt = async (userId: string): Promise<void> => {
+  if (redis.status !== "ready") return;
+  const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
+  try {
+    await redis.set(
+      `auth:user-revoked-at:${userId}`,
+      Date.now().toString(),
+      "EX",
+      ttlSeconds,
+    );
+  } catch (err) {
+    logger.warn(
+      { err, userId },
+      "Failed recording user revocation timestamp in Redis",
+    );
+  }
+};
+
 export const recordSecurityEvent = async (
   userId: string,
   type: SecurityEventTypeName,
@@ -425,14 +443,18 @@ const logout = async (token?: string) => {
   if (redis.status === "ready") {
     const tokenHash = hashToken(token);
     const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
-    await Promise.all([
-      redis
+    try {
+      await redis
+        .pipeline()
         .del(`auth:refresh-leeway:${session.id}:${tokenHash}`)
-        .catch(() => {}),
-      redis
         .set(`auth:revoked-session:${session.id}`, "1", "EX", ttlSeconds)
-        .catch(() => {}),
-    ]);
+        .exec();
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: session.id },
+        "Failed revoking session in Redis pipeline",
+      );
+    }
   }
 
   await recordSecurityEvent(
@@ -456,17 +478,7 @@ const logoutAll = async (
 
   await authRepository.deleteAllSessionsByUserId(user.id);
 
-  if (redis.status === "ready") {
-    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
-    await redis
-      .set(
-        `auth:user-revoked-at:${user.id}`,
-        Date.now().toString(),
-        "EX",
-        ttlSeconds,
-      )
-      .catch(() => {});
-  }
+  await setUserRevokedAt(user.id);
 
   await recordSecurityEvent(
     user.id,
@@ -561,17 +573,7 @@ const resetPassword = async (
 
   await authRepository.resetPasswordAndDeleteToken(user.id, newPasswordHash);
 
-  if (redis.status === "ready") {
-    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
-    await redis
-      .set(
-        `auth:user-revoked-at:${user.id}`,
-        Date.now().toString(),
-        "EX",
-        ttlSeconds,
-      )
-      .catch(() => {});
-  }
+  await setUserRevokedAt(user.id);
 
   await recordSecurityEvent(
     user.id,
@@ -638,17 +640,7 @@ const changePassword = async (
 
   await authRepository.changePassword(userId, newPasswordHash);
 
-  if (redis.status === "ready") {
-    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
-    await redis
-      .set(
-        `auth:user-revoked-at:${userId}`,
-        Date.now().toString(),
-        "EX",
-        ttlSeconds,
-      )
-      .catch(() => {});
-  }
+  await setUserRevokedAt(userId);
 
   await recordSecurityEvent(
     userId,
@@ -828,17 +820,7 @@ const mfaDisable = async (
 
   await authRepository.disableMfaAndRevokeSessions(userId);
 
-  if (redis.status === "ready") {
-    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
-    await redis
-      .set(
-        `auth:user-revoked-at:${userId}`,
-        Date.now().toString(),
-        "EX",
-        ttlSeconds,
-      )
-      .catch(() => {});
-  }
+  await setUserRevokedAt(userId);
 
   await recordSecurityEvent(
     userId,
