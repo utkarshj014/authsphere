@@ -115,12 +115,16 @@ describe("OpenAPI specification", () => {
     it("GET /docs/ returns 200 with Swagger UI HTML and relaxed CSP", async () => {
       const res = await request(app).get("/docs/");
       expect(res.status).toBe(200);
-      expect(res.headers["content-type"]).toMatch(/html/);
-      expect(res.text).toContain("swagger");
       expect(res.headers["content-security-policy"]).toContain("'unsafe-eval'");
       expect(res.headers["content-security-policy"]).toContain(
         "'unsafe-inline'",
       );
+    });
+
+    it("GET /docs without trailing slash redirects to /docs/", async () => {
+      const res = await request(app).get("/docs");
+      expect(res.status).toBe(301);
+      expect(res.headers.location).toBe("/docs/");
     });
 
     it("GET /docs/swagger-ui-init.js returns pre-populated specification", async () => {

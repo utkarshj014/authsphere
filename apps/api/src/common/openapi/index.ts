@@ -97,6 +97,18 @@ const swaggerCsp = helmet.contentSecurityPolicy({
   },
 });
 
+// Ensure /docs without trailing slash redirects to /docs/ so relative assets resolve properly
+router.get("/docs", (req, res, next) => {
+  if (!req.path.endsWith("/")) {
+    const [pathname, search] = req.originalUrl.split("?");
+    return res.redirect(
+      301,
+      search ? `${pathname}/?${search}` : `${pathname}/`,
+    );
+  }
+  next();
+});
+
 // Serve Swagger UI
 router.use(
   "/docs",

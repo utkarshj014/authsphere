@@ -2,7 +2,7 @@ import React, { useState, Suspense } from "react";
 import { Outlet, NavLink, Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../../stores/auth.store.js";
 import { ROLES } from "../../types/auth.types.js";
-import { ROUTES } from "../../routes/routes.config.js";
+import { ROUTES, DOCS_URLS } from "../../routes/routes.config.js";
 
 interface NavItem {
   label: string;
@@ -263,6 +263,66 @@ export const AppShell: React.FC = () => {
                 <span>{item.label}</span>
               </NavLink>
             ))}
+
+            {/* Developer & API Resources */}
+            <div className="pt-4 pb-1 px-3 text-xs font-medium text-muted">
+              Developer
+            </div>
+            <a
+              href={DOCS_URLS.SWAGGER}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => setMobileMenuOpen(false)}
+              className="flex items-center justify-between px-3 py-2 rounded-pill text-sm text-muted hover:text-ink hover:bg-paper-3 transition-colors group"
+            >
+              <div className="flex items-center gap-3">
+                <svg
+                  className="w-4 h-4 shrink-0"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z" />
+                  <path d="M6 6h10" />
+                  <path d="M6 10h10" />
+                </svg>
+                <span>API Reference</span>
+              </div>
+              <span className="text-xs font-mono text-muted/60 group-hover:text-accent">
+                ↗
+              </span>
+            </a>
+            <a
+              href={DOCS_URLS.OPENAPI}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => setMobileMenuOpen(false)}
+              className="flex items-center justify-between px-3 py-2 rounded-pill text-sm text-muted hover:text-ink hover:bg-paper-3 transition-colors group"
+            >
+              <div className="flex items-center gap-3">
+                <svg
+                  className="w-4 h-4 shrink-0"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <polyline points="16 18 22 12 16 6" />
+                  <polyline points="8 6 2 12 8 18" />
+                </svg>
+                <span>OpenAPI 3.1 Spec</span>
+              </div>
+              <span className="text-xs font-mono text-muted/60 group-hover:text-accent">
+                ↗
+              </span>
+            </a>
           </nav>
         </div>
 

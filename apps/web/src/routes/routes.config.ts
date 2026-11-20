@@ -26,6 +26,11 @@ export const OAUTH_URLS = {
   GITHUB: "/api/auth/oauth/github",
 } as const;
 
+export const DOCS_URLS = {
+  SWAGGER: "/api/docs/",
+  OPENAPI: "/api/openapi.json",
+} as const;
+
 /**
  * Public route prefixes where session expiration redirects should not be triggered
  */

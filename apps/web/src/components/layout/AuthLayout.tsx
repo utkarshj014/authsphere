@@ -1,6 +1,6 @@
 import React, { Suspense } from "react";
 import { Outlet, Link } from "react-router-dom";
-import { ROUTES } from "../../routes/routes.config.js";
+import { ROUTES, DOCS_URLS } from "../../routes/routes.config.js";
 
 export const AuthLayout: React.FC = () => {
   return (
@@ -57,8 +57,27 @@ export const AuthLayout: React.FC = () => {
       </main>
 
       {/* Footer Notices */}
-      <footer className="w-full max-w-md mx-auto py-4 text-center">
-        <p className="text-xs text-muted">
+      <footer className="w-full max-w-md mx-auto py-4 text-center space-y-2">
+        <div className="flex items-center justify-center gap-3 text-xs font-mono text-muted">
+          <a
+            href={DOCS_URLS.SWAGGER}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-accent transition-colors"
+          >
+            API Reference ↗
+          </a>
+          <span className="text-rule-2">·</span>
+          <a
+            href={DOCS_URLS.OPENAPI}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-accent transition-colors"
+          >
+            OpenAPI Spec ↗
+          </a>
+        </div>
+        <p className="text-2xs text-muted/80">
           Secured by HttpOnly session tokens &amp; Argon2id hashing.
         </p>
       </footer>
