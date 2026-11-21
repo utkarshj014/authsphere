@@ -58,29 +58,52 @@ import { redis } from "../../lib/redis.js";
 import { logger } from "../../lib/logger.js";
 
 // ==========================================
-// Private Helpers
+// Helpers
 // ==========================================
 
-const getLeewayCache = async (key: string): Promise<string | null> => {
+const getRefreshLeewayCache = async (
+  sessionId: string,
+  tokenHash: string,
+): Promise<AuthTokens | null> => {
   if (redis.status !== "ready") return null;
+  const key = `auth:refresh-leeway:${sessionId}:${tokenHash}`;
   try {
-    return await redis.get(key);
+    const raw = await redis.get(key);
+    return raw ? (JSON.parse(raw) as AuthTokens) : null;
   } catch (err) {
-    logger.warn({ err, key }, "Failed reading leeway cache from Redis");
+    logger.warn({ err, key }, "Failed reading refresh leeway cache from Redis");
     return null;
   }
 };
 
-const setLeewayCache = async (
-  key: string,
-  value: string,
-  ttlSeconds: number,
+const setRefreshLeewayCache = async (
+  sessionId: string,
+  tokenHash: string,
+  tokens: AuthTokens,
 ): Promise<void> => {
+  const ttlSeconds = env.AUTH_REFRESH_TOKEN_LEEWAY_SECONDS;
   if (redis.status !== "ready" || ttlSeconds <= 0) return;
+  const key = `auth:refresh-leeway:${sessionId}:${tokenHash}`;
   try {
-    await redis.set(key, value, "EX", ttlSeconds);
+    await redis.set(key, JSON.stringify(tokens), "EX", ttlSeconds);
   } catch (err) {
-    logger.warn({ err, key }, "Failed writing leeway cache to Redis");
+    logger.warn({ err, key }, "Failed writing refresh leeway cache to Redis");
+  }
+};
+
+const clearRefreshLeewayCache = async (
+  sessionId: string,
+  tokenHash: string,
+): Promise<void> => {
+  if (redis.status !== "ready") return;
+  const key = `auth:refresh-leeway:${sessionId}:${tokenHash}`;
+  try {
+    await redis.del(key);
+  } catch (err) {
+    logger.warn(
+      { err, key },
+      "Failed clearing refresh leeway cache from Redis",
+    );
   }
 };
 
@@ -357,20 +380,17 @@ const refreshToken = async (
 
   const payload = await verifyRefreshToken(token);
   const oldTokenHash = hashToken(token);
-  const leewayKey = `auth:refresh-leeway:${payload.sid}:${oldTokenHash}`;
 
   // 1. Leeway Window: Return cached tokens if recently rotated within grace period (SPA concurrency)
-  const cached = await getLeewayCache(leewayKey);
+  const cached = await getRefreshLeewayCache(payload.sid, oldTokenHash);
   if (cached) {
     // Validate active session in DB to prevent cached token return after explicit revocation (logout / remote termination)
     const activeSession = await authRepository.findSessionById(payload.sid);
     if (!activeSession || activeSession.userId !== payload.sub) {
-      if (redis.status === "ready") {
-        await redis.del(leewayKey).catch(() => {});
-      }
+      await clearRefreshLeewayCache(payload.sid, oldTokenHash);
       throw new UnauthorizedError("Invalid session");
     }
-    return JSON.parse(cached) as AuthTokens;
+    return cached;
   }
 
   // 2. Validate active session and ownership
@@ -396,22 +416,18 @@ const refreshToken = async (
   });
 
   if (rotated) {
-    await setLeewayCache(
-      leewayKey,
-      JSON.stringify(tokens),
-      env.AUTH_REFRESH_TOKEN_LEEWAY_SECONDS,
-    );
+    await setRefreshLeewayCache(session.id, oldTokenHash, tokens);
     return tokens;
   }
 
   // 4. CAS failed: check if a concurrent request won the race and populated leeway cache
-  let concurrentTokens = await getLeewayCache(leewayKey);
+  let concurrentTokens = await getRefreshLeewayCache(payload.sid, oldTokenHash);
   if (!concurrentTokens) {
     await new Promise((resolve) => setTimeout(resolve, 150));
-    concurrentTokens = await getLeewayCache(leewayKey);
+    concurrentTokens = await getRefreshLeewayCache(payload.sid, oldTokenHash);
   }
   if (concurrentTokens) {
-    return JSON.parse(concurrentTokens) as AuthTokens;
+    return concurrentTokens;
   }
 
   // 5. Replay detected outside leeway: revoke session
