@@ -47,11 +47,14 @@ export const LoginPage: React.FC = () => {
   const [resendError, setResendError] = useState<string | null>(null);
   const [magicLinkSent, setMagicLinkSent] = useState(false);
 
-  // MFA Challenge State
-  const [mfaToken, setMfaToken] = useState<string | null>(null);
+  // MFA Challenge State (from password submit or social OAuth redirect)
+  const [mfaToken, setMfaToken] = useState<string | null>(
+    () => searchParams.get("mfaToken") || null,
+  );
   const [mfaCode, setMfaCode] = useState("");
   const [mfaError, setMfaError] = useState<string | null>(null);
   const [isVerifyingMfa, setIsVerifyingMfa] = useState(false);
+  const mfaProvider = searchParams.get("provider");
 
   const bootstrapAuth = useAuthStore((s) => s.bootstrapAuth);
 
@@ -179,8 +182,9 @@ export const LoginPage: React.FC = () => {
             Two-Factor Authentication
           </h1>
           <p className="text-xs text-[var(--color-muted)] mt-0.5">
-            Enter the 6-digit code from your authenticator app or an emergency
-            recovery code.
+            {mfaProvider
+              ? `Complete your ${mfaProvider.charAt(0).toUpperCase() + mfaProvider.slice(1)} sign-in by entering the 6-digit code from your authenticator app or an emergency recovery code.`
+              : "Enter the 6-digit code from your authenticator app or an emergency recovery code."}
           </p>
         </div>
 
@@ -220,6 +224,7 @@ export const LoginPage: React.FC = () => {
               setMfaToken(null);
               setMfaCode("");
               setMfaError(null);
+              navigate(ROUTES.LOGIN, { replace: true });
             }}
             className="w-full text-xs"
           >
