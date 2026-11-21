@@ -33,15 +33,42 @@ const EVENT_BADGE_VARIANTS: Record<SecurityEventTypeName, BadgeVariant> = {
   [SECURITY_EVENT_TYPES.MFA_ENABLED]: "accent",
 };
 
+interface ClientMatcher {
+  readonly pattern: RegExp;
+  readonly name: string;
+}
+
+// Ordered browser/client definitions (specific signatures precede generic Chromium/Safari tokens)
+const BROWSER_MATCHERS: readonly ClientMatcher[] = [
+  { pattern: /PostmanRuntime/i, name: "Postman" },
+  { pattern: /curl\//i, name: "cURL" },
+  { pattern: /Edg\//i, name: "Microsoft Edge" },
+  { pattern: /OPR\/|Opera/i, name: "Opera" },
+  { pattern: /SamsungBrowser/i, name: "Samsung Internet" },
+  { pattern: /Firefox/i, name: "Firefox" },
+  { pattern: /Chrome/i, name: "Google Chrome" },
+  { pattern: /Safari/i, name: "Apple Safari" },
+];
+
+// Operating system / platform definitions
+const OS_MATCHERS: readonly ClientMatcher[] = [
+  { pattern: /iPhone|iPad|iPod/i, name: "iOS" },
+  { pattern: /Android/i, name: "Android" },
+  { pattern: /Macintosh|Mac OS X/i, name: "macOS" },
+  { pattern: /Windows/i, name: "Windows" },
+  { pattern: /Linux/i, name: "Linux" },
+];
+
 export const formatClient = (ua?: string | null): string => {
   if (!ua) return "Unknown Client";
-  if (ua.includes("Firefox")) return "Firefox";
-  if (ua.includes("Edg/")) return "Microsoft Edge";
-  if (ua.includes("Chrome") && !ua.includes("Edg/")) return "Google Chrome";
-  if (ua.includes("Safari") && !ua.includes("Chrome")) return "Apple Safari";
-  if (ua.includes("PostmanRuntime")) return "Postman";
-  if (ua.includes("curl/")) return "cURL";
-  return ua.length > 32 ? `${ua.slice(0, 32)}…` : ua;
+
+  const browser = BROWSER_MATCHERS.find((m) => m.pattern.test(ua))?.name;
+  const os = OS_MATCHERS.find((m) => m.pattern.test(ua))?.name;
+
+  if (browser && os) return `${browser} on ${os}`;
+  if (browser) return browser;
+  if (os) return `Unknown Browser on ${os}`;
+  return "Unknown Client";
 };
 
 export const formatEventType = (type: string): string => {

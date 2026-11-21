@@ -207,12 +207,12 @@ export const OverviewPage: React.FC = () => {
                     {currentSession.ipAddress || "127.0.0.1"}
                   </span>
                 </div>
-                <div className="flex items-start justify-between p-2.5 bg-[var(--color-paper-3)] rounded-[var(--radius-pill)] border border-[var(--color-rule)]">
+                <div className="flex items-center justify-between gap-3 p-2.5 bg-[var(--color-paper-3)] rounded-[var(--radius-pill)] border border-[var(--color-rule)]">
                   <span className="text-[var(--color-muted)] shrink-0">
                     Client
                   </span>
                   <span
-                    className="text-right text-[var(--color-ink-2)] truncate max-w-[240px]"
+                    className="text-right text-[var(--color-ink-2)] truncate flex-1 min-w-0"
                     title={currentSession.userAgent || undefined}
                   >
                     {formatClient(currentSession.userAgent)}

@@ -191,7 +191,7 @@ export const ActivityPage: React.FC = () => {
                       {evt.ipAddress || "—"}
                     </td>
                     <td
-                      className="py-3 px-3 text-[var(--color-ink-2)]"
+                      className="py-3 px-3 text-[var(--color-ink-2)] max-w-[200px] truncate"
                       title={evt.userAgent || undefined}
                     >
                       {formatClient(evt.userAgent)}

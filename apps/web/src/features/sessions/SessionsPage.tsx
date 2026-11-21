@@ -215,10 +215,10 @@ export const SessionsPage: React.FC = () => {
                     : "bg-[var(--color-paper-3)] border-[var(--color-rule)] hover:border-[var(--color-rule-2)]"
                 }`}
               >
-                <div className="space-y-1.5 flex-1">
+                <div className="space-y-1.5 flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span
-                      className="font-medium text-sm text-[var(--color-ink)]"
+                      className="font-medium text-sm text-[var(--color-ink)] truncate max-w-full"
                       title={item.userAgent || undefined}
                     >
                       {formatClient(item.userAgent)}
@@ -234,7 +234,7 @@ export const SessionsPage: React.FC = () => {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-4 text-xs text-[var(--color-muted)] font-mono flex-wrap">
+                  <div className="flex items-center gap-x-4 gap-y-1 text-xs text-[var(--color-muted)] font-mono flex-wrap">
                     <span>IP: {item.ipAddress || "127.0.0.1"}</span>
                     <span>Created: {formatDate(item.createdAt)}</span>
                     <span>Expires: {formatDate(item.expiresAt)}</span>
