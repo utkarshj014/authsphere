@@ -40,6 +40,9 @@ describe("E2E Journey — Admin Authorization & Role Escalation", () => {
     expect(promoteRes.status).toBe(200);
     expect(promoteRes.body.data.role).toBe("ADMIN");
 
+    // Allow clock to advance by 1s to align with RFC 7519 integer-second resolution
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
     // 5. Promoted user logs in fresh to acquire new token with ADMIN claims
     const freshLogin = await request(app)
       .post("/auth/login")
@@ -63,6 +66,16 @@ describe("E2E Journey — Admin Authorization & Role Escalation", () => {
       .send({ roleName: "USER" });
     expect(demoteRes.status).toBe(200);
     expect(demoteRes.body.data.role).toBe("USER");
+
+    // 6b. Demoted user's existing active session and access token are immediately evicted
+    const revokedAttempt = await request(app)
+      .get("/auth/me")
+      .set("Cookie", newAdminHeader);
+    expect(revokedAttempt.status).toBe(401);
+    expect(revokedAttempt.body.message).toBe("Session has been revoked");
+
+    // Allow clock to advance by 1s to align with RFC 7519 integer-second resolution
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // 7. Demoted user re-authenticates and is once again blocked
     const loginAfterDemote = await request(app)

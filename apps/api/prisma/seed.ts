@@ -5,6 +5,7 @@ import {
 } from "../src/generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { ROLES, PERMISSIONS } from "@authsphere/shared";
+import { hashPassword } from "../src/lib/crypto/password.js";
 
 // Always loads apps/api/.env regardless of current working directory
 dotenv.config({ path: new URL("../.env", import.meta.url) });
@@ -92,6 +93,44 @@ async function main() {
         permissionId: perm.id,
       },
     });
+  }
+
+  // 5. Seed / Promote Bootstrap Administrator (Configured via Environment, No Hardcoded Fallback)
+  const seedAdminEmail = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase();
+  const seedAdminPassword = process.env.SEED_ADMIN_PASSWORD;
+
+  if (seedAdminEmail) {
+    const existingUser = await prisma.user.findUnique({
+      where: { email: seedAdminEmail },
+      include: { role: true },
+    });
+
+    if (existingUser) {
+      if (existingUser.roleId !== adminRole.id) {
+        await prisma.user.update({
+          where: { id: existingUser.id },
+          data: { roleId: adminRole.id },
+        });
+        console.log(`✓ Promoted existing user ${seedAdminEmail} to ADMIN`);
+      } else {
+        console.log(`✓ User ${seedAdminEmail} is already an ADMIN`);
+      }
+    } else if (seedAdminPassword) {
+      const passwordHash = await hashPassword(seedAdminPassword);
+      await prisma.user.create({
+        data: {
+          email: seedAdminEmail,
+          passwordHash,
+          isEmailVerified: true,
+          roleId: adminRole.id,
+        },
+      });
+      console.log(`✓ Created new bootstrap ADMIN user: ${seedAdminEmail}`);
+    } else {
+      console.warn(
+        `⚠ SEED_ADMIN_EMAIL set to "${seedAdminEmail}", but user does not exist and SEED_ADMIN_PASSWORD was not supplied. Skipping user creation.`,
+      );
+    }
   }
 }
 

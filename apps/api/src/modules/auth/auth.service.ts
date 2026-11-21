@@ -84,21 +84,18 @@ const setLeewayCache = async (
   }
 };
 
-const setUserRevokedAt = async (userId: string): Promise<void> => {
+export const setUserRevokedAt = async (userId: string): Promise<void> => {
   if (redis.status !== "ready") return;
   const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
   try {
     await redis.set(
       `auth:user-revoked-at:${userId}`,
-      Date.now().toString(),
+      Math.floor(Date.now() / 1000).toString(),
       "EX",
       ttlSeconds,
     );
   } catch (err) {
-    logger.warn(
-      { err, userId },
-      "Failed recording user revocation timestamp in Redis",
-    );
+    logger.warn({ err, userId }, "Failed recording user revocation in Redis");
   }
 };
 

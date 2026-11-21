@@ -71,7 +71,9 @@ const updateUserRole = async (userId: string, roleName: RoleName) => {
       }
     }
 
-    // 4. Update the user's role
+    // 4. Update the user's role and revoke active sessions on role change
+    const isRoleChanging = targetUser.role.name !== roleName;
+
     try {
       return await tx.user.update({
         where: { id: userId },
@@ -81,6 +83,7 @@ const updateUserRole = async (userId: string, roleName: RoleName) => {
               name: roleName,
             },
           },
+          ...(isRoleChanging ? { sessions: { deleteMany: {} } } : {}),
         },
         include: {
           role: {

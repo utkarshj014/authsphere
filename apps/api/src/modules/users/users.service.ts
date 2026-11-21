@@ -1,5 +1,6 @@
 import { usersRepository } from "./users.repository.js";
 import { AppError, ForbiddenError } from "../../common/errors/index.js";
+import { setUserRevokedAt } from "../auth/index.js";
 import {
   usersResponseSchema,
   type RoleInput,
@@ -75,6 +76,9 @@ const changeRole = async (
     targetUserId,
     input.roleName,
   );
+
+  // Invalidate any in-flight stateless access tokens immediately in Redis
+  await setUserRevokedAt(targetUserId);
 
   // Runtime egress sanitization firewall on sensitive user profile record
   return usersResponseSchema.userProfile.parse({

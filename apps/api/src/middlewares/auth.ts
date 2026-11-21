@@ -32,7 +32,7 @@ export const auth = asyncHandler(
 
         if (userRevokedAtStr) {
           const userRevokedAt = parseInt(userRevokedAtStr, 10);
-          const tokenIssuedAt = (payload.iat ?? 0) * 1000;
+          const tokenIssuedAt = payload.iat ?? 0;
           if (tokenIssuedAt <= userRevokedAt) {
             clearAuthCookies(res);
             throw new UnauthorizedError("Session has been revoked");
@@ -90,7 +90,7 @@ export const optionalAuth = asyncHandler(
           if (
             isRevoked ||
             (userRevokedAtStr &&
-              (payload.iat ?? 0) * 1000 <= parseInt(userRevokedAtStr, 10))
+              (payload.iat ?? 0) <= parseInt(userRevokedAtStr, 10))
           ) {
             clearAuthCookies(res);
             return next();
