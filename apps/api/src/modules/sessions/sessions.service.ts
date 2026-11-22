@@ -12,10 +12,12 @@ const getActiveSessions = async (
 ): Promise<SessionItemResponse[]> => {
   const sessions = await sessionsRepository.findActiveSessionsByUserId(userId);
 
-  return sessions.map((session) => ({
-    ...session,
-    isCurrent: session.id === currentSessionId,
-  }));
+  return sessions
+    .map((session) => ({
+      ...session,
+      isCurrent: session.id === currentSessionId,
+    }))
+    .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent));
 };
 
 const revokeSession = async (
