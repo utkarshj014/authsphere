@@ -10,7 +10,7 @@ describe("Health Module Integration (/health, /health/live, /health/ready)", () 
     vi.restoreAllMocks();
   });
 
-  describe("GET /health/live (Lightweight ALB Liveness Probe)", () => {
+  describe("GET /health/live (Liveness Probe)", () => {
     it("returns 200 OK with UP status and ISO timestamp with zero external I/O", async () => {
       const dbSpy = vi.spyOn(prisma, "$queryRaw");
       const redisPingSpy = vi.spyOn(redis, "ping");

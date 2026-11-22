@@ -55,7 +55,7 @@ app.use(requestLogger);
 app.use(originValidation);
 
 // Health Check Routes
-// Mounted ahead of rate limiting & body parsing: ALB liveness probes require pure in-memory zero-I/O execution
+// Mounted ahead of rate limiting & body parsing: liveness checks require pure in-memory zero-I/O execution
 app.use("/health", healthRouter);
 
 // Global Rate Limiter Middleware

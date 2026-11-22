@@ -21,8 +21,12 @@ describe("OpenAPI specification", () => {
     expect(doc.info.title).toBe("AuthSphere API");
     expect(doc.servers).toEqual([
       {
+        url: "/api",
+        description: "Frontend Proxy (localhost:5173 - Default)",
+      },
+      {
         url: "/",
-        description: "Direct API Host (Local Development)",
+        description: "Direct Backend Host (localhost:3000)",
       },
     ]);
     expect(doc.components?.securitySchemes).toMatchObject({

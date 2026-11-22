@@ -25,8 +25,8 @@ const checkRedis = async (): Promise<HealthStatus> => {
 
 export const healthService = {
   /**
-   * Pure in-memory process liveness check for AWS ALB / orchestrators.
-   * Zero external I/O ensures load balancer target groups don't experience
+   * Pure in-memory process liveness check.
+   * Zero external I/O ensures process checks don't experience
    * cascading failure during temporary database or cache blips.
    */
   getLiveness: (): LivenessData => ({
