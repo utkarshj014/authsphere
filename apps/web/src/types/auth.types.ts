@@ -32,6 +32,7 @@ export interface UserProfile {
   createdAt?: string;
   oauthProviders?: OAuthProviderName[];
   hasPassword?: boolean;
+  remainingRecoveryCodes?: number;
 }
 
 /**

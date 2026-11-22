@@ -109,6 +109,7 @@ export const authResponseSchema = {
     createdAt: z.date().or(z.string()),
     oauthProviders: z.array(z.string()).default([]),
     hasPassword: z.boolean().default(false),
+    remainingRecoveryCodes: z.number().int().nonnegative().optional(),
   }),
 
   securityEventItem: securityEventItemSchema,

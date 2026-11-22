@@ -161,6 +161,7 @@ export const SecurityPage: React.FC = () => {
         setRecoveryCodes(res.data.recoveryCodes);
         setIsRecoveryModalOpen(true);
       }
+      await bootstrapAuth();
       setGlobalSuccess("New emergency recovery codes have been generated.");
     } catch (err: unknown) {
       setRegenError(getApiErrorMessage(err));
@@ -280,9 +281,26 @@ export const SecurityPage: React.FC = () => {
                 codes
               </p>
             </div>
-            <Badge variant={user?.mfaEnabled ? "ok" : "bad"} isMono>
-              {user?.mfaEnabled ? "ENABLED" : "DISABLED"}
-            </Badge>
+            <div className="flex items-center gap-2 flex-wrap">
+              {user?.mfaEnabled &&
+                user.remainingRecoveryCodes !== undefined && (
+                  <Badge
+                    variant={
+                      user.remainingRecoveryCodes === 0
+                        ? "bad"
+                        : user.remainingRecoveryCodes <= 2
+                          ? "accent"
+                          : "neutral"
+                    }
+                    isMono
+                  >
+                    {user.remainingRecoveryCodes} / 10 CODES REMAINING
+                  </Badge>
+                )}
+              <Badge variant={user?.mfaEnabled ? "ok" : "bad"} isMono>
+                {user?.mfaEnabled ? "ENABLED" : "DISABLED"}
+              </Badge>
+            </div>
           </div>
 
           <div className="text-xs text-[var(--color-ink-2)] leading-relaxed space-y-1.5">
@@ -307,6 +325,23 @@ export const SecurityPage: React.FC = () => {
               </p>
             )}
           </div>
+
+          {user?.mfaEnabled &&
+            user.remainingRecoveryCodes !== undefined &&
+            user.remainingRecoveryCodes <= 2 && (
+              <Alert
+                variant={user.remainingRecoveryCodes === 0 ? "bad" : "warn"}
+                title={
+                  user.remainingRecoveryCodes === 0
+                    ? "Critical: 0 Emergency Recovery Codes Remaining"
+                    : "Low Recovery Codes Warning"
+                }
+              >
+                {user.remainingRecoveryCodes === 0
+                  ? "You have exhausted all 10 emergency recovery codes. If you lose access to your authenticator app, you will be permanently locked out of your account. Generate a new set below immediately."
+                  : `You have only ${user.remainingRecoveryCodes} recovery code${user.remainingRecoveryCodes === 1 ? "" : "s"} remaining. Regenerate a new set now to avoid losing emergency access.`}
+              </Alert>
+            )}
 
           <div className="pt-2 flex items-center gap-3 flex-wrap">
             {user?.mfaEnabled ? (

@@ -516,6 +516,13 @@ const getCurrentUser = async (
     user.role.name,
   );
 
+  let remainingRecoveryCodes: number | undefined;
+  if (user.mfaEnabled) {
+    remainingRecoveryCodes = await authRepository.countUnusedRecoveryCodes(
+      user.id,
+    );
+  }
+
   // Runtime egress sanitization firewall on sensitive user profile record
   return authResponseSchema.currentUserProfile.parse({
     id: user.id,
@@ -529,6 +536,7 @@ const getCurrentUser = async (
     createdAt: user.createdAt,
     oauthProviders: user.oauthAccounts?.map((a) => a.provider) ?? [],
     hasPassword: user.passwordHash !== null,
+    remainingRecoveryCodes,
   });
 };
 

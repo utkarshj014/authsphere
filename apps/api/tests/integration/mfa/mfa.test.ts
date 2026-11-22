@@ -162,7 +162,9 @@ describe("MFA Lifecycle Integration (Setup, Login, Recovery, Disable)", () => {
       const preMfaEvents = await prisma.securityEvent.findMany({
         where: { userId: user.id },
       });
-      expect(preMfaEvents.filter((e) => e.type === "LOGIN_SUCCESS")).toHaveLength(0);
+      expect(
+        preMfaEvents.filter((e) => e.type === "LOGIN_SUCCESS"),
+      ).toHaveLength(0);
 
       // Submit invalid code
       await expect(
@@ -204,6 +206,39 @@ describe("MFA Lifecycle Integration (Setup, Login, Recovery, Disable)", () => {
       for (const code of newCodes) {
         expect(oldHashes).not.toContain(code.codeHash);
       }
+
+      const profileAfterRegen = await authService.getCurrentUser(user.id);
+      expect(profileAfterRegen.remainingRecoveryCodes).toBe(10);
+    });
+  });
+
+  describe("Profile Recovery Codes Introspection", () => {
+    it("returns remainingRecoveryCodes for MFA users and undefined for non-MFA users", async () => {
+      const { user: nonMfaUser } = await createVerifiedUser();
+      const nonMfaProfile = await authService.getCurrentUser(nonMfaUser.id);
+      expect(nonMfaProfile.mfaEnabled).toBe(false);
+      expect(nonMfaProfile.remainingRecoveryCodes).toBeUndefined();
+
+      const { user: mfaUser, recoveryCodes } = await createMfaUser();
+      const mfaProfile = await authService.getCurrentUser(mfaUser.id);
+      expect(mfaProfile.mfaEnabled).toBe(true);
+      expect(mfaProfile.remainingRecoveryCodes).toBe(10);
+
+      // Consume 1 recovery code via login challenge
+      const loginRes = await authService.login(
+        { email: mfaUser.email, password: "Password123!" },
+        "127.0.0.1",
+      );
+      if (!loginRes.mfaRequired) {
+        throw new Error("Expected MFA challenge required");
+      }
+      await authService.mfaVerifyLogin(
+        { mfaToken: loginRes.mfaToken, code: recoveryCodes[0] },
+        "127.0.0.1",
+      );
+
+      const profileAfterUse = await authService.getCurrentUser(mfaUser.id);
+      expect(profileAfterUse.remainingRecoveryCodes).toBe(9);
     });
   });
 
