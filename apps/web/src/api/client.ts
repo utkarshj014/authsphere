@@ -18,6 +18,9 @@ type AuthFailureReason = "unauthenticated" | "unavailable";
 type AuthFailureHandler = (reason: AuthFailureReason) => void;
 let onAuthFailure: AuthFailureHandler | null = null;
 
+type ForbiddenHandler = () => Promise<void> | void;
+let onForbidden: ForbiddenHandler | null = null;
+
 /**
  * Register a callback invoked when authentication cannot be recovered or service is unavailable.
  * Breaks circular dependencies between the HTTP client and auth store.
@@ -26,6 +29,14 @@ export const registerAuthFailureHandler = (
   handler: AuthFailureHandler,
 ): void => {
   onAuthFailure = handler;
+};
+
+/**
+ * Register a callback invoked when a request receives a 403 Forbidden response.
+ * Allows the auth store to synchronize permissions in the background.
+ */
+export const registerForbiddenHandler = (handler: ForbiddenHandler): void => {
+  onForbidden = handler;
 };
 
 interface RetryQueueItem {
@@ -140,6 +151,18 @@ apiClient.interceptors.response.use(
         return Promise.reject(refreshError);
       } finally {
         isRefreshing = false;
+      }
+    }
+
+    // When a request is rejected with 403 Forbidden, role permissions may have changed dynamically.
+    // Await store resynchronization so capabilities are refreshed atomically before rejecting caller.
+    if (error.response?.status === 403) {
+      if (onForbidden) {
+        try {
+          await onForbidden();
+        } catch {
+          // Swallow refresh error to allow original 403 error to propagate to caller
+        }
       }
     }
 

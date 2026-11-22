@@ -7,63 +7,135 @@ import {
 } from "../../types/auth.types.js";
 import { Button, Alert, Badge, Skeleton } from "../../components/ui/index.js";
 
-const ALL_AVAILABLE_PERMISSIONS: Array<{
+interface RolePermissionDef {
   name: PermissionName;
   label: string;
   category: string;
   description: string;
-}> = [
+  badgeLabel: string;
+  badgeVariant: "ok" | "cool" | "accent" | "neutral";
+  isImmutable?: boolean;
+}
+
+const USER_ROLE_PERMISSIONS: RolePermissionDef[] = [
   {
     name: PERMISSIONS.PROFILE_READ,
     label: "profile.read",
-    category: "Identity & Profile",
-    description: "Read own authenticated identity profile and account details.",
-  },
-  {
-    name: PERMISSIONS.PROFILE_UPDATE,
-    label: "profile.update",
-    category: "Identity & Profile",
-    description: "Modify own profile attributes (name, contact metadata).",
+    category: "Identity",
+    description:
+      "Read own authenticated account details and identity attributes.",
+    badgeLabel: "Base · Locked",
+    badgeVariant: "cool",
+    isImmutable: true,
   },
   {
     name: PERMISSIONS.DASHBOARD_VIEW,
     label: "dashboard.view",
-    category: "Telemetry & Overview",
+    category: "Telemetry",
     description:
-      "Access account overview, active sessions, and security activity telemetry.",
+      "Access account overview, active sessions, and security activity log.",
+    badgeLabel: "Active",
+    badgeVariant: "ok",
+    isImmutable: false,
   },
   {
     name: PERMISSIONS.USER_READ,
     label: "user.read",
-    category: "User Directory",
+    category: "Directory",
     description:
-      "Query and inspect the global directory of registered user identities.",
+      "Browse registered users and organization members in the directory.",
+    badgeLabel: "Active",
+    badgeVariant: "ok",
+    isImmutable: false,
+  },
+  {
+    name: PERMISSIONS.PROFILE_UPDATE,
+    label: "profile.update",
+    category: "Identity",
+    description:
+      "Self-service updates to name and personal contact information.",
+    badgeLabel: "Roadmap",
+    badgeVariant: "neutral",
+    isImmutable: false,
+  },
+];
+
+const ADMIN_ROLE_PERMISSIONS: RolePermissionDef[] = [
+  {
+    name: PERMISSIONS.ROLE_MANAGE,
+    label: "role.manage",
+    category: "Governance",
+    description:
+      "Modify role-to-permission mappings and global security policies.",
+    badgeLabel: "System",
+    badgeVariant: "accent",
+    isImmutable: true,
+  },
+  {
+    name: PERMISSIONS.USER_READ,
+    label: "user.read",
+    category: "Directory",
+    description: "Query and inspect full user directory and identity records.",
+    badgeLabel: "Active",
+    badgeVariant: "ok",
+    isImmutable: true,
+  },
+  {
+    name: PERMISSIONS.DASHBOARD_VIEW,
+    label: "dashboard.view",
+    category: "Telemetry",
+    description:
+      "Access security activity audit logs and operational telemetry.",
+    badgeLabel: "Active",
+    badgeVariant: "ok",
+    isImmutable: true,
+  },
+  {
+    name: PERMISSIONS.PROFILE_READ,
+    label: "profile.read",
+    category: "Identity",
+    description: "Read administrator identity and credentials status.",
+    badgeLabel: "Base",
+    badgeVariant: "cool",
+    isImmutable: true,
   },
   {
     name: PERMISSIONS.USER_CREATE,
     label: "user.create",
-    category: "User Directory",
+    category: "Directory",
     description:
-      "Provision new user identities directly through administrative tools.",
+      "Provision new user accounts directly through administrative tools.",
+    badgeLabel: "Roadmap",
+    badgeVariant: "neutral",
+    isImmutable: true,
   },
   {
     name: PERMISSIONS.USER_UPDATE,
     label: "user.update",
-    category: "User Directory",
+    category: "Directory",
     description:
-      "Update user account attributes and authorization assignments.",
+      "Modify user account attributes, emails, and authorization assignments.",
+    badgeLabel: "Roadmap",
+    badgeVariant: "neutral",
+    isImmutable: true,
   },
   {
     name: PERMISSIONS.USER_DELETE,
     label: "user.delete",
-    category: "User Directory",
-    description: "Deprovision and permanently delete user accounts.",
+    category: "Directory",
+    description: "Deprovision and permanently remove user accounts.",
+    badgeLabel: "Roadmap",
+    badgeVariant: "neutral",
+    isImmutable: true,
   },
   {
-    name: PERMISSIONS.ROLE_MANAGE,
-    label: "role.manage",
-    category: "Role Governance",
-    description: "Modify persisted role-to-permission security mappings.",
+    name: PERMISSIONS.PROFILE_UPDATE,
+    label: "profile.update",
+    category: "Identity",
+    description: "Modify personal profile attributes.",
+    badgeLabel: "Roadmap",
+    badgeVariant: "neutral",
+    isImmutable: true,
   },
 ];
 
@@ -108,11 +180,16 @@ export const AdminRolesPage: React.FC = () => {
     };
   }, [activeRole]);
 
-  const handleTogglePermission = (perm: PermissionName) => {
-    if (activeRole === "ADMIN") return; // Admin permissions immutable
+  const displayedPermissions =
+    activeRole === "ADMIN" ? ADMIN_ROLE_PERMISSIONS : USER_ROLE_PERMISSIONS;
+
+  const handleTogglePermission = (perm: RolePermissionDef) => {
+    if (activeRole === "ADMIN" || perm.isImmutable) return;
 
     setPermissions((prev) =>
-      prev.includes(perm) ? prev.filter((p) => p !== perm) : [...prev, perm],
+      prev.includes(perm.name)
+        ? prev.filter((p) => p !== perm.name)
+        : [...prev, perm.name],
     );
   };
 
@@ -123,13 +200,20 @@ export const AdminRolesPage: React.FC = () => {
     setGlobalError(null);
     setGlobalSuccess(null);
     try {
-      const res = await adminApi.updateRolePermissions(activeRole, permissions);
+      // Ensure base immutable permission profile.read is always preserved
+      const payloadPermissions = Array.from(
+        new Set([...permissions, PERMISSIONS.PROFILE_READ]),
+      );
+      const res = await adminApi.updateRolePermissions(
+        activeRole,
+        payloadPermissions,
+      );
       if (res.data) {
         setPermissions(res.data.permissions);
         setInitialPermissions(res.data.permissions);
       }
       setGlobalSuccess(
-        `Permissions for ${activeRole} updated successfully. Changes apply globally to all users assigned this role.`,
+        `Permissions for ${activeRole} updated successfully. Active sessions will pick up changes on their next request.`,
       );
     } catch (err: unknown) {
       setGlobalError(getApiErrorMessage(err));
@@ -143,6 +227,10 @@ export const AdminRolesPage: React.FC = () => {
     (permissions.length !== initialPermissions.length ||
       permissions.some((p) => !initialPermissions.includes(p)));
 
+  const grantedCount = permissions.filter((p) =>
+    displayedPermissions.some((d) => d.name === p),
+  ).length;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -152,8 +240,7 @@ export const AdminRolesPage: React.FC = () => {
             Role Permissions
           </h1>
           <p className="text-xs text-[var(--color-muted)] mt-0.5">
-            Inspect role capabilities and configure permissions applied globally
-            across all assigned users
+            Review and configure access permissions assigned to system roles
           </p>
         </div>
 
@@ -165,7 +252,7 @@ export const AdminRolesPage: React.FC = () => {
             disabled={!hasUnsavedChanges}
             onClick={handleSavePermissions}
           >
-            Save USER Permissions
+            Save Changes
           </Button>
         )}
       </div>
@@ -181,6 +268,21 @@ export const AdminRolesPage: React.FC = () => {
           {globalError}
         </Alert>
       )}
+
+      {/* Architecture Overview Banner */}
+      <div className="p-4 bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded-[var(--radius-card)] space-y-1.5">
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]" />
+          <h2 className="font-display font-medium text-xs text-[var(--color-ink)] uppercase tracking-wider">
+            Authorization Architecture
+          </h2>
+        </div>
+        <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+          AuthSphere uses role-based guards for route boundaries and
+          fine-grained permissions for API endpoints. Permissions are cached in
+          Redis and invalidated immediately when updated here.
+        </p>
+      </div>
 
       {/* Role Selection Tabs */}
       <div className="flex border-b border-[var(--color-rule)] gap-4">
@@ -211,13 +313,13 @@ export const AdminRolesPage: React.FC = () => {
       {/* Role Notice */}
       {activeRole === "ADMIN" ? (
         <Alert variant="info" title="System Invariant">
-          ADMIN permissions are permanently immutable. The system grants full
-          authorization to administrators across all operational domains.
+          ADMIN permissions are permanently fixed. Administrators hold full
+          capabilities across all domains.
         </Alert>
       ) : (
-        <Alert variant="warn" title="Global Scope Notice">
-          Changes made here alter authorization tokens and policy enforcement
-          globally for all existing and future users assigned the USER role.
+        <Alert variant="info" title="Global Scope">
+          Changes made here take effect immediately across all active sessions
+          assigned the USER role via Redis cache invalidation.
         </Alert>
       )}
 
@@ -226,11 +328,13 @@ export const AdminRolesPage: React.FC = () => {
         <div className="flex items-center justify-between pb-3 border-b border-[var(--color-rule)]">
           <div>
             <h2 className="font-display font-medium text-sm text-[var(--color-ink)]">
-              Authorized Capabilities for {activeRole}
+              {activeRole === "ADMIN"
+                ? "Administrator Capabilities"
+                : "User Capabilities"}
             </h2>
             <p className="text-xs text-[var(--color-muted)]">
-              {permissions.length} of {ALL_AVAILABLE_PERMISSIONS.length}{" "}
-              capabilities granted
+              {grantedCount} of {displayedPermissions.length} capabilities
+              granted
             </p>
           </div>
           <Badge
@@ -250,14 +354,14 @@ export const AdminRolesPage: React.FC = () => {
           </div>
         ) : (
           <div className="divide-y divide-[var(--color-rule)]">
-            {ALL_AVAILABLE_PERMISSIONS.map((perm) => {
+            {displayedPermissions.map((perm) => {
               const isChecked = permissions.includes(perm.name);
-              const isDisabled = activeRole === "ADMIN";
+              const isDisabled = activeRole === "ADMIN" || perm.isImmutable;
 
               return (
                 <label
                   key={perm.name}
-                  className={`flex items-start gap-3 py-3.5 px-2 rounded-[var(--radius-pill)] transition-colors select-none ${
+                  className={`flex items-start gap-3 py-3 px-2 rounded-lg transition-colors select-none ${
                     isDisabled
                       ? "cursor-default opacity-85"
                       : "cursor-pointer hover:bg-[var(--color-paper-3)]"
@@ -267,19 +371,22 @@ export const AdminRolesPage: React.FC = () => {
                     type="checkbox"
                     checked={isChecked}
                     disabled={isDisabled}
-                    onChange={() => handleTogglePermission(perm.name)}
-                    className="mt-1 h-4 w-4 rounded border-[var(--color-rule)] text-[var(--color-accent)] focus:ring-[var(--color-focus)] cursor-pointer disabled:cursor-default"
+                    onChange={() => handleTogglePermission(perm)}
+                    className="mt-0.5 h-4 w-4 rounded border-[var(--color-rule)] text-[var(--color-accent)] focus:ring-[var(--color-focus)] cursor-pointer disabled:cursor-default"
                   />
                   <div className="flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono text-xs font-semibold text-[var(--color-ink)]">
                         {perm.label}
                       </span>
                       <span className="text-[11px] text-[var(--color-muted)] font-normal">
                         ({perm.category})
                       </span>
+                      <Badge variant={perm.badgeVariant} size="sm" isMono>
+                        {perm.badgeLabel}
+                      </Badge>
                     </div>
-                    <p className="text-xs text-[var(--color-ink-2)] mt-0.5">
+                    <p className="text-xs text-[var(--color-muted)] mt-0.5">
                       {perm.description}
                     </p>
                   </div>
@@ -290,7 +397,7 @@ export const AdminRolesPage: React.FC = () => {
         )}
 
         {activeRole === "USER" && hasUnsavedChanges && (
-          <div className="flex items-center justify-between p-3 bg-[var(--color-paper-3)] border border-[var(--color-accent)]/30 rounded-[var(--radius-pill)] mt-4">
+          <div className="flex items-center justify-between p-3 bg-[var(--color-paper-3)] border border-[var(--color-accent)]/30 rounded-lg mt-4">
             <span className="text-xs text-[var(--color-accent)] font-medium">
               You have unsaved permission changes.
             </span>

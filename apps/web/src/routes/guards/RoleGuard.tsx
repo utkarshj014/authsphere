@@ -1,19 +1,30 @@
 import React from "react";
 import { Link, Outlet } from "react-router-dom";
 import { useAuthStore } from "../../stores/auth.store.js";
-import { ROLES, type RoleName } from "../../types/auth.types.js";
+import {
+  ROLES,
+  type RoleName,
+  type PermissionName,
+} from "../../types/auth.types.js";
 import { ROUTES } from "../routes.config.js";
 
 interface RoleGuardProps {
   allowedRole?: RoleName;
+  requiredPermission?: PermissionName;
 }
 
 export const RoleGuard: React.FC<RoleGuardProps> = ({
   allowedRole = ROLES.ADMIN,
+  requiredPermission,
 }) => {
   const { user } = useAuthStore();
 
-  if (user?.role !== allowedRole) {
+  const isRoleAllowed = user?.role === allowedRole;
+  const isPermissionAllowed = requiredPermission
+    ? (user?.permissions?.includes(requiredPermission) ?? false)
+    : false;
+
+  if (!isRoleAllowed && !isPermissionAllowed) {
     return (
       <div className="py-12 px-4 flex flex-col items-center justify-center text-center max-w-lg mx-auto">
         <div className="w-12 h-12 rounded-pill bg-bad-soft border border-bad/30 flex items-center justify-center text-bad mb-4">
@@ -33,15 +44,14 @@ export const RoleGuard: React.FC<RoleGuardProps> = ({
           Access Denied · 403 Forbidden
         </span>
         <h2 className="font-display font-medium text-xl text-ink mb-2">
-          Administrative Privileges Required
+          {requiredPermission
+            ? "Permission Required"
+            : "Administrative Role Required"}
         </h2>
-        <p className="text-sm text-muted mb-6 leading-relaxed">
-          Your account is authenticated as{" "}
-          <span className="font-mono text-ink font-medium">
-            {user?.role || "USER"}
-          </span>
-          . Administrative rights are required to access user management and
-          role configuration. Your active session has not been interrupted.
+        <p className="text-sm text-muted mb-6 leading-relaxed max-w-md">
+          {requiredPermission
+            ? `Your role does not have permission to access this resource (${requiredPermission}). An administrator can configure role permissions in Role Governance.`
+            : `Your role (${user?.role || "USER"}) does not have administrative privileges to access this resource. An administrator can configure role assignments.`}
         </p>
         <Link
           to={ROUTES.APP.ROOT}

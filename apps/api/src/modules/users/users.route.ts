@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { auth } from "../../middlewares/auth.js";
 import {
+  requirePermission,
   requireRole,
   requireSelfOrPermission,
 } from "../authorization/authorization.middleware.js";
@@ -20,7 +21,7 @@ router
   .get(
     "/",
     auth,
-    requireRole(ROLES.ADMIN),
+    requirePermission(PERMISSIONS.USER_READ),
     rateLimiter(RATE_LIMIT_POLICIES.USERS_LIST),
     validate(usersRequestSchema.listUsersQuery, ValidationTarget.QUERY),
     usersController.listUsers,

@@ -9,7 +9,7 @@ import { GuestGuard } from "./guards/GuestGuard.js";
 import { RoleGuard } from "./guards/RoleGuard.js";
 import { RootErrorBoundary } from "./guards/RootErrorBoundary.js";
 import { RootRedirect } from "./guards/RootRedirect.js";
-import { ROLES } from "../types/auth.types.js";
+import { ROLES, PERMISSIONS } from "../types/auth.types.js";
 
 // Lazy-Loaded Feature Pages (Code-split chunks)
 const LoginPage = lazy(() =>
@@ -117,11 +117,20 @@ const router = createBrowserRouter([
               { path: "security", element: <SecurityPage /> },
               { path: "sessions", element: <SessionsPage /> },
               { path: "activity", element: <ActivityPage /> },
-              // Admin Protected Routes
+              // User Directory (Accessible to ADMIN or principals with user.read)
+              {
+                element: (
+                  <RoleGuard
+                    allowedRole={ROLES.ADMIN}
+                    requiredPermission={PERMISSIONS.USER_READ}
+                  />
+                ),
+                children: [{ path: "users", element: <AdminUsersPage /> }],
+              },
+              // Role Governance (Restricted to ADMIN role)
               {
                 element: <RoleGuard allowedRole={ROLES.ADMIN} />,
                 children: [
-                  { path: "admin/users", element: <AdminUsersPage /> },
                   { path: "admin/roles", element: <AdminRolesPage /> },
                 ],
               },

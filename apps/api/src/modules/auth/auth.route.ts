@@ -9,6 +9,8 @@ import {
 } from "./oauth/oauth.controller.js";
 import { validate, ValidationTarget } from "../../middlewares/validate.js";
 import { auth, optionalAuth } from "../../middlewares/auth.js";
+import { requirePermission } from "../authorization/index.js";
+import { PERMISSIONS } from "@authsphere/shared";
 import {
   rateLimiter,
   RATE_LIMIT_POLICIES,
@@ -138,6 +140,7 @@ router
   .get(
     "/security-events",
     auth,
+    requirePermission(PERMISSIONS.DASHBOARD_VIEW),
     rateLimiter(RATE_LIMIT_POLICIES.SECURITY_EVENTS_READ),
     validate(authRequestSchema.securityEventsQuery, ValidationTarget.QUERY),
     authController.getSecurityEvents,

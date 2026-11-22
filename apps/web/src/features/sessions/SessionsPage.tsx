@@ -70,6 +70,7 @@ export const SessionsPage: React.FC = () => {
         setSessions(res.data);
       }
     } catch (err: unknown) {
+      setSessions([]);
       setGlobalError(getApiErrorMessage(err));
     } finally {
       setIsLoading(false);
@@ -94,6 +95,7 @@ export const SessionsPage: React.FC = () => {
       setGlobalSuccess("Remote session revoked successfully.");
       setSessionToRevoke(null);
     } catch (err: unknown) {
+      setSessions([]);
       setGlobalError(getApiErrorMessage(err));
     } finally {
       setIsRevokingSingle(false);

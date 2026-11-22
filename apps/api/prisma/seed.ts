@@ -57,7 +57,7 @@ async function main() {
   // 3. Map permissions to USER role
   const userRolePermissions = [
     PERMISSIONS.PROFILE_READ,
-    PERMISSIONS.PROFILE_UPDATE,
+    PERMISSIONS.DASHBOARD_VIEW,
   ];
   for (const permName of userRolePermissions) {
     const perm = dbPermissions.find((p) => p.name === permName);

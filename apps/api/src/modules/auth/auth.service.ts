@@ -53,6 +53,7 @@ import {
   verifyRefreshToken,
 } from "../../lib/jwt/index.js";
 import type { AuthTokens } from "./auth.types.js";
+import { authorizationService } from "../authorization/index.js";
 import { env } from "../../config/env.js";
 import { redis } from "../../lib/redis.js";
 import { logger } from "../../lib/logger.js";
@@ -510,6 +511,10 @@ const getCurrentUser = async (
     throw new UnauthorizedError("User not found");
   }
 
+  const permissions = await authorizationService.getPermissionsByRole(
+    user.role.name,
+  );
+
   // Runtime egress sanitization firewall on sensitive user profile record
   return authResponseSchema.currentUserProfile.parse({
     id: user.id,
@@ -517,6 +522,7 @@ const getCurrentUser = async (
     firstName: user.firstName,
     lastName: user.lastName,
     role: user.role.name,
+    permissions,
     mfaEnabled: user.mfaEnabled,
     verifiedAt: user.verifiedAt,
     createdAt: user.createdAt,

@@ -26,6 +26,7 @@ export interface UserProfile {
   firstName?: string | null;
   lastName?: string | null;
   role: RoleName;
+  permissions?: PermissionName[];
   mfaEnabled: boolean;
   verifiedAt?: string | null;
   createdAt?: string;

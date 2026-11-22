@@ -16,7 +16,7 @@ export const ROUTES = {
     SECURITY: "/app/security",
     SESSIONS: "/app/sessions",
     ACTIVITY: "/app/activity",
-    ADMIN_USERS: "/app/admin/users",
+    USERS: "/app/users",
     ADMIN_ROLES: "/app/admin/roles",
   },
 } as const;

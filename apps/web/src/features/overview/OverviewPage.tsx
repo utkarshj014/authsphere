@@ -17,6 +17,7 @@ export const OverviewPage: React.FC = () => {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [events, setEvents] = useState<SecurityEventItem[]>([]);
   const [isLoadingTelemetry, setIsLoadingTelemetry] = useState(true);
+  const [isActivityForbidden, setIsActivityForbidden] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -36,6 +37,14 @@ export const OverviewPage: React.FC = () => {
 
         if (eventsRes.status === "fulfilled" && eventsRes.value.data?.events) {
           setEvents(eventsRes.value.data.events);
+          setIsActivityForbidden(false);
+        } else if (
+          eventsRes.status === "rejected" &&
+          (eventsRes.reason as { response?: { status?: number } })?.response
+            ?.status === 403
+        ) {
+          setEvents([]);
+          setIsActivityForbidden(true);
         }
       } finally {
         if (isMounted) {
@@ -307,6 +316,17 @@ export const OverviewPage: React.FC = () => {
                     </div>
                   </div>
                 ))}
+              </div>
+            ) : isActivityForbidden ? (
+              <div className="p-3 bg-[var(--color-paper-3)] rounded-[var(--radius-card)] border border-[var(--color-rule)] text-center space-y-0.5">
+                <p className="text-xs text-[var(--color-bad)] font-medium">
+                  Activity telemetry restricted
+                </p>
+                <p className="text-[11px] text-[var(--color-muted)]">
+                  Your role does not have{" "}
+                  <code className="font-mono text-[10px]">dashboard.view</code>{" "}
+                  permission.
+                </p>
               </div>
             ) : (
               <p className="text-xs text-[var(--color-muted)] py-4 text-center">

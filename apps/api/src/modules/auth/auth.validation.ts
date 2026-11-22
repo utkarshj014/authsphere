@@ -103,6 +103,7 @@ export const authResponseSchema = {
     firstName: z.string().nullable(),
     lastName: z.string().nullable(),
     role: z.enum(ROLES),
+    permissions: z.array(z.string()).default([]),
     mfaEnabled: z.boolean().default(false),
     verifiedAt: z.date().or(z.string()),
     createdAt: z.date().or(z.string()),

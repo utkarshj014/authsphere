@@ -4,7 +4,11 @@ import type {
   AuthStatus,
   ApiSuccessResponse,
 } from "../types/auth.types.js";
-import { apiClient, registerAuthFailureHandler } from "../api/client.js";
+import {
+  apiClient,
+  registerAuthFailureHandler,
+  registerForbiddenHandler,
+} from "../api/client.js";
 
 interface AuthState {
   user: UserProfile | null;
@@ -18,6 +22,7 @@ interface AuthState {
   clearMfaChallenge: () => void;
   setStatus: (status: AuthStatus) => void;
   bootstrapAuth: () => Promise<void>;
+  refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
   logoutAll: () => Promise<void>;
 }
@@ -100,6 +105,18 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 
+  refreshUser: async () => {
+    try {
+      const response =
+        await apiClient.get<ApiSuccessResponse<UserProfile>>("/auth/me");
+      if (response.data?.data) {
+        set({ user: response.data.data });
+      }
+    } catch {
+      // Ignore background refresh errors
+    }
+  },
+
   logout: async () => {
     try {
       await apiClient.post("/auth/logout");
@@ -134,4 +151,8 @@ registerAuthFailureHandler((reason) => {
   } else if (reason === "unavailable") {
     useAuthStore.getState().setStatus("unavailable");
   }
+});
+
+registerForbiddenHandler(async () => {
+  await useAuthStore.getState().refreshUser();
 });

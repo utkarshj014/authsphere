@@ -1,7 +1,11 @@
-import React, { useState, Suspense } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import { Outlet, NavLink, Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../../stores/auth.store.js";
-import { ROLES } from "../../types/auth.types.js";
+import {
+  ROLES,
+  PERMISSIONS,
+  type PermissionName,
+} from "../../types/auth.types.js";
 import { ROUTES, DOCS_URLS } from "../../routes/routes.config.js";
 
 interface NavItem {
@@ -9,6 +13,7 @@ interface NavItem {
   to: string;
   icon: (props: { className?: string }) => React.JSX.Element;
   adminOnly?: boolean;
+  requiredPermission?: PermissionName;
 }
 
 const navItems: NavItem[] = [
@@ -83,8 +88,8 @@ const navItems: NavItem[] = [
   },
   {
     label: "User Directory",
-    to: ROUTES.APP.ADMIN_USERS,
-    adminOnly: true,
+    to: ROUTES.APP.USERS,
+    requiredPermission: PERMISSIONS.USER_READ,
     icon: ({ className }) => (
       <svg
         className={className}
@@ -126,8 +131,26 @@ export const AppShell: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const navigate = useNavigate();
 
+  // Re-synchronize user profile & dynamic role permissions on window focus
+  useEffect(() => {
+    const handleFocus = () => {
+      void useAuthStore.getState().refreshUser();
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, []);
+
   const isAdmin = user?.role === ROLES.ADMIN;
-  const filteredNav = navItems.filter((item) => !item.adminOnly || isAdmin);
+  const filteredNav = navItems.filter((item) => {
+    if (isAdmin) return true;
+    if (item.adminOnly) return false;
+    if (item.requiredPermission) {
+      return user?.permissions?.includes(item.requiredPermission) ?? false;
+    }
+    return true;
+  });
 
   const handleSignOut = async () => {
     await logout();

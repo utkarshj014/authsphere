@@ -36,6 +36,18 @@ export const ActivityPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [globalError, setGlobalError] = useState<string | null>(null);
 
+  const formatActivityError = (err: unknown): string => {
+    const msg = getApiErrorMessage(err);
+    if (
+      msg.toLowerCase().includes("permission") ||
+      msg.toLowerCase().includes("access denied") ||
+      msg.toLowerCase().includes("forbidden")
+    ) {
+      return "Access Denied · Your role does not have permission to view security activity audit logs (dashboard.view). An administrator can configure role permissions in Role Governance.";
+    }
+    return msg;
+  };
+
   useEffect(() => {
     let isMounted = true;
 
@@ -49,7 +61,16 @@ export const ActivityPage: React.FC = () => {
         }
       } catch (err: unknown) {
         if (isMounted) {
-          setGlobalError(getApiErrorMessage(err));
+          setEvents([]);
+          setPagination({
+            page: 1,
+            limit: 20,
+            totalCount: 0,
+            totalPages: 1,
+            hasNextPage: false,
+            hasPreviousPage: false,
+          });
+          setGlobalError(formatActivityError(err));
         }
       } finally {
         if (isMounted) {
@@ -60,8 +81,14 @@ export const ActivityPage: React.FC = () => {
 
     void fetchEvents();
 
+    const handleFocus = () => {
+      void fetchEvents();
+    };
+    window.addEventListener("focus", handleFocus);
+
     return () => {
       isMounted = false;
+      window.removeEventListener("focus", handleFocus);
     };
   }, [currentPage]);
 
@@ -75,7 +102,16 @@ export const ActivityPage: React.FC = () => {
         setPagination(res.data.pagination);
       }
     } catch (err: unknown) {
-      setGlobalError(getApiErrorMessage(err));
+      setEvents([]);
+      setPagination({
+        page: 1,
+        limit: 20,
+        totalCount: 0,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      });
+      setGlobalError(formatActivityError(err));
     } finally {
       setIsLoading(false);
     }
@@ -156,6 +192,15 @@ export const ActivityPage: React.FC = () => {
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-12 w-full" />
+          </div>
+        ) : globalError ? (
+          <div className="py-10 px-4 text-center space-y-2">
+            <p className="text-xs text-[var(--color-bad)] font-mono font-medium">
+              Access Restricted
+            </p>
+            <p className="text-xs text-[var(--color-muted)] max-w-md mx-auto leading-relaxed">
+              {globalError}
+            </p>
           </div>
         ) : events.length === 0 ? (
           <p className="text-xs text-[var(--color-muted)] py-8 text-center">

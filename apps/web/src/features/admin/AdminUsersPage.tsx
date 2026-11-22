@@ -2,10 +2,11 @@ import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { adminApi, getApiErrorMessage } from "../../api/index.js";
 import { useAuthStore } from "../../stores/auth.store.js";
-import type {
-  AdminUserItem,
-  PaginationMeta,
-  RoleName,
+import {
+  ROLES,
+  type AdminUserItem,
+  type PaginationMeta,
+  type RoleName,
 } from "../../types/auth.types.js";
 import {
   Button,
@@ -19,6 +20,7 @@ import { formatDate } from "../../utils/formatters.js";
 
 export const AdminUsersPage: React.FC = () => {
   const currentAuthUser = useAuthStore((s) => s.user);
+  const isAdmin = currentAuthUser?.role === ROLES.ADMIN;
 
   const [searchParams, setSearchParams] = useSearchParams();
   const rawPage = parseInt(searchParams.get("page") || "1", 10);
@@ -43,6 +45,18 @@ export const AdminUsersPage: React.FC = () => {
   const [isUpdatingRole, setIsUpdatingRole] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
 
+  const formatDirectoryError = (err: unknown): string => {
+    const msg = getApiErrorMessage(err);
+    if (
+      msg.toLowerCase().includes("permission") ||
+      msg.toLowerCase().includes("access denied") ||
+      msg.toLowerCase().includes("forbidden")
+    ) {
+      return "Access Denied · Your role does not have permission to browse the organization directory (user.read). An administrator can configure role permissions in Role Governance.";
+    }
+    return msg;
+  };
+
   useEffect(() => {
     let isMounted = true;
 
@@ -56,7 +70,16 @@ export const AdminUsersPage: React.FC = () => {
         }
       } catch (err: unknown) {
         if (isMounted) {
-          setGlobalError(getApiErrorMessage(err));
+          setUsers([]);
+          setPagination({
+            page: 1,
+            limit: 20,
+            totalCount: 0,
+            totalPages: 1,
+            hasNextPage: false,
+            hasPreviousPage: false,
+          });
+          setGlobalError(formatDirectoryError(err));
         }
       } finally {
         if (isMounted) {
@@ -67,8 +90,14 @@ export const AdminUsersPage: React.FC = () => {
 
     void fetchUsers();
 
+    const handleFocus = () => {
+      void fetchUsers();
+    };
+    window.addEventListener("focus", handleFocus);
+
     return () => {
       isMounted = false;
+      window.removeEventListener("focus", handleFocus);
     };
   }, [currentPage]);
 
@@ -82,7 +111,16 @@ export const AdminUsersPage: React.FC = () => {
         setPagination(res.data.pagination);
       }
     } catch (err: unknown) {
-      setGlobalError(getApiErrorMessage(err));
+      setUsers([]);
+      setPagination({
+        page: 1,
+        limit: 20,
+        totalCount: 0,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      });
+      setGlobalError(formatDirectoryError(err));
     } finally {
       setIsLoading(false);
     }
@@ -136,7 +174,9 @@ export const AdminUsersPage: React.FC = () => {
             User Directory
           </h1>
           <p className="text-xs text-[var(--color-muted)] mt-0.5">
-            Manage provisioned user accounts and assign security roles
+            {isAdmin
+              ? "Manage provisioned user accounts and assign security roles"
+              : "Browse organization directory identities (granted via user.read permission)"}
           </p>
         </div>
 
@@ -203,6 +243,15 @@ export const AdminUsersPage: React.FC = () => {
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-12 w-full" />
+          </div>
+        ) : globalError ? (
+          <div className="py-10 px-4 text-center space-y-2">
+            <p className="text-xs text-[var(--color-bad)] font-mono font-medium">
+              Access Restricted
+            </p>
+            <p className="text-xs text-[var(--color-muted)] max-w-md mx-auto leading-relaxed">
+              {globalError}
+            </p>
           </div>
         ) : users.length === 0 ? (
           <p className="text-xs text-[var(--color-muted)] py-8 text-center">
@@ -279,14 +328,20 @@ export const AdminUsersPage: React.FC = () => {
                         {formatDate(u.createdAt)}
                       </td>
                       <td className="py-3 px-3 text-right">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          className="text-xs h-7 px-2.5"
-                          onClick={() => handleOpenRoleModal(u)}
-                        >
-                          Change Role
-                        </Button>
+                        {isAdmin ? (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="text-xs h-7 px-2.5"
+                            onClick={() => handleOpenRoleModal(u)}
+                          >
+                            Change Role
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-[var(--color-muted)] font-mono">
+                            View Only
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );
