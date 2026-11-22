@@ -150,6 +150,38 @@ describe("MFA Lifecycle Integration (Setup, Login, Recovery, Disable)", () => {
       });
     });
 
+    it("records single LOGIN_FAILED event when MFA code verification fails (no premature login success)", async () => {
+      const { user, password } = await createMfaUser();
+      const loginResult = await authService.login(
+        { email: user.email, password },
+        "127.0.0.1",
+      );
+      if (!loginResult.mfaRequired) throw new Error("Expected MFA");
+
+      // Verify no login success was logged prior to MFA fulfillment
+      const preMfaEvents = await prisma.securityEvent.findMany({
+        where: { userId: user.id },
+      });
+      expect(preMfaEvents.filter((e) => e.type === "LOGIN_SUCCESS")).toHaveLength(0);
+
+      // Submit invalid code
+      await expect(
+        authService.mfaVerifyLogin(
+          { mfaToken: loginResult.mfaToken, code: "000000" },
+          "127.0.0.1",
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+      });
+
+      // Verify activity ledger contains only the LOGIN_FAILED event
+      const postMfaEvents = await prisma.securityEvent.findMany({
+        where: { userId: user.id },
+      });
+      expect(postMfaEvents).toHaveLength(1);
+      expect(postMfaEvents[0].type).toBe("LOGIN_FAILED");
+    });
+
     it("regenerates 10 new recovery codes and invalidates old ones", async () => {
       const {
         user,

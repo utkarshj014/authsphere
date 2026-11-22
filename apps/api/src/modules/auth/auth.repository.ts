@@ -1,7 +1,11 @@
 import { prisma } from "../../lib/prisma.js";
 import { Prisma, type OAuthProvider } from "../../generated/prisma/client.js";
 import { AppError } from "../../common/errors/index.js";
-import type { RoleName, SecurityEventTypeName } from "@authsphere/shared";
+import {
+  SECURITY_EVENT_TYPES,
+  type RoleName,
+  type SecurityEventTypeName,
+} from "@authsphere/shared";
 
 const findUserByEmail = (email: string) =>
   prisma.user.findUnique({ where: { email } });
@@ -286,11 +290,16 @@ const enableMfaAndSaveRecoveryCodes = (
     },
   });
 
-const createMfaChallenge = (userId: string, expiresAt: Date) =>
+const createMfaChallenge = (
+  userId: string,
+  expiresAt: Date,
+  type: SecurityEventTypeName = SECURITY_EVENT_TYPES.LOGIN_SUCCESS,
+) =>
   prisma.mfaChallenge.create({
     data: {
       userId,
       expiresAt,
+      type,
     },
   });
 

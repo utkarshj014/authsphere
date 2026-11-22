@@ -342,6 +342,7 @@ const login = async (
     const challenge = await authRepository.createMfaChallenge(
       user.id,
       challengeExpiresAt,
+      SECURITY_EVENT_TYPES.LOGIN_SUCCESS,
     );
 
     return {
@@ -758,7 +759,7 @@ const mfaVerifyLogin = async (
     throw new AppError("Invalid or expired MFA challenge", 400);
   }
 
-  const { user } = challenge;
+  const { user, type: challengeType } = challenge;
 
   let verificationResult: { usedRecoveryCode: boolean };
   try {
@@ -777,6 +778,7 @@ const mfaVerifyLogin = async (
       {
         reason:
           error instanceof AppError ? error.message : "MFA_CHALLENGE_FAILED",
+        attemptedAction: challengeType,
       },
     );
     throw error;
@@ -798,15 +800,10 @@ const mfaVerifyLogin = async (
     userAgent,
   );
 
-  await recordSecurityEvent(
-    user.id,
-    SECURITY_EVENT_TYPES.LOGIN_SUCCESS,
-    ipAddress,
-    userAgent,
-    {
-      usedRecoveryCode: verificationResult.usedRecoveryCode,
-    },
-  );
+  await recordSecurityEvent(user.id, challengeType, ipAddress, userAgent, {
+    mfaVerified: true,
+    usedRecoveryCode: verificationResult.usedRecoveryCode,
+  });
 
   if (remainingRecoveryCodes !== undefined && remainingRecoveryCodes <= 2) {
     return {
@@ -920,14 +917,7 @@ const verifyMagicLink = async (
     const challenge = await authRepository.createMfaChallenge(
       user.id,
       challengeExpiresAt,
-    );
-
-    await recordSecurityEvent(
-      user.id,
       SECURITY_EVENT_TYPES.MAGIC_LINK_LOGIN,
-      ipAddress,
-      userAgent,
-      { mfaRequired: true },
     );
 
     return {

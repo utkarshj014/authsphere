@@ -278,19 +278,13 @@ export const handleOAuthCallback = async (
   }
 
   // 4. If user has MFA enabled (and not an in-session account linking flow)
+  // Do NOT record premature event; challenge entity stores OAUTH_LOGIN so mfaVerifyLogin logs it upon fulfillment.
   if (userToAuthenticate.mfaEnabled && !stateData.userId) {
     const challengeExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
     const challenge = await authRepository.createMfaChallenge(
       userToAuthenticate.id,
       challengeExpiresAt,
-    );
-
-    await recordSecurityEvent(
-      userToAuthenticate.id,
       SECURITY_EVENT_TYPES.OAUTH_LOGIN,
-      ipAddress,
-      userAgent,
-      { provider, mfaRequired: true },
     );
 
     return {

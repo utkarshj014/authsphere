@@ -1,12 +1,14 @@
 /// <reference path="../../../src/types/express.d.ts" />
 
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { generateSync } from "otplib";
 import {
   createOAuthState,
   consumeOAuthState,
   initiateOAuth,
   handleOAuthCallback,
 } from "../../../src/modules/auth/oauth/oauth.service.js";
+import { authService } from "../../../src/modules/auth/auth.service.js";
 import { googleOAuthProvider } from "../../../src/modules/auth/oauth/google.provider.js";
 import {
   prisma,
@@ -125,7 +127,7 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
   });
 
   it("handleOAuthCallback triggers MFA challenge when user has MFA enabled", async () => {
-    const { user } = await createMfaUser();
+    const { user, rawSecret } = await createMfaUser();
     const providerId = `google-mfa-${Date.now()}`;
 
     await prisma.oAuthAccount.create({
@@ -154,14 +156,38 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
     );
 
     expect(result.mfaRequired).toBe(true);
-    if (result.mfaRequired && "mfaToken" in result) {
-      expect(result.mfaToken).toBeDefined();
-      const challenge = await prisma.mfaChallenge.findUnique({
-        where: { id: result.mfaToken },
-      });
-      expect(challenge).toBeDefined();
-      expect(challenge?.userId).toBe(user.id);
+    if (!result.mfaRequired || !("mfaToken" in result)) {
+      throw new Error("Expected MFA challenge token");
     }
+
+    const challenge = await prisma.mfaChallenge.findUnique({
+      where: { id: result.mfaToken },
+    });
+    expect(challenge).toBeDefined();
+    expect(challenge?.userId).toBe(user.id);
+
+    // 1. Verify no premature OAUTH_LOGIN event was recorded prior to completing MFA
+    const preMfaEvents = await prisma.securityEvent.findMany({
+      where: { userId: user.id },
+    });
+    expect(preMfaEvents.filter((e) => e.type === "OAUTH_LOGIN")).toHaveLength(
+      0,
+    );
+
+    // 2. Fulfill challenge with valid TOTP code
+    const validCode = generateSync({ secret: rawSecret });
+    const verifyResult = await authService.mfaVerifyLogin(
+      { mfaToken: result.mfaToken, code: validCode },
+      "127.0.0.1",
+    );
+    expect(verifyResult.tokens.accessToken).toBeDefined();
+
+    // 3. Verify original action 'OAUTH_LOGIN' is preserved upon fulfilling MFA
+    const postMfaEvents = await prisma.securityEvent.findMany({
+      where: { userId: user.id },
+    });
+    expect(postMfaEvents).toHaveLength(1);
+    expect(postMfaEvents[0].type).toBe("OAUTH_LOGIN");
   });
 
   it("handleOAuthCallback links OAuth account when user is authenticated (explicit linking)", async () => {
