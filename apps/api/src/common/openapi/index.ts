@@ -1,4 +1,9 @@
-import { Router } from "express";
+import {
+  Router,
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
 import helmet from "helmet";
 import swaggerUi from "swagger-ui-express";
 import { OpenApiGeneratorV31 } from "@asteasolutions/zod-to-openapi";
@@ -90,8 +95,9 @@ export function getOpenApiDocument(): OpenAPIObject {
 
 const router = Router();
 
-// Serve raw OpenAPI JSON document
+// Serve raw OpenAPI JSON document with conditional revalidation
 router.get("/openapi.json", (_req, res) => {
+  res.setHeader("Cache-Control", "no-cache");
   return res.json(getOpenApiDocument());
 });
 
@@ -118,10 +124,14 @@ router.get("/docs", (req, res, next) => {
   next();
 });
 
-// Serve Swagger UI
+// Serve Swagger UI with conditional revalidation
 router.use(
   "/docs",
   swaggerCsp,
+  (_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader("Cache-Control", "no-cache");
+    next();
+  },
   swaggerUi.serve,
   swaggerUi.setup(getOpenApiDocument()),
 );

@@ -37,6 +37,12 @@ app.use(
   }),
 );
 
+// Global non-cacheable baseline for all API endpoints
+app.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
 app.use(
   cors({
     origin: env.FRONTEND_URL,
