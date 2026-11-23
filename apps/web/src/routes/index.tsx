@@ -8,7 +8,6 @@ import { AuthGuard } from "./guards/AuthGuard.js";
 import { GuestGuard } from "./guards/GuestGuard.js";
 import { RoleGuard } from "./guards/RoleGuard.js";
 import { RootErrorBoundary } from "./guards/RootErrorBoundary.js";
-import { RootRedirect } from "./guards/RootRedirect.js";
 import { ROLES, PERMISSIONS } from "../types/auth.types.js";
 
 // Lazy-Loaded Feature Pages (Code-split chunks)
@@ -78,6 +77,16 @@ const NotFoundPage = lazy(() =>
     default: m.NotFoundPage,
   })),
 );
+const HomePage = lazy(() =>
+  import("../features/public/HomePage.js").then((m) => ({
+    default: m.HomePage,
+  })),
+);
+const PrivacyPolicyPage = lazy(() =>
+  import("../features/public/PrivacyPolicyPage.js").then((m) => ({
+    default: m.PrivacyPolicyPage,
+  })),
+);
 
 const router = createBrowserRouter([
   {
@@ -86,7 +95,19 @@ const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <RootRedirect />,
+        element: (
+          <Suspense fallback={<div className="min-h-screen bg-paper" />}>
+            <HomePage />
+          </Suspense>
+        ),
+      },
+      {
+        path: "privacy",
+        element: (
+          <Suspense fallback={<div className="min-h-screen bg-paper" />}>
+            <PrivacyPolicyPage />
+          </Suspense>
+        ),
       },
       // Public / Guest Routes
       {

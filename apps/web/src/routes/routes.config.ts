@@ -5,6 +5,7 @@
 
 export const ROUTES = {
   ROOT: "/",
+  PRIVACY: "/privacy",
   LOGIN: "/login",
   REGISTER: "/register",
   FORGOT_PASSWORD: "/forgot-password",
@@ -36,6 +37,7 @@ export const DOCS_URLS = {
  */
 export const PUBLIC_AUTH_ROUTES: readonly string[] = [
   ROUTES.ROOT,
+  ROUTES.PRIVACY,
   ROUTES.LOGIN,
   ROUTES.REGISTER,
   ROUTES.FORGOT_PASSWORD,

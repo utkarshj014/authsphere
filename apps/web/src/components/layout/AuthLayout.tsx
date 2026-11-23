@@ -58,27 +58,35 @@ export const AuthLayout: React.FC = () => {
 
       {/* Footer Notices */}
       <footer className="w-full max-w-md mx-auto py-4 text-center space-y-2">
-        <div className="flex items-center justify-center gap-3 text-xs font-mono text-muted">
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-2xs sm:text-xs font-mono text-muted">
+          <Link
+            to={ROUTES.PRIVACY}
+            className="hover:text-ink transition-colors"
+          >
+            Privacy Policy
+          </Link>
           <a
             href={DOCS_URLS.SWAGGER}
             target="_blank"
             rel="noopener noreferrer"
-            className="hover:text-accent transition-colors"
+            className="hover:text-ink transition-colors"
           >
-            API Reference ↗
+            API Reference
           </a>
-          <span className="text-rule-2">·</span>
           <a
             href={DOCS_URLS.OPENAPI}
             target="_blank"
             rel="noopener noreferrer"
-            className="hover:text-accent transition-colors"
+            className="hover:text-ink transition-colors"
           >
-            OpenAPI Spec ↗
+            OpenAPI Spec
           </a>
+          <Link to={ROUTES.ROOT} className="hover:text-ink transition-colors">
+            Home
+          </Link>
         </div>
         <p className="text-2xs text-muted/80">
-          Secured by HttpOnly session tokens &amp; Argon2id hashing.
+          Secured by HttpOnly session tokens
         </p>
       </footer>
     </div>
