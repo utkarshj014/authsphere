@@ -6,6 +6,7 @@ import {
   googleCallback,
   githubInitiate,
   githubCallback,
+  unlinkOAuthHandler,
 } from "./oauth/oauth.controller.js";
 import { validate, ValidationTarget } from "../../middlewares/validate.js";
 import { auth, optionalAuth } from "../../middlewares/auth.js";
@@ -40,6 +41,13 @@ router
     "/oauth/github/callback",
     rateLimiter(RATE_LIMIT_POLICIES.OAUTH_CALLBACK),
     githubCallback,
+  )
+  .delete(
+    "/oauth/:provider",
+    auth,
+    rateLimiter(RATE_LIMIT_POLICIES.OAUTH_UNLINK),
+    validate(authRequestSchema.oauthProviderParam, ValidationTarget.PARAMS),
+    unlinkOAuthHandler,
   )
   .post(
     "/signup",

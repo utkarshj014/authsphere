@@ -505,6 +505,16 @@ const createOAuthAccount = async (
   }
 };
 
+const deleteOAuthAccount = (userId: string, provider: OAuthProvider) =>
+  prisma.oAuthAccount.delete({
+    where: {
+      userId_provider: {
+        userId,
+        provider,
+      },
+    },
+  });
+
 const createMagicLinkToken = (
   tokenHash: string,
   userId: string,
@@ -632,6 +642,7 @@ export const authRepository = {
   findOAuthAccount,
   createUserWithOAuthAccount,
   createOAuthAccount,
+  deleteOAuthAccount,
   createMagicLinkToken,
   findMagicLinkTokenWithUser,
   consumeMagicLinkToken,

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import QRCode from "qrcode";
@@ -21,11 +21,34 @@ import {
 
 export const SecurityPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user, bootstrapAuth, clearAuthUser } = useAuthStore();
 
   // Status & Notifications
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [globalSuccess, setGlobalSuccess] = useState<string | null>(null);
+
+  // Handle URL query parameters from OAuth redirects (?linked=... or ?error=...)
+  useEffect(() => {
+    const errorParam = searchParams.get("error");
+    const linkedParam = searchParams.get("linked");
+
+    if (errorParam) {
+      setGlobalError(errorParam);
+      navigate(ROUTES.APP.SECURITY, { replace: true });
+    } else if (linkedParam) {
+      const formatted =
+        linkedParam.charAt(0).toUpperCase() +
+        linkedParam.slice(1).toLowerCase();
+      setGlobalSuccess(`${formatted} account connected successfully.`);
+      navigate(ROUTES.APP.SECURITY, { replace: true });
+    }
+  }, [searchParams, navigate]);
+
+  // OAuth Unlink State
+  const [unlinkingProvider, setUnlinkingProvider] = useState<string | null>(
+    null,
+  );
 
   // 2FA Setup State
   const [isSetupModalOpen, setIsSetupModalOpen] = useState(false);
@@ -98,6 +121,24 @@ export const SecurityPage: React.FC = () => {
   } = useForm<ChangePasswordFormData>({
     resolver: zodResolver(changePasswordSchema),
   });
+
+  // Disconnect OAuth Provider
+  const handleUnlinkOAuth = async (provider: string) => {
+    setUnlinkingProvider(provider);
+    setGlobalError(null);
+    setGlobalSuccess(null);
+    try {
+      await authApi.unlinkOAuth(provider);
+      await bootstrapAuth();
+      const formatted =
+        provider.charAt(0).toUpperCase() + provider.slice(1).toLowerCase();
+      setGlobalSuccess(`${formatted} account disconnected successfully.`);
+    } catch (err: unknown) {
+      setGlobalError(getApiErrorMessage(err));
+    } finally {
+      setUnlinkingProvider(null);
+    }
+  };
 
   // Initiate 2FA Enrollment
   const handleStartSetup = async () => {
@@ -495,11 +536,24 @@ export const SecurityPage: React.FC = () => {
               </div>
 
               {user?.oauthProviders?.includes(OAUTH_PROVIDERS.GOOGLE) ? (
-                <Badge variant="ok" size="sm" isMono>
-                  CONNECTED
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="ok" size="sm" isMono>
+                    CONNECTED
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    isLoading={unlinkingProvider === OAUTH_PROVIDERS.GOOGLE}
+                    disabled={unlinkingProvider !== null}
+                    onClick={() => handleUnlinkOAuth(OAUTH_PROVIDERS.GOOGLE)}
+                  >
+                    Disconnect
+                  </Button>
+                </div>
               ) : (
-                <a href={OAUTH_URLS.GOOGLE}>
+                <a
+                  href={`${OAUTH_URLS.GOOGLE}?returnTo=${encodeURIComponent(ROUTES.APP.SECURITY)}`}
+                >
                   <Button variant="secondary" size="sm">
                     Connect
                   </Button>
@@ -530,11 +584,24 @@ export const SecurityPage: React.FC = () => {
               </div>
 
               {user?.oauthProviders?.includes(OAUTH_PROVIDERS.GITHUB) ? (
-                <Badge variant="ok" size="sm" isMono>
-                  CONNECTED
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="ok" size="sm" isMono>
+                    CONNECTED
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    isLoading={unlinkingProvider === OAUTH_PROVIDERS.GITHUB}
+                    disabled={unlinkingProvider !== null}
+                    onClick={() => handleUnlinkOAuth(OAUTH_PROVIDERS.GITHUB)}
+                  >
+                    Disconnect
+                  </Button>
+                </div>
               ) : (
-                <a href={OAUTH_URLS.GITHUB}>
+                <a
+                  href={`${OAUTH_URLS.GITHUB}?returnTo=${encodeURIComponent(ROUTES.APP.SECURITY)}`}
+                >
                   <Button variant="secondary" size="sm">
                     Connect
                   </Button>

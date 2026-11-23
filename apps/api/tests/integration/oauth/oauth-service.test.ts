@@ -7,9 +7,11 @@ import {
   consumeOAuthState,
   initiateOAuth,
   handleOAuthCallback,
+  unlinkOAuthAccount,
 } from "../../../src/modules/auth/oauth/oauth.service.js";
 import { authService } from "../../../src/modules/auth/auth.service.js";
 import { googleOAuthProvider } from "../../../src/modules/auth/oauth/google.provider.js";
+import { redis } from "../../../src/lib/redis.js";
 import {
   prisma,
   createVerifiedUser,
@@ -39,6 +41,17 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
     });
   });
 
+  it("createOAuthState preserves returnTo in state and consumeOAuthState retrieves it", async () => {
+    const state = await createOAuthState(
+      "GOOGLE",
+      undefined,
+      undefined,
+      "/app/security",
+    );
+    const consumed = await consumeOAuthState(state, "GOOGLE");
+    expect(consumed.returnTo).toBe("/app/security");
+  });
+
   it("consumeOAuthState throws 400 on provider mismatch", async () => {
     const state = await createOAuthState("GOOGLE");
 
@@ -46,6 +59,33 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
       statusCode: 400,
       message: "OAuth state provider mismatch",
     });
+  });
+
+  it("createOAuthState and consumeOAuthState throw 503 when Redis is not ready", async () => {
+    const originalStatus = redis.status;
+    Object.defineProperty(redis, "status", {
+      value: "end",
+      configurable: true,
+    });
+
+    try {
+      await expect(createOAuthState("GOOGLE")).rejects.toMatchObject({
+        statusCode: 503,
+        message: "Authentication service is temporarily unavailable",
+      });
+
+      await expect(
+        consumeOAuthState("mock-state", "GOOGLE"),
+      ).rejects.toMatchObject({
+        statusCode: 503,
+        message: "Authentication service is temporarily unavailable",
+      });
+    } finally {
+      Object.defineProperty(redis, "status", {
+        value: originalStatus,
+        configurable: true,
+      });
+    }
   });
 
   it("initiateOAuth returns authorization URL containing state parameter for Google and GitHub", async () => {
@@ -313,6 +353,85 @@ describe("OAuth Service Integration (State & Identity Resolution)", () => {
     ).rejects.toMatchObject({
       statusCode: 409,
       message: "This OAuth account is already linked to another user",
+    });
+  });
+
+  describe("unlinkOAuthAccount", () => {
+    it("successfully disconnects an OAuth provider when user has a password set", async () => {
+      const { user } = await createVerifiedUser();
+      await prisma.oAuthAccount.create({
+        data: {
+          userId: user.id,
+          provider: "GOOGLE",
+          providerId: `google-user-${Date.now()}`,
+        },
+      });
+
+      await unlinkOAuthAccount(user.id, "GOOGLE");
+
+      const remaining = await prisma.oAuthAccount.findMany({
+        where: { userId: user.id },
+      });
+      expect(remaining).toHaveLength(0);
+    });
+
+    it("successfully disconnects an OAuth provider when user has another OAuth provider linked", async () => {
+      const { user } = await createOAuthUser("GOOGLE");
+      await prisma.oAuthAccount.create({
+        data: {
+          userId: user.id,
+          provider: "GITHUB",
+          providerId: `github-user-${Date.now()}`,
+        },
+      });
+
+      await unlinkOAuthAccount(user.id, "google");
+
+      const remaining = await prisma.oAuthAccount.findMany({
+        where: { userId: user.id },
+      });
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].provider).toBe("GITHUB");
+    });
+
+    it("enforces Zero-Orphan Invariant: throws 400 when attempting to disconnect only login method", async () => {
+      const { user } = await createOAuthUser("GOOGLE");
+
+      await expect(unlinkOAuthAccount(user.id, "GOOGLE")).rejects.toMatchObject(
+        {
+          statusCode: 400,
+          message: expect.stringContaining(
+            "Cannot disconnect your only sign-in method",
+          ),
+        },
+      );
+
+      const accounts = await prisma.oAuthAccount.findMany({
+        where: { userId: user.id },
+      });
+      expect(accounts).toHaveLength(1);
+    });
+
+    it("throws 404 if provider is not linked to user", async () => {
+      const { user } = await createVerifiedUser();
+
+      await expect(unlinkOAuthAccount(user.id, "GITHUB")).rejects.toMatchObject(
+        {
+          statusCode: 404,
+          message: expect.stringContaining("No linked Github account found"),
+        },
+      );
+    });
+
+    it("throws 400 if provider is invalid / unsupported", async () => {
+      const { user } = await createVerifiedUser();
+
+      await expect(
+        unlinkOAuthAccount(user.id, "FACEBOOK"),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringContaining("not supported"),
+      });
     });
   });
 });

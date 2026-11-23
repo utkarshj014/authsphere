@@ -8,6 +8,7 @@ import {
 } from "@authsphere/shared";
 import type { OAuthProvider } from "../../../generated/prisma/client.js";
 import { redis } from "../../../lib/redis.js";
+import { logger } from "../../../lib/logger.js";
 import { AppError } from "../../../common/errors/index.js";
 import { authRepository } from "../auth.repository.js";
 import {
@@ -50,7 +51,15 @@ export const createOAuthState = async (
   provider: OAuthProviderName,
   userId?: string,
   sessionId?: string,
+  returnTo?: string,
 ): Promise<string> => {
+  if (redis.status !== "ready") {
+    throw new AppError(
+      "Authentication service is temporarily unavailable",
+      503,
+    );
+  }
+
   const state = crypto.randomBytes(32).toString("hex");
   const key = `${OAUTH_STATE_PREFIX}${state}`;
 
@@ -58,9 +67,23 @@ export const createOAuthState = async (
     provider,
     ...(userId && { userId }),
     ...(sessionId && { sessionId }),
+    ...(returnTo && { returnTo }),
   };
 
-  await redis.set(key, JSON.stringify(payload), "EX", OAUTH_STATE_TTL_SECONDS);
+  try {
+    await redis.set(
+      key,
+      JSON.stringify(payload),
+      "EX",
+      OAUTH_STATE_TTL_SECONDS,
+    );
+  } catch (err) {
+    logger.error({ err, key }, "Failed storing OAuth state in Redis");
+    throw new AppError(
+      "Authentication service is temporarily unavailable",
+      503,
+    );
+  }
 
   return state;
 };
@@ -73,14 +96,30 @@ export const consumeOAuthState = async (
   state: string,
   expectedProvider: OAuthProviderName,
 ): Promise<OAuthStateData> => {
+  if (redis.status !== "ready") {
+    throw new AppError(
+      "Authentication service is temporarily unavailable",
+      503,
+    );
+  }
+
   if (!state || typeof state !== "string" || state.trim().length === 0) {
     throw new AppError("Invalid or missing OAuth state parameter", 400);
   }
 
   const key = `${OAUTH_STATE_PREFIX}${state}`;
 
-  // Atomic fetch & delete to prevent replay attacks
-  const rawData = await redis.getdel(key);
+  let rawData: string | null = null;
+  try {
+    // Atomic fetch & delete to prevent replay attacks
+    rawData = await redis.getdel(key);
+  } catch (err) {
+    logger.error({ err, key }, "Failed consuming OAuth state from Redis");
+    throw new AppError(
+      "Authentication service is temporarily unavailable",
+      503,
+    );
+  }
 
   if (!rawData) {
     throw new AppError(
@@ -111,8 +150,9 @@ export const initiateOAuth = async (
   userId?: string,
   sessionId?: string,
   codeChallenge?: string,
+  returnTo?: string,
 ): Promise<{ redirectUrl: string; state: string }> => {
-  const state = await createOAuthState(provider, userId, sessionId);
+  const state = await createOAuthState(provider, userId, sessionId, returnTo);
   const strategy = getOAuthStrategy(provider);
   const authUrl = await strategy.getAuthorizationUrl(state, codeChallenge);
 
@@ -120,8 +160,18 @@ export const initiateOAuth = async (
 };
 
 export type OAuthCallbackResult =
-  | { mfaRequired: false; tokens: AuthTokens; isLinked: boolean }
-  | { mfaRequired: true; mfaToken: string; isLinked: false };
+  | {
+      mfaRequired: false;
+      tokens: AuthTokens;
+      isLinked: boolean;
+      returnTo?: string | undefined;
+    }
+  | {
+      mfaRequired: true;
+      mfaToken: string;
+      isLinked: false;
+      returnTo?: string | undefined;
+    };
 
 /**
  * Handles the OAuth 2.0 callback: verifies state, exchanges authorization code for provider profile,
@@ -130,7 +180,7 @@ export type OAuthCallbackResult =
 export const handleOAuthCallback = async (
   provider: OAuthProviderName,
   code: string,
-  state: string,
+  state: string | OAuthStateData,
   ipAddress: string,
   userAgent?: string,
   codeVerifier?: string,
@@ -139,8 +189,11 @@ export const handleOAuthCallback = async (
     throw new AppError("Missing or invalid authorization code", 400);
   }
 
-  // 1. Atomically consume & verify state parameter from Redis
-  const stateData = await consumeOAuthState(state, provider);
+  // 1. Atomically consume & verify state parameter from Redis (or accept pre-consumed stateData)
+  const stateData =
+    typeof state === "string"
+      ? await consumeOAuthState(state, provider)
+      : state;
 
   // 2. Fetch normalized profile from provider strategy with a shared 7-second abort deadline
   const strategy = getOAuthStrategy(provider);
@@ -291,6 +344,7 @@ export const handleOAuthCallback = async (
       mfaRequired: true,
       mfaToken: challenge.id,
       isLinked: false,
+      returnTo: stateData.returnTo,
     };
   }
 
@@ -314,5 +368,45 @@ export const handleOAuthCallback = async (
     mfaRequired: false,
     tokens,
     isLinked: Boolean(stateData.userId),
+    returnTo: stateData.returnTo,
   };
+};
+
+/**
+ * Unlinks a third-party OAuth provider from the authenticated user's account.
+ * Enforces the Zero-Orphan Security Invariant: users cannot disconnect their
+ * only authentication method (no password and only 1 OAuth account).
+ */
+export const unlinkOAuthAccount = async (
+  userId: string,
+  providerInput: string,
+): Promise<void> => {
+  const provider = providerInput.toUpperCase() as OAuthProviderName;
+  if (!Object.values(OAUTH_PROVIDERS).includes(provider)) {
+    throw new AppError(`OAuth provider ${providerInput} is not supported`, 400);
+  }
+
+  const user = await authRepository.findUserById(userId);
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  const isLinked = user.oauthAccounts.some((acc) => acc.provider === provider);
+  if (!isLinked) {
+    throw new AppError(
+      `No linked ${provider.charAt(0) + provider.slice(1).toLowerCase()} account found`,
+      404,
+    );
+  }
+
+  // Zero-Orphan Security Invariant:
+  // Cannot disconnect only login method (no password and only 1 OAuth account)
+  if (!user.passwordHash && user.oauthAccounts.length <= 1) {
+    throw new AppError(
+      "Cannot disconnect your only sign-in method. Please set a password or connect another provider first.",
+      400,
+    );
+  }
+
+  await authRepository.deleteOAuthAccount(userId, provider as OAuthProvider);
 };

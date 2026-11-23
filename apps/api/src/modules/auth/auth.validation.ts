@@ -94,6 +94,10 @@ export const authRequestSchema = {
     code: z.string().trim().min(1),
     state: z.string().trim().min(1),
   }),
+
+  oauthProviderParam: z.object({
+    provider: z.enum(["google", "github", "GOOGLE", "GITHUB"]),
+  }),
 };
 
 export const authResponseSchema = {

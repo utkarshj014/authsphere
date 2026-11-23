@@ -6,6 +6,9 @@ import {
   getLastSentForgotPasswordEmail,
   getAuthCookies,
   formatCookieHeader,
+  prisma,
+  createVerifiedUser,
+  createOAuthUser,
 } from "../helpers/index.js";
 import { generateSync } from "otplib";
 import { googleOAuthProvider } from "../../src/modules/auth/oauth/google.provider.js";
@@ -347,5 +350,58 @@ describe("E2E Journey — Auth Lifecycles", () => {
       .set("Cookie", cookie2Val);
     expect(tab2Callback.status).toBe(302);
     expect(tab2Callback.headers.location).toBe("http://localhost:5173/app");
+  });
+
+  it("Journey 6: OAuth Unlink / Disconnect — Enforce Zero-Orphan Invariant & Clean Disconnect", async () => {
+    // 1. Unauthenticated request fails with 401
+    const unauthedRes = await request(app).delete("/auth/oauth/google");
+    expect(unauthedRes.status).toBe(401);
+
+    // 2. User with password and linked Google OAuth logs in and disconnects Google
+    const { user: pwdUser, password: userPassword } =
+      await createVerifiedUser();
+    await prisma.oAuthAccount.create({
+      data: {
+        userId: pwdUser.id,
+        provider: "GOOGLE",
+        providerId: `google-user-${Date.now()}`,
+      },
+    });
+
+    const loginRes = await request(app)
+      .post("/auth/login")
+      .send({ email: pwdUser.email, password: userPassword });
+    expect(loginRes.status).toBe(200);
+
+    const cookies = getAuthCookies(loginRes);
+    const cookieHeader = formatCookieHeader(cookies);
+
+    // Verify Google is currently linked
+    const meBefore = await request(app)
+      .get("/auth/me")
+      .set("Cookie", cookieHeader);
+    expect(meBefore.status).toBe(200);
+    expect(meBefore.body.data.oauthProviders).toContain("GOOGLE");
+
+    // Disconnect Google
+    const unlinkRes = await request(app)
+      .delete("/auth/oauth/google")
+      .set("Cookie", cookieHeader);
+    expect(unlinkRes.status).toBe(200);
+    expect(unlinkRes.body.success).toBe(true);
+    expect(unlinkRes.body.message).toContain("Google account disconnected");
+
+    // Verify Google is no longer linked on /auth/me
+    const meAfter = await request(app)
+      .get("/auth/me")
+      .set("Cookie", cookieHeader);
+    expect(meAfter.status).toBe(200);
+    expect(meAfter.body.data.oauthProviders).not.toContain("GOOGLE");
+
+    // Subsequent unlink of unlinked provider returns 404
+    const notFoundRes = await request(app)
+      .delete("/auth/oauth/google")
+      .set("Cookie", cookieHeader);
+    expect(notFoundRes.status).toBe(404);
   });
 });

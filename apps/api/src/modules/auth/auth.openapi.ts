@@ -505,3 +505,23 @@ registry.registerPath({
     500: standardErrors[500],
   },
 });
+
+// ─── DELETE /auth/oauth/{provider} ─────────────────────────────────
+
+registry.registerPath({
+  method: "delete",
+  path: "/auth/oauth/{provider}",
+  tags: ["OAuth"],
+  summary: "Disconnect an OAuth social provider",
+  description:
+    "Disconnects a linked OAuth provider from the authenticated user. Fails if this is the user's only sign-in method (no password set and no other OAuth providers).",
+  security: cookieSecurity,
+  request: {
+    params: authRequestSchema.oauthProviderParam,
+  },
+  responses: {
+    200: messageResponse("OAuth account disconnected successfully"),
+    404: errorResponse("No linked account found for the specified provider"),
+    ...authedErrors,
+  },
+});

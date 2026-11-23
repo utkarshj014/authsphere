@@ -124,6 +124,12 @@ export const RATE_LIMIT_POLICIES = {
     windowMs: 15 * 60 * 1000,
     keyType: "user",
   },
+  OAUTH_UNLINK: {
+    name: "auth-oauth-unlink",
+    limit: 10,
+    windowMs: 15 * 60 * 1000,
+    keyType: "user",
+  },
 
   // OAuth 2.0 Social Logins
   OAUTH_INITIATE: {

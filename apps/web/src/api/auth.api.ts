@@ -114,4 +114,11 @@ export const authApi = {
       await apiClient.post<ApiSuccessResponse<null>>("/auth/logout-all");
     return res.data;
   },
+
+  unlinkOAuth: async (provider: string) => {
+    const res = await apiClient.delete<ApiSuccessResponse<null>>(
+      `/auth/oauth/${provider.toLowerCase()}`,
+    );
+    return res.data;
+  },
 };
