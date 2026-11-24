@@ -29,7 +29,10 @@ vi.mock("../src/modules/email/email.queue.js", async () => {
 });
 
 function isUnitTestSuite(): boolean {
-  const filepath = expect.getState().testPath || "";
+  const filepath =
+    expect.getState().testPath ||
+    (globalThis as any).__vitest_worker__?.filepath ||
+    "";
   return /[/\\]unit[/\\]/.test(filepath);
 }
 

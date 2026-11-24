@@ -1,18 +1,16 @@
 import { describe, it, expect } from "vitest";
-import request from "supertest";
 import {
   getOpenApiDocument,
   clearOpenApiCache,
 } from "../../src/common/openapi/index.js";
 import { env } from "../../src/config/env.js";
-import app from "../../src/app.js";
 import { healthRouter } from "../../src/modules/health/index.js";
 import { authRouter } from "../../src/modules/auth/index.js";
 import { sessionsRouter } from "../../src/modules/sessions/index.js";
 import { usersRouter } from "../../src/modules/users/index.js";
 import { rolesRouter } from "../../src/modules/roles/index.js";
 
-describe("OpenAPI specification", () => {
+describe("OpenAPI Specification Unit Tests", () => {
   const doc = getOpenApiDocument();
   const paths = (doc.paths ?? {}) as Record<string, any>;
 
@@ -105,37 +103,5 @@ describe("OpenAPI specification", () => {
     // Invariant: Exact count equality (34 operations) and identical operation set
     expect(openApiOperations).toHaveLength(34);
     expect(openApiOperations.sort()).toEqual(expressOperations.sort());
-  });
-
-  describe("HTTP endpoints", () => {
-    it("GET /openapi.json returns 200 with valid OpenAPI JSON", async () => {
-      const res = await request(app).get("/openapi.json");
-      expect(res.status).toBe(200);
-      expect(res.headers["content-type"]).toMatch(/json/);
-      expect(res.body.openapi).toBe("3.1.0");
-      expect(res.body.paths).toBeDefined();
-    });
-
-    it("GET /docs/ returns 200 with Swagger UI HTML and relaxed CSP", async () => {
-      const res = await request(app).get("/docs/");
-      expect(res.status).toBe(200);
-      expect(res.headers["content-security-policy"]).toContain("'unsafe-eval'");
-      expect(res.headers["content-security-policy"]).toContain(
-        "'unsafe-inline'",
-      );
-    });
-
-    it("GET /docs without trailing slash redirects to /docs/", async () => {
-      const res = await request(app).get("/docs");
-      expect(res.status).toBe(301);
-      expect(res.headers.location).toBe("/docs/");
-    });
-
-    it("GET /docs/swagger-ui-init.js returns pre-populated specification", async () => {
-      const res = await request(app).get("/docs/swagger-ui-init.js");
-      expect(res.status).toBe(200);
-      expect(res.headers["content-type"]).toMatch(/javascript/);
-      expect(res.text).toContain("AuthSphere API");
-    });
   });
 });

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { SignJWT } from "jose";
 import {
   signAccessToken,
   verifyAccessToken,
@@ -20,40 +21,35 @@ import {
   decryptMfaSecret,
 } from "../../src/lib/crypto/mfa-encryption.js";
 import { generateRecoveryCodes } from "../../src/lib/crypto/recovery-codes.js";
+import { totp } from "../../src/lib/totp/index.js";
 import { UnauthorizedError } from "../../src/common/errors/index.js";
-import { SignJWT } from "jose";
 import { env } from "../../src/config/env.js";
 
-describe("Cryptographic Utilities Unit Tests", () => {
-  describe("Password Hashing & Verification (Argon2id)", () => {
-    it("hashes and verifies password correctly", async () => {
+describe("Cryptographic & Security Primitives Unit Tests", () => {
+  describe("Password Hashing & Timing-Safe Verification (Argon2id)", () => {
+    it("hashes and verifies passwords correctly, handling malformed hashes and exposing dummy hash", async () => {
       const password = "SuperSecretPassword123!";
       const hash = await hashPassword(password);
 
       expect(hash.startsWith("$argon2id$")).toBe(true);
       expect(await verifyPassword(hash, password)).toBe(true);
       expect(await verifyPassword(hash, "WrongPassword!")).toBe(false);
-    });
+      expect(await verifyPassword("malformed-hash", password)).toBe(false);
+      expect(await verifyPassword("", password)).toBe(false);
 
-    it("handles malformed or empty password hashes gracefully without throwing", async () => {
-      expect(await verifyPassword("malformed-hash", "password")).toBe(false);
-      expect(await verifyPassword("", "password")).toBe(false);
-    });
-
-    it("exports precomputed valid DUMMY_PASSWORD_HASH", () => {
       expect(DUMMY_PASSWORD_HASH).toBeDefined();
       expect(DUMMY_PASSWORD_HASH.startsWith("$argon2id$")).toBe(true);
     });
   });
 
-  describe("JWT Tokens (Access & Refresh)", () => {
+  describe("JWT HS256 Token Lifecycle & Key Separation", () => {
     const samplePayload = {
       sub: "01912345-6789-7abc-def0-123456789abc",
       sid: "01912345-6789-7abc-def0-fedcba987654",
       role: "USER" as const,
     };
 
-    it("signs and verifies access and refresh tokens", async () => {
+    it("signs and verifies access and refresh tokens with correct payload claims", async () => {
       const accessToken = await signAccessToken(samplePayload);
       const decodedAccess = await verifyAccessToken(accessToken);
       expect(decodedAccess.sub).toBe(samplePayload.sub);
@@ -62,12 +58,14 @@ describe("Cryptographic Utilities Unit Tests", () => {
       const refreshToken = await signRefreshToken(samplePayload);
       const decodedRefresh = await verifyRefreshToken(refreshToken);
       expect(decodedRefresh.sid).toBe(samplePayload.sid);
+      expect(decodedRefresh.sub).toBe(samplePayload.sub);
     });
 
-    it("rejects tampered and malformed access tokens", async () => {
-      const token = await signAccessToken(samplePayload);
-      const tampered = token.slice(0, -5) + "abcde";
+    it("enforces key separation and rejects tampered or expired tokens", async () => {
+      const accessToken = await signAccessToken(samplePayload);
+      const tampered = accessToken.slice(0, -5) + "abcde";
 
+      // Tampered signature rejection
       await expect(verifyAccessToken(tampered)).rejects.toMatchObject({
         statusCode: 401,
         message: "Invalid or expired access token",
@@ -75,9 +73,15 @@ describe("Cryptographic Utilities Unit Tests", () => {
       await expect(verifyAccessToken("invalid.jwt")).rejects.toThrowError(
         UnauthorizedError,
       );
-    });
 
-    it("rejects expired access token", async () => {
+      // Key separation: refresh token must be rejected when presented as access token
+      const refreshToken = await signRefreshToken(samplePayload);
+      await expect(verifyAccessToken(refreshToken)).rejects.toMatchObject({
+        statusCode: 401,
+        message: "Invalid or expired access token",
+      });
+
+      // Expired token rejection
       const secret = new TextEncoder().encode(env.JWT_ACCESS_SECRET);
       const expiredToken = await new SignJWT({
         role: samplePayload.role,
@@ -94,18 +98,10 @@ describe("Cryptographic Utilities Unit Tests", () => {
         message: "Invalid or expired access token",
       });
     });
-
-    it("enforces key separation between access and refresh secrets", async () => {
-      const refreshToken = await signRefreshToken(samplePayload);
-      await expect(verifyAccessToken(refreshToken)).rejects.toMatchObject({
-        statusCode: 401,
-        message: "Invalid or expired access token",
-      });
-    });
   });
 
-  describe("Opaque Tokens & Hashes (SHA-256)", () => {
-    it("generates unique tokens and deterministic hashes", () => {
+  describe("Opaque Tokens & SHA-256 Hashes", () => {
+    it("generates unique tokens, deterministic hashes, and verifies timing-safely", () => {
       const token = generateToken(32);
       expect(token).toHaveLength(64);
 
@@ -116,33 +112,29 @@ describe("Cryptographic Utilities Unit Tests", () => {
 
       expect(verifyToken(hash1, token)).toBe(true);
       expect(verifyToken(hash1, "wrong-token")).toBe(false);
-    });
-
-    it("verifyToken returns false gracefully on malformed hash", () => {
       expect(verifyToken("not-hex", "token")).toBe(false);
       expect(verifyToken("", "token")).toBe(false);
     });
   });
 
-  describe("MFA Secret Encryption (AES-256-GCM)", () => {
-    it("encrypts and decrypts secrets with unique random IVs", () => {
+  describe("AES-256-GCM Secret Encryption & Decryption", () => {
+    it("encrypts and decrypts secrets with unique IVs and supports legacy fallback", () => {
       const rawSecret = "JBSWY3DPEHPK3PXP";
       const enc1 = encryptMfaSecret(rawSecret);
       const enc2 = encryptMfaSecret(rawSecret);
 
-      expect(enc1).not.toBe(enc2);
+      expect(enc1).not.toBe(enc2); // Unique IV per encryption
       expect(decryptMfaSecret(enc1)).toBe(rawSecret);
       expect(decryptMfaSecret(enc2)).toBe(rawSecret);
-    });
 
-    it("handles legacy and malformed encrypted values gracefully", () => {
+      // Legacy plain-text fallback handling
       expect(decryptMfaSecret("PLAINTEXTSECRET")).toBe("PLAINTEXTSECRET");
       expect(decryptMfaSecret("part1:part2")).toBe("part1:part2");
     });
   });
 
   describe("Recovery Codes Generation", () => {
-    it("generates formatted recovery codes and hashes", () => {
+    it("generates formatted recovery codes (XXXXX-XXXXX) and deterministic hashes", () => {
       const { recoveryCodes, recoveryCodeHashes } = generateRecoveryCodes(10);
 
       expect(recoveryCodes).toHaveLength(10);
@@ -152,6 +144,31 @@ describe("Cryptographic Utilities Unit Tests", () => {
         expect(recoveryCodes[i]).toMatch(/^[A-F0-9]{5}-[A-F0-9]{5}$/);
         expect(recoveryCodeHashes[i]).toBe(hashToken(recoveryCodes[i]!));
       }
+    });
+  });
+
+  describe("TOTP Utilities", () => {
+    it("generates valid base32 secret and compliant otpauth URI", () => {
+      const secret = totp.generateSecret();
+      expect(secret).toBeDefined();
+      expect(secret.length).toBeGreaterThanOrEqual(16);
+      expect(secret).toMatch(/^[A-Z2-7]+=*$/i);
+
+      const uri = totp.generateOtpUri(secret, "user@example.com");
+      expect(uri.startsWith("otpauth://totp/")).toBe(true);
+      expect(uri).toContain("secret=" + secret);
+      expect(uri).toContain("issuer=AuthSphere");
+    });
+
+    it("validates 6-digit numeric codes and rejects invalid shapes", () => {
+      expect(totp.isTotpCode("123456")).toBe(true);
+      expect(totp.isTotpCode("000000")).toBe(true);
+      expect(totp.isTotpCode("999999")).toBe(true);
+
+      expect(totp.isTotpCode("12345")).toBe(false);
+      expect(totp.isTotpCode("1234567")).toBe(false);
+      expect(totp.isTotpCode("abcdef")).toBe(false);
+      expect(totp.isTotpCode("")).toBe(false);
     });
   });
 });
