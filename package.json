@@ -14,7 +14,7 @@
     "build": "npm run build:shared && npm run build --workspaces --if-present",
     "build:shared": "npm run build -w @authsphere/shared",
     "build:lambda": "npm run build:shared && npm run prisma:generate -w @authsphere/api && npm run build:lambda -w @authsphere/api && npm run zip:lambda",
-    "zip:lambda": "cd infra/lambda && bestzip authsphere-api.zip lambda.mjs lambda.mjs.map node_modules/",
+    "zip:lambda": "cd infra/lambda && bestzip authsphere-api.zip lambda.mjs node_modules/",
     "typecheck": "npm run build:shared && npm run prisma:generate -w @authsphere/api && npm run typecheck --workspaces --if-present",
     "test": "npm run build:shared && npm test --workspaces --if-present",
     "test:coverage": "npm run build:shared && npm run test:coverage --workspaces --if-present",

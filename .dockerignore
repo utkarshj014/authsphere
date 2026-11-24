@@ -1,14 +1,37 @@
-node_modules
-.github
+# Version control, CI, and editor/OS metadata
 .git
+.github
 .gitignore
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Environment and secret files
 .env
 .env.*
-dist
-coverage
-.agents
-docs
-*.log
+
+# Dependencies and build/test artifacts (monorepo-wide)
+**/node_modules
+**/dist
+**/coverage
+*.tsbuildinfo
+**/*.log
 npm-debug.log*
+
+# Non-container infrastructure, docs, and workspace tooling
+docs
+playbooks
+*.md
+docker
+infra
+.aws-sam
+*.zip
+.agents
+.hallmark
+skills-lock.json
+
+# Non-runtime apps, tests, and generated host artifacts
 apps/web
 apps/api/tests
+apps/api/src/generated
