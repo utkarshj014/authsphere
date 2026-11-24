@@ -5,6 +5,7 @@ This document records the architectural and engineering decisions made during th
 > **Companion Documentation Suite:**
 >
 > - [System Architecture & Design (ARCHITECTURE.md)](ARCHITECTURE.md) — High-level mental model, layered component architecture, domain entity relationships, and core authentication lifecycles.
+> - [Frontend Architecture & Control Plane (FRONTEND_ARCHITECTURE.md)](FRONTEND_ARCHITECTURE.md) — Frontend Architecture, Component Topology & Control Plane.
 > - [OAuth 2.0 Architecture & Integration Guide (OAUTH.md)](OAUTH.md) — Authoritative protocol specification for federated identity providers, PKCE browser-cookie binding, and identity resolution.
 > - [Cloud Deployment & Operations Guide (DEPLOYMENT.md)](DEPLOYMENT.md) — Operational runbooks for dual-target compute (AWS Lambda vs. ECS Fargate), database connection topologies, CI/CD, and disaster recovery.
 > - [Testing & Quality Assurance Guide (TESTING.md)](TESTING.md) — Hermetic testing pyramid, test environment isolation, and security invariant verification suites.

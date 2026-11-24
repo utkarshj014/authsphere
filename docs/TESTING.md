@@ -5,6 +5,7 @@
 > **Related Documentation:**
 >
 > - System Architecture & Ingress Pipeline: [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md)
+> - Frontend Architecture & Control Plane: [`docs/FRONTEND_ARCHITECTURE.md`](./FRONTEND_ARCHITECTURE.md)
 > - Architectural Decision Records: [`docs/Engineering-Decisions.md`](./Engineering-Decisions.md)
 > - OAuth 2.0 Protocol Specifications: [`docs/OAUTH.md`](./OAUTH.md)
 > - Deployment & CI/CD Smoke Probes: [`docs/DEPLOYMENT.md`](./DEPLOYMENT.md)

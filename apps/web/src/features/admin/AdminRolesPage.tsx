@@ -273,7 +273,7 @@ export const AdminRolesPage: React.FC = () => {
       <div className="p-4 bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded-[var(--radius-card)] space-y-1.5">
         <div className="flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]" />
-          <h2 className="font-display font-medium text-xs text-[var(--color-ink)] uppercase tracking-wider">
+          <h2 className="font-medium text-xs text-[var(--color-ink)]">
             Authorization Architecture
           </h2>
         </div>

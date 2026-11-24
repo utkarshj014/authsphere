@@ -24,23 +24,24 @@ export const SecurityPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { user, bootstrapAuth, clearAuthUser } = useAuthStore();
 
+  const errorParam = searchParams.get("error");
+  const linkedParam = searchParams.get("linked");
+
   // Status & Notifications
-  const [globalError, setGlobalError] = useState<string | null>(null);
-  const [globalSuccess, setGlobalSuccess] = useState<string | null>(null);
-
-  // Handle URL query parameters from OAuth redirects (?linked=... or ?error=...)
-  useEffect(() => {
-    const errorParam = searchParams.get("error");
-    const linkedParam = searchParams.get("linked");
-
-    if (errorParam) {
-      setGlobalError(errorParam);
-      navigate(ROUTES.APP.SECURITY, { replace: true });
-    } else if (linkedParam) {
+  const [globalError, setGlobalError] = useState<string | null>(errorParam);
+  const [globalSuccess, setGlobalSuccess] = useState<string | null>(() => {
+    if (linkedParam) {
       const formatted =
         linkedParam.charAt(0).toUpperCase() +
         linkedParam.slice(1).toLowerCase();
-      setGlobalSuccess(`${formatted} account connected successfully.`);
+      return `${formatted} account connected successfully.`;
+    }
+    return null;
+  });
+
+  // Clear query parameters from OAuth redirects once captured
+  useEffect(() => {
+    if (searchParams.has("error") || searchParams.has("linked")) {
       navigate(ROUTES.APP.SECURITY, { replace: true });
     }
   }, [searchParams, navigate]);

@@ -5,6 +5,7 @@ This document provides a comprehensive overview of **AuthSphere's** system archi
 > **AuthSphere Architecture & Engineering Documentation Suite:**
 >
 > - [ARCHITECTURE.md](./ARCHITECTURE.md) — System Design, Component Topology & Core Data Models
+> - [FRONTEND_ARCHITECTURE.md](./FRONTEND_ARCHITECTURE.md) — Frontend Architecture, Component Topology & Control Plane
 > - [Engineering-Decisions.md](./Engineering-Decisions.md) — 101 Formal ADRs, Security Invariants & Technical Trade-offs
 > - [OAUTH.md](./OAUTH.md) — OAuth 2.0 PKCE Social Authentication & Integration Protocols
 > - [DEPLOYMENT.md](./DEPLOYMENT.md) — Cloud Infrastructure, Dual-Compute (Lambda/ECS) & Runbooks

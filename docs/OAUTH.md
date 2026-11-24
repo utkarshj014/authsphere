@@ -5,6 +5,7 @@ This document specifies the OAuth 2.0 social authentication and account-linking 
 > **Companion Architecture, Security & Operations Guides:**
 >
 > - [System Architecture & Design (ARCHITECTURE.md)](./ARCHITECTURE.md) — System mental model, layered middleware pipeline, entity models, and runtime compute topology.
+> - [Frontend Architecture & Control Plane (FRONTEND_ARCHITECTURE.md)](./FRONTEND_ARCHITECTURE.md) — Frontend Architecture, Component Topology & Control Plane.
 > - [Architecture Decision Records (Engineering-Decisions.md)](./Engineering-Decisions.md) — Formal ADRs documenting architectural context, trade-offs, security invariants, and failure boundaries.
 > - [Cloud Deployment & DevOps Guide (DEPLOYMENT.md)](./DEPLOYMENT.md) — Production deployment guide covering dual-target compute (AWS Lambda vs ECS Fargate), environment configuration, and operational runbooks.
 > - [Testing Architecture & Quality Guide (TESTING.md)](./TESTING.md) — Complete specification of the hermetic multi-tier test pyramid and automated verification suites.

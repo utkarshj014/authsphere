@@ -5,6 +5,7 @@
 > **Companion Guides:**
 >
 > - System Architecture & Component Design: [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
+> - Frontend Architecture & Control Plane: [`docs/FRONTEND_ARCHITECTURE.md`](FRONTEND_ARCHITECTURE.md)
 > - Architectural Decision Records (ADRs): [`docs/Engineering-Decisions.md`](Engineering-Decisions.md)
 > - OAuth 2.0 & OIDC Federation Guide: [`docs/OAUTH.md`](OAUTH.md)
 > - Test Architecture & Verification Matrix: [`docs/TESTING.md`](TESTING.md)
