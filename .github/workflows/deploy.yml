@@ -135,6 +135,7 @@ jobs:
           add_param "EmailFrom" "${{ secrets.EMAIL_FROM || 'AuthSphere <noreply@authsphere.dev>' }}"
           add_param "EmailProvider" "${{ vars.EMAIL_PROVIDER || 'gmail' }}"
           add_param "GmailUser" "${{ vars.GMAIL_USER }}"
+          add_param "GmailAppPassword" "${{ secrets.GMAIL_APP_PASSWORD }}"
           add_param "GmailRefreshToken" "${{ secrets.GMAIL_REFRESH_TOKEN }}"
           add_param "ResendApiKey" "${{ secrets.RESEND_API_KEY }}"
           add_param "GoogleClientId" "${{ vars.GOOGLE_CLIENT_ID }}"

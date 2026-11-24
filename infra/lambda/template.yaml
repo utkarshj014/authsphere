@@ -63,7 +63,12 @@ Parameters:
   GmailUser:
     Type: String
     Default: ""
-    Description: Gmail account address for OAuth2 sending
+    Description: Gmail account address for SMTP / OAuth2 sending
+  GmailAppPassword:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Gmail 16-character App Password for SMTP sending
   GmailRefreshToken:
     Type: String
     NoEcho: true
@@ -118,6 +123,7 @@ Resources:
           EMAIL_FROM: !Ref EmailFrom
           EMAIL_PROVIDER: !Ref EmailProvider
           GMAIL_USER: !Ref GmailUser
+          GMAIL_APP_PASSWORD: !Ref GmailAppPassword
           GMAIL_REFRESH_TOKEN: !Ref GmailRefreshToken
           GOOGLE_CLIENT_ID: !Ref GoogleClientId
           GOOGLE_CLIENT_SECRET: !Ref GoogleClientSecret

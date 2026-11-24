@@ -111,7 +111,7 @@ flowchart TD
         Redis[("Redis Cache and Store")]
         QueueSystem["Queue Dispatcher (BullMQ / Inline / Sync)"]
         Worker["Email Worker Daemon"]
-        EmailGateway["Email Provider Strategy (Gmail OAuth2 / Resend)"]
+        EmailGateway["Email Provider Strategy (Gmail SMTP / OAuth2 / Resend)"]
         CryptoLib["Crypto Library (WebCrypto HS256 / Argon2id / AES-256-GCM)"]
         Postgres[("PostgreSQL Database: Neon and PgBouncer")]
 
@@ -590,7 +590,7 @@ flowchart TD
     EmailServiceSync --> Gateway
 
     Gateway -->|"Provider: resend"| ResendAPI["Resend HTTPS API"]
-    Gateway -->|"Provider: gmail"| GmailOAuth["Gmail OAuth2 via Nodemailer"]
+    Gateway -->|"Provider: gmail"| GmailDelivery["Gmail SMTP or OAuth2 via Nodemailer"]
 ```
 
 | Queue Driver | Runtime Environment                    | Delivery Characteristics                                                                                      | Failure & Retry Semantics                                                                                                     |
@@ -668,7 +668,7 @@ flowchart TD
     subgraph BackingTier ["Shared Managed Cloud Backing Tier"]
         Neon["Neon Serverless PostgreSQL<br/>PgBouncer Transaction Pooling (Port 5432)"]
         Upstash["Upstash Serverless Redis<br/>TLS Encrypted (rediss://) · Atomic Lua Scripts"]
-        EmailService["Transactional Email Service<br/>Google Gmail OAuth2 (Port 465) or Resend API (HTTPS)"]
+        EmailService["Transactional Email Service<br/>Google Gmail SMTP / OAuth2 (Port 465) or Resend API (HTTPS)"]
     end
 
     VercelProxy -->|"Encrypted Upstream HTTPS"| FURL

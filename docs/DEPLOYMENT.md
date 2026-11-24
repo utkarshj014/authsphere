@@ -63,14 +63,14 @@ flowchart TD
 
 ### Deployed Services Summary
 
-| Component                 | Provider / Service    | Sizing / Configuration                         | Role in AuthSphere                                                               |
-| :------------------------ | :-------------------- | :--------------------------------------------- | :------------------------------------------------------------------------------- |
-| **Frontend Presentation** | Vercel Edge Network   | Node.js Edge Runtime / CDN                     | Hosts React 19 SPA; provides same-origin reverse-proxy rewrites (`/api/*`).      |
-| **Primary Compute**       | AWS Lambda            | Node.js 24 (`nodejs24.x`), 512 MB, 15s timeout | Event-driven serverless REST API; scales to zero; zero idle compute cost.        |
-| **Reference Compute**     | AWS ECS Fargate       | 0.25 vCPU, 512 MB, Alpine Linux (`dumb-init`)  | Continuous container execution behind an Application Load Balancer.              |
-| **Database Tier**         | Neon PostgreSQL       | Serverless PostgreSQL 16 with PgBouncer        | Dual-endpoint topology (unpooled for migrations; pooled for compute).            |
-| **Cache & State Tier**    | Upstash Redis         | Serverless Redis with TLS (`rediss://`)        | Atomic fixed-window rate limiting, OAuth PKCE state, session leeway.             |
-| **Transactional Email**   | Gmail OAuth2 / Resend | Nodemailer SMTP (Port 465) or Resend HTTPS     | Strategy pattern (`EmailProvider`) supporting arbitrary test recipient delivery. |
+| Component                 | Provider / Service           | Sizing / Configuration                         | Role in AuthSphere                                                               |
+| :------------------------ | :--------------------------- | :--------------------------------------------- | :------------------------------------------------------------------------------- |
+| **Frontend Presentation** | Vercel Edge Network          | Node.js Edge Runtime / CDN                     | Hosts React 19 SPA; provides same-origin reverse-proxy rewrites (`/api/*`).      |
+| **Primary Compute**       | AWS Lambda                   | Node.js 24 (`nodejs24.x`), 512 MB, 15s timeout | Event-driven serverless REST API; scales to zero; zero idle compute cost.        |
+| **Reference Compute**     | AWS ECS Fargate              | 0.25 vCPU, 512 MB, Alpine Linux (`dumb-init`)  | Continuous container execution behind an Application Load Balancer.              |
+| **Database Tier**         | Neon PostgreSQL              | Serverless PostgreSQL 16 with PgBouncer        | Dual-endpoint topology (unpooled for migrations; pooled for compute).            |
+| **Cache & State Tier**    | Upstash Redis                | Serverless Redis with TLS (`rediss://`)        | Atomic fixed-window rate limiting, OAuth PKCE state, session leeway.             |
+| **Transactional Email**   | Gmail SMTP / OAuth2 / Resend | Nodemailer SMTP (Port 465) or Resend HTTPS     | Strategy pattern (`EmailProvider`) supporting arbitrary test recipient delivery. |
 
 ---
 
@@ -138,9 +138,10 @@ Both compute targets connect to the same cloud backends without requiring modifi
 - **Warm Ingress Readiness Gate (Lambda):** Warm microVM invocations wait up to 100ms via `once(redis, "ready")` to allow in-flight TLS handshakes to complete on fast routes.
 - **BullMQ Decoupled Capability vs. Active Baseline:** BullMQ (`apps/api/src/lib/queue.ts`) with exponential backoff retries is a fully supported deployment capability for decoupled background workers (`authsphere-worker`). However, to eliminate idle Redis command consumption and polling costs across serverless tiers, default active production relies on zero-polling drivers: `QUEUE_DRIVER=sync` on AWS Lambda (synchronous in-handler execution) and `QUEUE_DRIVER=inline` on AWS ECS Fargate (event-loop dispatch via `setImmediate`), keeping the BullMQ worker task dormant until `DEPLOY_ECS_WORKER=true` is toggled.
 
-### 3.3. Transactional Email Strategy: Gmail OAuth2 vs. Resend
+### 3.3. Transactional Email Strategy: Gmail SMTP vs. OAuth2 vs. Resend
 
-- **Option A: Google Gmail OAuth2 (Recommended for Testing):** Uses Nodemailer SMTP over TLS on port 465 with OAuth2 tokens. Sends to **any arbitrary recipient** without requiring a custom domain. Published personal quota is **500 emails/day**. Outbound sockets use one-shot lifecycles (`pool: false`) terminated immediately upon message dispatch.
+- **Option A1: Google Gmail SMTP with App Password (Recommended for Portfolio & Demos):** Uses Nodemailer SMTP with a dedicated Gmail account and a 16-character Google App Password (generated via Google Account -> Security -> 2-Step Verification -> App Passwords). Sends to **any arbitrary recipient** without requiring a custom domain, sensitive scope approval (`gmail.send`), or OAuth consent-screen verification. Personal account quota is **500 recipients/day**. Note: Google OAuth social sign-in remains completely independent in Testing mode requesting only basic identity scopes (`openid`, `email`, `profile`).
+- **Option A2: Google Gmail OAuth2 (Preserved Alternative):** Uses Nodemailer SMTP over TLS on port 465 with OAuth2 tokens (`GMAIL_USER`, `GMAIL_REFRESH_TOKEN`). Reuses `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 - **Option B: Resend API (Enterprise SaaS):** Requires a verified sending domain with SPF and DKIM DNS records (DMARC recommended) for arbitrary recipient delivery. Free tier allows 3,000 emails/month (100/day); default API rate limit is **10 requests/second**. Sandbox mode (`onboarding@resend.dev`) delivers exclusively to the account owner.
 
 ### 3.4. Decoupled Secret Stores & Key Rotation Operational Rules
@@ -463,7 +464,8 @@ done
 | `JWT_ACCESS_SECRET`       | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/JWT_ACCESS_SECRET`       | Signing secret for access JWTs (32+ chars)                |
 | `JWT_REFRESH_SECRET`      | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/JWT_REFRESH_SECRET`      | Signing secret for refresh JWTs (32+ chars)               |
 | `MFA_ENCRYPTION_KEY`      | SAM Parameter (`NoEcho`) from Secret                   | SSM `/authsphere/prod/MFA_ENCRYPTION_KEY`      | 32-byte key for AES-256-GCM TOTP secret encryption        |
-| `GMAIL_USER`              | SAM Parameter / Optional                               | SSM `/authsphere/prod/GMAIL_USER`              | Sender Gmail address for OAuth2 sending                   |
+| `GMAIL_USER`              | SAM Parameter / Optional                               | SSM `/authsphere/prod/GMAIL_USER`              | Sender Gmail address for SMTP / OAuth2 sending            |
+| `GMAIL_APP_PASSWORD`      | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/GMAIL_APP_PASSWORD`      | Gmail 16-character App Password for SMTP sending          |
 | `GMAIL_REFRESH_TOKEN`     | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/GMAIL_REFRESH_TOKEN`     | Gmail OAuth2 refresh token                                |
 | `RESEND_API_KEY`          | SAM Parameter (`NoEcho`) / Optional                    | SSM `/authsphere/prod/RESEND_API_KEY`          | Resend API key                                            |
 | `EMAIL_FROM`              | SAM Parameter / Optional                               | SSM `/authsphere/prod/EMAIL_FROM`              | Sender identity string (`AuthSphere <noreply@...>`)       |

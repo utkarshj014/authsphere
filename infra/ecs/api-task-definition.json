@@ -133,6 +133,10 @@
           "valueFrom": "/authsphere/prod/GMAIL_USER"
         },
         {
+          "name": "GMAIL_APP_PASSWORD",
+          "valueFrom": "/authsphere/prod/GMAIL_APP_PASSWORD"
+        },
+        {
           "name": "GMAIL_REFRESH_TOKEN",
           "valueFrom": "/authsphere/prod/GMAIL_REFRESH_TOKEN"
         }

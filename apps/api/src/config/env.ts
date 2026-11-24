@@ -29,6 +29,7 @@ const workerConfig = z.object({
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().optional(),
   GMAIL_USER: z.string().optional(),
+  GMAIL_APP_PASSWORD: z.string().optional(),
   GMAIL_REFRESH_TOKEN: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
@@ -75,6 +76,7 @@ const apiConfig = z.object({
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().optional(),
   GMAIL_USER: z.string().optional(),
+  GMAIL_APP_PASSWORD: z.string().optional(),
   GMAIL_REFRESH_TOKEN: z.string().optional(),
 });
 
@@ -91,17 +93,20 @@ const apiSchema = sharedConfig
         return true;
       }
       const hasResend = Boolean(data.RESEND_API_KEY && data.EMAIL_FROM);
-      const hasGmail = Boolean(
+      const hasGmailAppPassword = Boolean(
+        data.GMAIL_USER && data.GMAIL_APP_PASSWORD,
+      );
+      const hasGmailOAuth = Boolean(
         data.GMAIL_USER &&
         data.GOOGLE_CLIENT_ID &&
         data.GOOGLE_CLIENT_SECRET &&
         data.GMAIL_REFRESH_TOKEN,
       );
-      return hasResend || hasGmail;
+      return hasResend || hasGmailAppPassword || hasGmailOAuth;
     },
     {
       message:
-        "Either Resend (RESEND_API_KEY, EMAIL_FROM) or Gmail OAuth2 (GMAIL_USER, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GMAIL_REFRESH_TOKEN) credentials are required when QUEUE_DRIVER is inline or sync",
+        "Either Resend (RESEND_API_KEY, EMAIL_FROM), Gmail App Password (GMAIL_USER, GMAIL_APP_PASSWORD), or Gmail OAuth2 (GMAIL_USER, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GMAIL_REFRESH_TOKEN) credentials are required when QUEUE_DRIVER is inline or sync",
       path: ["EMAIL_PROVIDER"],
     },
   );

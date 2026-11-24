@@ -275,6 +275,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-100: Dedicated Role Permission Introspection with Cached Read Path and Administrative Immutability](#adr-100--dedicated-role-permission-introspection-with-cached-read-path-and-administrative-immutability)
 - [ADR-101: Zero-Side-Effect Client MFA State Introspection via Current User Profile Contract](#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)
 - [ADR-102: Client-Device Session Supersession on Authentication](#adr-102--client-device-session-supersession-on-authentication)
+- [ADR-103: Decoupled Transactional Email via Dedicated Gmail App Password with Preserved OAuth2 Fallback](#adr-103--decoupled-transactional-email-via-dedicated-gmail-app-password-with-preserved-oauth2-fallback)
 
 </details>
 
@@ -2215,7 +2216,7 @@ Establish an `EmailProvider` interface contract, domain `EmailDeliveryError`, an
 2. **Normalized Error Classification:** Define a provider-agnostic domain error `EmailDeliveryError` containing `isPermanent: boolean`. Concrete providers categorize third-party responses into transient failures (429 rate limits, 5xx outages, network timeouts) versus permanent failures (4xx client validation, unverified domain, malformed recipient address) and throw `EmailDeliveryError`.
 3. **Pluggable Concrete Adapters**:
    - **Resend Adapter (`src/modules/email/resend.provider.ts`)**: Implements `resendProvider: EmailProvider` using the official Resend SDK (`resend`).
-   - **Gmail OAuth2 Adapter (`src/modules/email/gmail.provider.ts`)**: Implements `gmailOAuthProvider: EmailProvider` using Nodemailer and Google OAuth2 refresh tokens (`GMAIL_USER`, `GMAIL_REFRESH_TOKEN`).
+   - **Gmail Adapter (`src/modules/email/gmail.provider.ts`)**: Implements `gmailProvider: EmailProvider` (aliased as `gmailOAuthProvider`) using Nodemailer, supporting both dedicated Gmail SMTP with App Passwords (`GMAIL_APP_PASSWORD` [ADR-103]) and Google OAuth2 refresh tokens (`GMAIL_REFRESH_TOKEN`).
 4. **Dynamic Provider Resolution (`src/modules/email/email.factory.ts`)**: `getEmailProvider()` lazily imports and returns the configured provider based on `EMAIL_PROVIDER` or available credentials, decoupling callers from specific SDK dependencies.
 5. **Decoupled Worker Processing:** Queue workers and dispatch services depend strictly on `emailService` and `getEmailProvider()`, never importing specific provider SDKs.
 
@@ -3196,6 +3197,7 @@ When a user authenticates (via password, OAuth 2.0, magic link, or MFA challenge
 Enforce atomic client-device session supersession directly within `authRepository.createSession` via a Prisma interactive transaction:
 
 1. **Atomic Pruning:** Before inserting a new session record, delete any pre-existing sessions matching the exact same client device context:
+
    ```typescript
    prisma.$transaction(async (tx) => {
      if (sessionData.userAgent && sessionData.ipAddress) {
@@ -3217,6 +3219,7 @@ Enforce atomic client-device session supersession directly within `authRepositor
      });
    });
    ```
+
 2. **Encapsulated Lifecycle:** Centralizing this logic within `authRepository.createSession` ensures that all authentication entry points (`login`, `mfaVerifyLogin`, `oauthCallback`, `verifyMagicLink` [ADR-039]) automatically benefit without service-layer or controller-layer orchestration.
 3. **Purity of Read Path:** `sessionsService.getActiveSessions` reads strictly from the database without ad-hoc in-memory filtering, preserving the database as the authoritative single source of truth.
 
@@ -3230,3 +3233,63 @@ Enforce atomic client-device session supersession directly within `authRepositor
 
 - **Transactional Hard Deletion:** Orphaned refresh token hashes are hard-deleted in the same database transaction [ADR-013, ADR-029], instantly revoking replay vectors.
 - **Scoped Invalidation:** Deletion is strictly scoped to the tuple `(userId, userAgent, ipAddress)`, guaranteeing that distinct physical devices and remote sessions remain unaffected.
+
+---
+
+## ADR-103 — Decoupled Transactional Email via Dedicated Gmail App Password with Preserved OAuth2 Fallback
+
+**Status:** Accepted
+
+### Context
+
+Transactional email delivery in AuthSphere previously supported two provider implementations behind the `EmailProvider` interface [ADR-073]:
+
+1. Enterprise Resend API (`RESEND_API_KEY`, requiring a custom verified domain for arbitrary recipients).
+2. Google Gmail OAuth2 (`GMAIL_USER`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`).
+
+While Gmail OAuth2 enabled delivery to arbitrary recipients without purchasing a custom domain, coupling email delivery to Google OAuth2 introduced notable operational friction:
+
+- It required maintaining Google OAuth refresh tokens and exchanging tokens over HTTPS.
+- In Google Cloud Console, requesting sensitive mail scopes (`gmail.send`) on an OAuth application requires either publishing the OAuth consent screen with extensive verification or restricting use to explicit test users with 7-day token expirations.
+- Conversely, when an External OAuth application requests strictly basic identity scopes (`openid`, `email`, `profile`), Google permits users outside the test-user list to authenticate without publishing consent screens, domain verification, or 7-day token expirations.
+
+### Decision
+
+Decouple transactional email delivery from Google OAuth social sign-in:
+
+1. **Dedicated Gmail Account with App Password (Primary Mode):**
+   - Utilize a dedicated Google account (e.g., `authsphere.app@gmail.com`) with 2-Step Verification and a 16-character Google App Password (`GMAIL_APP_PASSWORD`).
+   - Configure Nodemailer to connect via standard Gmail SMTP with username/password authentication:
+     ```typescript
+     nodemailer.createTransport({
+       service: "gmail",
+       connectionTimeout: 5000,
+       greetingTimeout: 5000,
+       socketTimeout: 5000,
+       auth: {
+         user: env.GMAIL_USER,
+         pass: env.GMAIL_APP_PASSWORD.replace(/\s+/g, ""),
+       },
+     });
+     ```
+   - This eliminates all OAuth consent-screen verification, sensitive API scopes (`gmail.send`), and domain verification requirements.
+
+2. **Independent Google OAuth Social Sign-In:**
+   - Keep Google OAuth login separate in Google Cloud Console in **Testing** mode.
+   - Restrict OAuth to basic identity scopes only (`openid`, `email`, `profile`). Under Google's basic identity exception, external users can sign in without the 7-day authorization expiry or verification hurdles.
+   - Strictly prohibit requesting `gmail.send` through the user social login flow.
+
+3. **Preservation of Existing Work:**
+   - Retain the existing `gmailOAuthProvider` (OAuth2 refresh token flow) within `src/modules/email/gmail.provider.ts`. If `GMAIL_APP_PASSWORD` is absent but `GMAIL_REFRESH_TOKEN` is provided, the provider automatically falls back to the OAuth2 refresh token strategy.
+   - Retain the `resendProvider` [ADR-073] as the pluggable enterprise delivery adapter.
+
+4. **Environment Schema Integration (`src/config/env.ts`):**
+   - Introduce `GMAIL_APP_PASSWORD` as an optional configuration parameter in both worker and API schemas.
+   - The environment validation refinement accepts Resend (`RESEND_API_KEY` + `EMAIL_FROM`), Gmail App Password (`GMAIL_USER` + `GMAIL_APP_PASSWORD`), or Gmail OAuth2 (`GMAIL_USER` + `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` + `GMAIL_REFRESH_TOKEN`).
+
+### Consequences
+
+- **Positive:** Enables immediate, zero-cost, zero-domain transactional email delivery to arbitrary recipients for portfolio and demonstration environments.
+- **Positive:** Google OAuth social sign-in remains in simple Testing mode without triggering consent-screen review or 7-day token expiry for basic identity scopes.
+- **Positive:** Completely backward-compatible with existing OAuth2 refresh token and Resend configurations.
+- **Negative:** Personal Gmail SMTP has a 500-recipient daily volume limit and rewrites the `From` header to the authenticated account. This is acceptable for portfolio demonstrations and development workloads, while enterprise production remains switchable to dedicated providers (`EMAIL_PROVIDER=resend`).
