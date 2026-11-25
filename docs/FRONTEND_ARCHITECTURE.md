@@ -1,12 +1,12 @@
 # Frontend Architecture & System Design — AuthSphere
 
-This document provides an overview of **AuthSphere's** frontend web architecture, component topology, client state management, security boundaries, and core user-facing execution flows.
+This document is the single source of truth (SSOT) for **AuthSphere's** frontend web architecture (`apps/web`), covering presentation shells, declarative routing and guards, client state management, the HTTP refresh mutex, Hallmark OKLCH visual tokens, and client-side execution flows.
 
 > **AuthSphere Architecture & Engineering Documentation Suite:**
 >
 > - [ARCHITECTURE.md](./ARCHITECTURE.md) — System Design, Component Topology & Core Data Models
 > - [FRONTEND_ARCHITECTURE.md](./FRONTEND_ARCHITECTURE.md) — Frontend Architecture, Component Topology & Control Plane
-> - [Engineering-Decisions.md](./Engineering-Decisions.md) — Architecture Decision Records (ADRs) & Technical Trade-offs
+> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 107 Formal ADRs, Security Invariants & Technical Trade-offs
 > - [OAUTH.md](./OAUTH.md) — OAuth 2.0 PKCE Social Authentication & Integration Protocols
 > - [DEPLOYMENT.md](./DEPLOYMENT.md) — Cloud Infrastructure, Dual-Compute (Lambda/ECS) & Runbooks
 > - [TESTING.md](./TESTING.md) — Hermetic Test Pyramid, Invariant Verification & CI Strategies
@@ -15,19 +15,20 @@ This document provides an overview of **AuthSphere's** frontend web architecture
 
 ## 1. System Overview & Philosophy
 
-AuthSphere's web client (`apps/web`) is an identity and session management control plane built as a single-page application (SPA). It provides self-service authentication, profile management, credential rotation, multi-factor authentication (MFA), active session revocation, and administrative governance for users and roles.
+AuthSphere's web client (`apps/web`) is an identity and session management control plane built as a React single-page application (SPA). It provides self-service authentication, credential rotation, multi-factor authentication (MFA), active session revocation, security event auditing, and administrative governance for users and roles.
 
 ### Core Architectural Principles
 
-7. **Direct Operational Mapping:** Every screen, table, badge, and form maps directly to backend authentication and authorization operations. Views avoid synthetic or fabricated metrics.
-8. **Untrusted Client Environment:** The browser runtime is treated as untrusted. Persistent session state is managed exclusively through server-set `HttpOnly`, `SameSite=Lax` cookies. Client-side route guards provide responsive UX navigation, while backend middleware acts as the authoritative gate for all protected operations.
-9. **Hallmark Design System:** Implemented under the Hallmark Modern-Minimal Console theme using CSS variables and OKLCH color tokens in dark mode. The interface emphasizes information density, 1px hairline panel borders, no decorative drop shadows, and high-contrast typography (Host Grotesk for prose and controls, Atkinson Hyperlegible Mono with tabular figures for dates, IPs, and identifiers).
+1. **Direct Operational Mapping:** Views map directly to backend authentication and authorization contracts (`@authsphere/shared` and [ARCHITECTURE.md](./ARCHITECTURE.md)) without synthetic metrics.
+2. **Untrusted Client Environment:** The browser runtime is treated as untrusted. Persistent session credentials live exclusively in server-set `HttpOnly`, `SameSite=Lax` cookies. Client-side route guards provide responsive navigation UX while backend middleware acts as the authoritative security gate.
+3. **Hallmark Console Design System:** Built with CSS variables and dark-mode OKLCH tokens (`styles/tokens.css`), emphasizing hairline 1px panel borders (`--shadow-card: none`), restrained semantic color accents, and tabular monospace telemetry (`Atkinson Hyperlegible Mono` paired with `Host Grotesk`).
+4. **Reactive State Reconciliation:** In-flight privilege or session changes reconcile automatically on window focus and `403 Forbidden` responses without requiring full browser reloads.
 
 ---
 
 ## 2. Frontend Architecture Topology
 
-AuthSphere's frontend compiles as a single-page application within the npm-workspaces monorepo. It relies on same-origin edge reverse proxying for seamless API communication without cross-origin configuration overhead:
+The SPA compiles within the npm-workspaces monorepo and communicates with `apps/api` over same-origin `/api/*` paths so `HttpOnly` session cookies flow without cross-origin CORS overhead:
 
 ```mermaid
 flowchart TD
@@ -44,9 +45,9 @@ flowchart TD
     end
 
     subgraph Edge ["Edge Reverse Proxy & Static Hosting"]
-        EdgeProxy["Vercel Edge Reverse Proxy (/api/*)<br/>vercel.ts"]
-        DevProxy["Vite Dev Server Proxy (/api/*)<br/>vite.config.ts"]
-        CDN["Static Asset CDN<br/>Cache-Control: immutable chunks"]
+        EdgeProxy["Vercel Edge Proxy (/api/*)<br/>apps/web/vercel.ts"]
+        DevProxy["Vite Dev Proxy (/api/*)<br/>apps/web/vite.config.ts"]
+        CDN["Static Asset CDN<br/>Hashed Chunks + index.html"]
 
         Client -->|"Same-Origin /api/* (withCredentials)"| EdgeProxy
         Client -.->|"Local Development"| DevProxy
@@ -54,387 +55,346 @@ flowchart TD
     end
 
     subgraph Backend ["Backend Tier (apps/api)"]
-        API["Express.js Application (Port 3000 / Lambda)"]
-        CookieEngine["HttpOnly Cookie Engine (accessToken, refreshToken)"]
-
-        EdgeProxy -->|"Rewrite /api/(.*) to /(.*)"| API
-        DevProxy -->|"Rewrite /api/(.*) to /(.*)"| API
-        API --> CookieEngine
+        API["Express.js API (ARCHITECTURE.md)"]
+        EdgeProxy -->|"Rewrite /api/(.*) to /$1"| API
+        DevProxy -->|"Rewrite /api to /"| API
     end
 ```
 
-### Technology Baseline
+### Technology Baseline (`apps/web/package.json`)
 
-| Technology Layer       | Library / Tool                        | Primary Role                                                                                    |
-| :--------------------- | :------------------------------------ | :---------------------------------------------------------------------------------------------- |
-| **Build & Tooling**    | Vite 8                                | ES module development server, HMR, code splitting, and development proxy.                       |
-| **UI Framework**       | React 19 (`react`, `react-dom`)       | Declarative component rendering, hooks, and `<Suspense>` boundaries.                            |
-| **Routing System**     | React Router 7 (`react-router-dom`)   | Declarative routing, navigation guards, URL search param synchronization, and error boundaries. |
-| **Styling & Tokens**   | Tailwind CSS v4 (`@tailwindcss/vite`) | `@theme static` CSS variable integration with dark OKLCH tokens.                                |
-| **Client State**       | Zustand 5                             | In-memory store for session posture and authentication state.                                   |
-| **HTTP Transport**     | Axios                                 | Request/response interceptors, error normalization, and silent refresh mutex.                   |
-| **Forms & Validation** | React Hook Form & Zod                 | Isolated form state and schema-based client validation.                                         |
-| **TOTP QR Codes**      | QRCode (`qrcode`)                     | Client-side QR code canvas rendering for authenticator setup.                                   |
-| **Shared Domain**      | `@authsphere/shared`                  | Monorepo package defining canonical role names, permissions, and event types.                   |
+| Technology Layer       | Package & Version                                                        | Primary Role                                                                         |
+| :--------------------- | :----------------------------------------------------------------------- | :----------------------------------------------------------------------------------- |
+| **Build & Tooling**    | `vite` `8.1.1`, `@vitejs/plugin-react` `6.0.3`                           | ES module dev server, HMR, code splitting, and local `/api` dev proxy.               |
+| **UI Framework**       | `react` `19.2.7`, `react-dom` `19.2.7`                                   | Declarative component rendering, hooks, and `<Suspense>` boundaries.                 |
+| **Routing System**     | `react-router-dom` `7.18.1`                                              | Declarative routes, boundary guards, URL search param sync, and error boundaries.    |
+| **Styling & Tokens**   | `tailwindcss` `4.3.3`, `@tailwindcss/vite` `4.3.3`                       | `@theme static` integration with Hallmark dark OKLCH tokens.                         |
+| **Client State**       | `zustand` `5.0.14`                                                       | Volatile in-memory session posture and auth lifecycle state.                         |
+| **HTTP Transport**     | `axios` `1.18.1`                                                         | Request/response interceptors, error sanitization, and silent token refresh mutex.   |
+| **Forms & Validation** | `react-hook-form` `7.81.0`, `zod` `4.4.3`, `@hookform/resolvers` `5.4.0` | Isolated form state and schema-backed client validation (`schemas/auth.schemas.ts`). |
+| **TOTP QR Codes**      | `qrcode` `1.5.4`                                                         | Client-side QR data URL generation for authenticator enrollment.                     |
+| **Edge Configuration** | `@vercel/config` `0.12.0`                                                | Code-first production rewrites, SPA fallback, and docs redirects (`vercel.ts`).      |
+| **Shared Domain**      | `@authsphere/shared` (`*`)                                               | Canonical role names, permissions, OAuth providers, and security event types.        |
 
-### Ingress & Cookie Configuration
+### Ingress & Cookie Boundary
 
-- **Production Edge Proxy (`apps/web/vercel.ts`):** Defined using `@vercel/config/v1`. Rewrites all `/api/(.*)` requests to the backend origin, preserving same-origin cookie delivery and eliminating CORS preflight overhead. Also redirects documentation paths (`/docs`, `/docs/`, `/api/docs`) to `/api/docs/`, and `/openapi.json` to `/api/openapi.json`.
-- **Development Proxy (`apps/web/vite.config.ts`):** Mirrors production rewrites by proxying `/api`, `/api/docs`, `/docs`, and `/openapi.json` to `http://localhost:3000`.
-- **Cookie Security:** Authentication tokens (`accessToken` and `refreshToken`) are never persisted in `localStorage` or `sessionStorage`. Tokens reside in browser cookies configured with `HttpOnly`, `SameSite=Lax`, and `Secure` (in production).
+- **Same-Origin Proxy (`vercel.ts` / `vite.config.ts`):** Both production (Vercel rewrites via `BACKEND_URL`) and local development (Vite proxy via `VITE_API_URL`, defaulting to `http://localhost:3000`) rewrite `/api/*` to the backend origin and redirect `/docs`, `/docs/`, `/api/docs`, and `/openapi.json` to `/api/docs/` or `/api/openapi.json`. See [DEPLOYMENT.md](./DEPLOYMENT.md) for edge topology, TLS termination, and proxy hop configuration.
+- **Zero Web-Storage Token Rule:** `accessToken` and `refreshToken` are never stored in `localStorage` or `sessionStorage`; they are managed solely via backend `HttpOnly`, `SameSite=Lax` cookies (`Secure` in production).
 
 ---
 
 ## 3. Layered Component Architecture
 
-The frontend follows a modular, feature-oriented structure separating presentation, routing, state, and network communication:
-
 ```text
 apps/web/src/
-├── api/             # Centralized Axios client, interceptors, and modular API services
-├── components/      # Shared presentation primitives and structural layouts
-│   ├── auth/        # Shared authentication elements (SocialAuthButtons)
-│   ├── layout/      # Application shells (AuthLayout, AppShell)
-│   └── ui/          # UI primitives (Button, Input, Modal, Alert, Badge, etc.)
-├── features/        # Feature domains (auth, overview, security, sessions, activity, admin)
-├── routes/          # Declarative route configuration, guards, and error boundary
-├── schemas/         # Centralized Zod validation schemas
-├── stores/          # In-memory Zustand store (auth.store.ts)
-├── styles/          # OKLCH tokens (tokens.css) and global base styles (base.css)
-├── types/           # TypeScript interfaces, domain models, and API response types
-└── utils/           # Canonical formatters (user agents, timestamps, badge variants)
+├── api/             # Axios client, refresh mutex, error sanitizer, and domain API modules
+├── components/
+│   ├── auth/        # Shared authentication controls (SocialAuthButtons)
+│   ├── layout/      # Presentation shells (AuthLayout, AppShell)
+│   └── ui/          # Zero-dependency primitives (Alert, Badge, Button, Input, Modal, Pagination, Skeleton)
+├── features/        # Feature views (activity, admin, auth, common, overview, public, security, sessions)
+├── routes/          # Router definition, canonical route config, boundary guards, and error boundary
+├── schemas/         # Centralized Zod validation schemas (auth.schemas.ts)
+├── stores/          # Volatile Zustand auth store (auth.store.ts)
+├── styles/          # OKLCH tokens (tokens.css) and global base rules (base.css)
+├── types/           # TypeScript domain models and API response envelopes (auth.types.ts)
+└── utils/           # Presentation formatters (user agents, event labels, timestamps)
 ```
 
 ### 3.1 Presentation & Shell Layer
 
-Feature pages render within two structural shells supported by custom UI primitives:
-
 1. **`AuthLayout` (`components/layout/AuthLayout.tsx`):**
-   - Structural shell for unauthenticated guest flows (`/login`, `/register`, `/forgot-password`, `/reset-password`, `/verify-email`, `/magic-link/verify`).
-   - Centers a constrained card (`max-w-md`) with brand lockup, application version tag, and links to privacy policy and OpenAPI documentation.
-   - Includes layout-level `<Suspense>` skeletons to avoid visual layout shifts during page transitions.
+   - Shell for guest authentication flows (`/login`, `/register`, `/forgot-password`, `/reset-password`, `/verify-email`, `/magic-link/verify`).
+   - Centers a `max-w-md` card (`bg-paper-2 border border-rule rounded-card`) with header branding, version tag (`v1.0.0`), layout-level `<Suspense>` skeleton fallback, and footer links (`/privacy`, `/api/docs/`, `/api/openapi.json`, `/`).
 
 2. **`AppShell` (`components/layout/AppShell.tsx`):**
-   - Structural shell for authenticated routes (`/app/*`).
-   - **Desktop (≥1024px):** Persistent 240px sidebar with route navigation, active route indicators, external documentation links, and user sign-out controls.
-   - **Mobile & Tablet (<1024px):** 48px sticky header with slide-over navigation drawer and dark backdrop overlay.
-   - Dynamically filters administrative navigation links (`/app/users`, `/app/admin/roles`) based on the authenticated user's role and assigned permissions.
+   - Shell for authenticated routes (`/app/*`).
+   - **Desktop (`>= 1024px` / `lg`):** Persistent `256px` (`w-64`) sidebar with active route highlighting, developer API links, user badge, and Sign Out action; `<main>` is constrained to `max-w-6xl`.
+   - **Mobile & Tablet (`< 1024px`):** Sticky header bar with slide-over navigation drawer and backdrop overlay.
+   - Filters navigation links dynamically by `ROLES.ADMIN` (`adminOnly` for `/app/admin/roles`) and `PERMISSIONS.USER_READ` (`requiredPermission` for `/app/users`).
+   - Registers a `window.focus` listener that triggers `refreshUser()` in the background.
 
 3. **Custom UI Primitives (`components/ui/`):**
-   AuthSphere implements custom, zero-dependency UI primitives (`Button`, `Input`, `Alert`, `Badge`, `Modal`, `Skeleton`, `Pagination`) styled with Tailwind CSS v4 and Hallmark OKLCH tokens. Avoiding heavy external component libraries eliminates bundle bloat, prevents CSS variable conflicts, and ensures accessible focus states (`:focus-visible`) and touch targets (minimum 44px on mobile).
+   - Seven zero-dependency primitives (`Alert`, `Badge`, `Button`, `Input`, `Modal`, `Pagination`, `Skeleton`) styled with Tailwind CSS v4 and Hallmark OKLCH variables.
+   - Enforces `:focus-visible` outlines, accessible ARIA attributes (`aria-modal`, `aria-busy`, `aria-hidden`), and `44px` minimum touch targets on `md` (mobile) and `lg` buttons.
 
 ---
 
 ### 3.2 Routing & Access Control Guards
 
-Routing is configured through React Router 7 (`routes/index.tsx`) and partitioned across three access boundaries:
+Routing is declared in `apps/web/src/routes/index.tsx` using React Router 7 and partitioned across public routes, guest-only flows, and authenticated console views:
 
 ```mermaid
 flowchart TD
-    RouteRequest["Route Navigation Requested"] --> IngressGuard{"Session Status in Zustand"}
+    RouteRequest["Route Navigation"] --> IngressGuard{"useAuthStore.status"}
 
-    subgraph StatusEvaluation ["1. Session Status Evaluation"]
-        IngressGuard -->|"status === 'idle' | 'loading'"| Skeleton["Render Layout Skeleton"]
-        IngressGuard -->|"status === 'unavailable'"| OutageScreen["Render Service Unavailable Screen"]
-        IngressGuard -->|"status === 'authenticated'"| AuthEvaluated["Authenticated Context"]
-        IngressGuard -->|"status === 'unauthenticated'"| UnauthEvaluated["Unauthenticated Context"]
+    subgraph StatusEvaluation ["1. Session Posture Evaluation"]
+        IngressGuard -->|"idle | loading"| Skeleton["Render Guard Skeleton"]
+        IngressGuard -->|"unavailable"| OutageScreen["Render Service Unavailable + Retry"]
+        IngressGuard -->|"authenticated"| AuthEvaluated["Authenticated Context"]
+        IngressGuard -->|"unauthenticated"| UnauthEvaluated["Unauthenticated Context"]
     end
 
-    subgraph RouteGuards ["2. Boundary Protection Guards"]
-        UnauthEvaluated -->|"Target: /login, /register, etc."| GuestGuard["GuestGuard: Allow Access"]
-        AuthEvaluated -->|"Target: /login, /register, etc."| GuestRedirect["GuestGuard: Redirect to /app (or returnTo)"]
+    subgraph RouteGuards ["2. Boundary Guards"]
+        UnauthEvaluated -->|"Guest route (/login, ...)"| GuestGuard["GuestGuard: Render Outlet"]
+        AuthEvaluated -->|"Guest route (/login, ...)"| GuestRedirect["GuestGuard: Redirect to returnTo or /app"]
 
-        UnauthEvaluated -->|"Target: /app/*"| AuthGuard["AuthGuard: Redirect to /login?returnTo=..."]
-        AuthEvaluated -->|"Target: /app/*"| AppShellMount["Mount AppShell"]
+        UnauthEvaluated -->|"Protected (/app/*)"| AuthGuard["AuthGuard: Redirect to /login?returnTo=..."]
+        AuthEvaluated -->|"Protected (/app/*)"| AppShellMount["Mount AppShell"]
 
-        AppShellMount --> AdminCheck{"Target requires ADMIN or permission?"}
+        AppShellMount --> AdminCheck{"Route requires RoleGuard?"}
         AdminCheck -->|"No"| RenderPage["Render Feature View"]
-        AdminCheck -->|"Yes"| RoleGuard{"Role or Permission Allowed?"}
+        AdminCheck -->|"Yes"| RoleGuard{"Role or Permission Match?"}
         RoleGuard -->|"Yes"| RenderPage
-        RoleGuard -->|"No"| Inline403["RoleGuard: Render Inline 403 Forbidden Screen"]
+        RoleGuard -->|"No"| Inline403["RoleGuard: Render Inline 403 Screen"]
     end
 ```
 
-#### Canonical Route Inventory
+#### Canonical Route Inventory (`routes/index.tsx` & `routes/routes.config.ts`)
 
-| Route Path           | Access Guard              | Layout Shell | Description & View Component                                                                                  |
-| :------------------- | :------------------------ | :----------- | :------------------------------------------------------------------------------------------------------------ |
-| `/`                  | Public                    | Standalone   | Landing page with architecture highlights and adaptive CTAs (`HomePage`).                                     |
-| `/privacy`           | Public                    | Standalone   | Data governance and privacy policy for OAuth compliance (`PrivacyPolicyPage`).                                |
-| `/login`             | `GuestGuard`              | `AuthLayout` | Password & magic link login with inline MFA challenge (`LoginPage`).                                          |
-| `/register`          | `GuestGuard`              | `AuthLayout` | User registration with password complexity validation (`RegisterPage`).                                       |
-| `/forgot-password`   | `GuestGuard`              | `AuthLayout` | Password reset dispatch with safe confirmation banner (`ForgotPasswordPage`).                                 |
-| `/reset-password`    | `GuestGuard`              | `AuthLayout` | Password reset token verification with inline MFA support (`ResetPasswordPage`).                              |
-| `/verify-email`      | `GuestGuard`              | `AuthLayout` | Automated token verification with resend action (`VerifyEmailPage`).                                          |
-| `/magic-link/verify` | `GuestGuard`              | `AuthLayout` | Automated magic link token consumption (`MagicLinkVerifyPage`).                                               |
-| `/app`               | `AuthGuard`               | `AppShell`   | Overview of account posture, current session, and recent security events (`OverviewPage`).                    |
-| `/app/security`      | `AuthGuard`               | `AppShell`   | TOTP setup wizard, recovery codes, password rotation, and OAuth linking (`SecurityPage`).                     |
-| `/app/sessions`      | `AuthGuard`               | `AppShell`   | Active session registry, individual revocation, and Sign Out Everywhere (`SessionsPage`).                     |
-| `/app/activity`      | `AuthGuard`               | `AppShell`   | Paginated security event ledger with URL search param synchronization (`ActivityPage`).                       |
-| `/app/users`         | `AuthGuard` + `RoleGuard` | `AppShell`   | User directory with role management (`AdminUsersPage`). Accessible to `ADMIN` or principals with `user.read`. |
-| `/app/admin/roles`   | `AuthGuard` + `RoleGuard` | `AppShell`   | Role permissions configurator (`AdminRolesPage`). Restricted to `ADMIN`.                                      |
-| `*`                  | Public Fallback           | Standalone   | 404 Not Found recovery view (`NotFoundPage`).                                                                 |
+| Route Path           | Access Guard              | Layout Shell | View Component & Responsibility                                                           |
+| :------------------- | :------------------------ | :----------- | :---------------------------------------------------------------------------------------- |
+| `/`                  | Public                    | Standalone   | Landing page with adaptive authenticated/guest CTAs (`HomePage`).                         |
+| `/privacy`           | Public                    | Standalone   | Data governance and OAuth privacy policy (`PrivacyPolicyPage`).                           |
+| `/login`             | `GuestGuard`              | `AuthLayout` | Password, magic link, OAuth entry, and inline MFA challenge (`LoginPage`).                |
+| `/register`          | `GuestGuard`              | `AuthLayout` | Account signup with Zod password complexity rules (`RegisterPage`).                       |
+| `/forgot-password`   | `GuestGuard`              | `AuthLayout` | Password reset request dispatch (`ForgotPasswordPage`).                                   |
+| `/reset-password`    | `GuestGuard`              | `AuthLayout` | Token-based password reset with inline MFA prompt when enabled (`ResetPasswordPage`).     |
+| `/verify-email`      | `GuestGuard`              | `AuthLayout` | Automated email token confirmation with resend option (`VerifyEmailPage`).                |
+| `/magic-link/verify` | `GuestGuard`              | `AuthLayout` | One-time magic link verification with inline MFA challenge (`MagicLinkVerifyPage`).       |
+| `/app`               | `AuthGuard`               | `AppShell`   | Account posture summary, current session, and recent events (`OverviewPage`).             |
+| `/app/security`      | `AuthGuard`               | `AppShell`   | TOTP enrollment/disable, recovery codes, password change, OAuth linking (`SecurityPage`). |
+| `/app/sessions`      | `AuthGuard`               | `AppShell`   | Active device session registry and revocation controls (`SessionsPage`).                  |
+| `/app/activity`      | `AuthGuard`               | `AppShell`   | Paginated security event audit log synced with `?page=` (`ActivityPage`).                 |
+| `/app/users`         | `AuthGuard` + `RoleGuard` | `AppShell`   | User directory and role assignment (`AdminUsersPage`). Requires `ADMIN` or `user.read`.   |
+| `/app/admin/roles`   | `AuthGuard` + `RoleGuard` | `AppShell`   | Role permission configurator (`AdminRolesPage`). Restricted to `ADMIN`.                   |
+| `*`                  | Public Fallback           | Standalone   | 404 Not Found recovery page (`NotFoundPage`).                                             |
 
-#### Guard Specifications
+#### Guard & Route Contracts
 
-- **`AuthGuard` (`routes/guards/AuthGuard.tsx`):** Requires `status === 'authenticated'`. Unauthenticated requests redirect to `/login?returnTo=...`. In the event of a backend outage (`unavailable`), it renders a full-page connection failure screen with a manual "Retry Connection" action.
-- **`GuestGuard` (`routes/guards/GuestGuard.tsx`):** Prevents authenticated users from accessing login and registration views, redirecting them to `/app` or a validated relative path (`isSafeLocalPath`) to prevent open-redirect vulnerabilities.
-- **`RoleGuard` (`routes/guards/RoleGuard.tsx`):** Restricts access by role (`allowedRole`) or permission (`requiredPermission`). When access is denied, it renders an inline 403 Forbidden screen explaining the required capability, preserving the user's active session without logging them out.
-- **`RootErrorBoundary` (`routes/guards/RootErrorBoundary.tsx`):** Catches unexpected runtime and routing errors, presenting recovery actions ("Reload Screen" and "Go to Overview").
-- **`PUBLIC_AUTH_ROUTES` Contract:** An explicit list of public paths preventing background network failures from triggering unwanted redirect loops while browsing unauthenticated views.
+- **`AuthGuard` (`routes/guards/AuthGuard.tsx`):** Permits `status === "authenticated"`; redirects `unauthenticated` users to `/login?returnTo=<encoded>`; renders a full-page Service Unavailable recovery screen with a `Retry Connection` button (`bootstrapAuth()`) on `unavailable`.
+- **`GuestGuard` (`routes/guards/GuestGuard.tsx`):** Redirects already-authenticated users away from guest auth pages to a validated local `returnTo` path (checked by `isSafeLocalPath` to reject non-`/` prefixes, `//`, `/\`, and `/app/security`) or `/app`.
+- **`RoleGuard` (`routes/guards/RoleGuard.tsx`):** Grants access when `user.role === allowedRole` or `user.permissions` includes `requiredPermission`. Denied requests render an inline `403 Forbidden` panel preserving the active session.
+- **`RootErrorBoundary` (`routes/guards/RootErrorBoundary.tsx`):** Top-level router `errorElement` providing `"Reload Screen"` and `"Go to Overview"` recovery actions.
+- **`routes.config.ts` SSOT:** Centralizes `ROUTES`, `OAUTH_URLS`, `DOCS_URLS`, and `PUBLIC_AUTH_ROUTES` (used by `api/client.ts` so `401` failures on public pages do not trigger `/app/*` expiration redirects).
 
 ---
 
 ### 3.3 State Management & Data Ownership
 
-Client state is partitioned according to data lifecycle and ownership requirements:
+| State Domain                 | Owner / Mechanism                                 | Scope & Boundary                                                                                                |
+| :--------------------------- | :------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------- |
+| **Authentication Posture**   | Zustand Store (`useAuthStore`)                    | Volatile in-memory cache of `user: UserProfile \| null` and `status: AuthStatus`. Never persisted to storage.   |
+| **Transient MFA Challenges** | Local Component State (`useState`)                | `mfaToken` is held in page state (`LoginPage`, `MagicLinkVerifyPage`) or read from OAuth redirect `?mfaToken=`. |
+| **Form Inputs & Validation** | React Hook Form + Zod (`schemas/auth.schemas.ts`) | Isolated per form to prevent parent re-renders.                                                                 |
+| **Pagination**               | URL Search Params (`useSearchParams`)             | Keeps `?page=` bookmarkable across reloads (`ActivityPage`, `AdminUsersPage`).                                  |
+| **Server Domain Data**       | Local Component State (`useState`, `useEffect`)   | Fetched via modular services in `api/` without a global query cache.                                            |
+| **Ephemeral UI State**       | Local Component State (`useState`)                | Modals, mobile drawer state, password visibility toggles, and alert banners.                                    |
 
-| State Domain                 | Owner / Mechanism                               | Scope & Boundary                                                                                             |
-| :--------------------------- | :---------------------------------------------- | :----------------------------------------------------------------------------------------------------------- |
-| **Authentication Posture**   | Zustand Store (`useAuthStore`)                  | Volatile in-memory cache of `user: UserProfile \| null` and connection status. Never written to web storage. |
-| **Transient Challenges**     | Local Component State                           | Intermediate tokens (`mfaToken`) exist only in memory during multi-step authentication.                      |
-| **Form Inputs & Validation** | React Hook Form & Zod                           | Localized to individual forms, preventing unnecessary re-renders in parent components.                       |
-| **Pagination & Filters**     | URL Search Params (`useSearchParams`)           | Keeps table pages (e.g. `?page=2&limit=20`) bookmarkable and shareable across browser reloads.               |
-| **Server Domain Data**       | Local Component State (`useState`, `useEffect`) | Fetched directly through modular API services (`api/`) without complex global caching layers.                |
-| **Ephemeral UI State**       | Local Component State (`useState`)              | Modals, menu dropdowns, tooltip toggles, and password visibility toggles.                                    |
-
-#### Auth Store State Machine
-
-The Zustand store (`stores/auth.store.ts`) manages authentication lifecycle transitions:
+#### Auth Store State Machine (`stores/auth.store.ts`)
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle: Application Boot
-    Idle --> Loading: bootstrapAuth() on Mount
-    Loading --> Authenticated: GET /auth/me returns 200 (Hydrated User Profile)
-    Loading --> Unauthenticated: GET /auth/me returns 401 (No Active Session)
-    Loading --> Unavailable: Network Offline / 5xx Outage (Preserves Session)
+    [*] --> Idle: App Mount
+    Idle --> Loading: bootstrapAuth()
+    Loading --> Authenticated: GET /auth/me 200 (UserProfile)
+    Loading --> Unauthenticated: GET /auth/me 401 (or empty data)
+    Loading --> Unavailable: Network / 5xx Error
 
-    Authenticated --> Unauthenticated: Explicit logout() or logoutAll()
-    Authenticated --> Unauthenticated: Refresh Token Rejection (Expired or Revoked)
-    Authenticated --> Authenticated: refreshUser() (Background Profile Resync)
+    Authenticated --> Unauthenticated: logout(), logoutAll(), or Refresh 401
+    Authenticated --> Unavailable: Refresh Network / 5xx Outage (User Retained)
+    Authenticated --> Authenticated: refreshUser() (Focus / 403 Resync)
 
-    Unavailable --> Loading: "Retry Connection" Clicked
-    Unauthenticated --> Authenticated: Successful Login or OAuth Callback
+    Unavailable --> Loading: Retry Connection (bootstrapAuth)
+    Unauthenticated --> Authenticated: Login / Magic Link / OAuth -> bootstrapAuth()
 ```
 
-#### Decoupling API Client and Auth Store
-
-To avoid circular module dependencies between the HTTP client (`api/client.ts`) and the Zustand store (`stores/auth.store.ts`):
-
-- The API client exposes registry hooks: `registerAuthFailureHandler(callback)` and `registerForbiddenHandler(callback)`.
-- `auth.store.ts` registers its state handlers during module initialization. The API client never directly imports the store.
-- On a definitive 401 response, the API client calls `onAuthFailure("unauthenticated")`. On network or 5xx failures, it calls `onAuthFailure("unavailable")`.
-- On a 403 Forbidden response, `onForbidden` triggers a background `refreshUser()` call to resynchronize the user's latest permissions.
+- **`UserProfile` Contract (`types/auth.types.ts`):** Holds `id`, `email`, `firstName`, `lastName`, `role`, `permissions`, `mfaEnabled`, `verifiedAt`, `createdAt`, `oauthProviders`, `hasPassword`, and `remainingRecoveryCodes` ([ADR-101](./Engineering-Decisions.md#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)).
+- **Out-of-Order Bootstrap Mitigation:** `bootstrapAuth()` increments a module-scoped `bootstrapSequence` counter before `GET /auth/me` and discards stale responses if `seq !== bootstrapSequence`.
+- **Inversion of Control (Zero Circular Imports):** `api/client.ts` exposes `registerAuthFailureHandler` and `registerForbiddenHandler`, which `auth.store.ts` registers at module load. On `403 Forbidden`, `onForbidden` awaits `refreshUser()` before rejecting to the caller so updated permissions apply immediately.
 
 ---
 
 ### 3.4 Network Client & Refresh Mutex
 
-Network requests are managed by a centralized Axios client (`api/client.ts`) configured with `baseURL: "/api"`, `withCredentials: true`, and a 10-second timeout:
+All domain requests use `apiClient` (`apps/web/src/api/client.ts`) configured with `baseURL: "/api"`, `withCredentials: true`, and a `10000ms` timeout:
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor View as Feature Component
     participant Client as apiClient (Axios)
-    participant Mutex as Refresh Mutex Queue
-    participant API as Backend Service (/api)
+    participant Mutex as Refresh Mutex (failedQueue)
+    participant API as Backend (/api)
     participant Store as useAuthStore
+    participant Guard as AuthGuard
 
-    View->>Client: GET /sessions (with HttpOnly accessToken)
-    Client->>API: GET /sessions
-    API-->>Client: 401 Unauthorized (Access Token Expired)
+    View->>Client: GET /sessions
+    Client->>API: GET /sessions (HttpOnly accessToken)
+    API-->>Client: 401 Unauthorized
 
-    Note over Client, Mutex: Intercept 401: Is refresh active? No.
-    Client->>Mutex: isRefreshing = true
-    Client->>API: POST /api/auth/refresh-token (Raw axios call)
+    Client->>Mutex: isRefreshing = true (_retry = true)
+    Client->>API: POST /api/auth/refresh-token (raw axios)
 
     par Concurrent Request during Refresh
         View->>Client: GET /auth/security-events
-        Client->>Mutex: isRefreshing === true -> Enqueue in failedQueue
+        Client->>Mutex: isRefreshing === true -> Enqueue in failedQueue (_retry = true)
     end
 
     alt Refresh Succeeded (200 OK)
-        API-->>Client: 200 OK (New accessToken & rotated refreshToken cookies)
-        Client->>Mutex: processQueue(null) -> Resolves queued promises
-        Client->>API: Retry original GET /sessions (_retry = true)
-        API-->>View: 200 OK (Data resolved)
-    else Definitive 401 Rejection (Expired, Replayed, Revoked)
+        API-->>Client: 200 OK (Rotated HttpOnly cookies)
+        Client->>Mutex: processQueue(null) -> Resolve queued requests
+        Client->>API: Retry original & queued requests
+        API-->>View: 200 OK
+    else Definitive 401 Rejection
         API-->>Client: 401 Unauthorized
-        Client->>Mutex: processQueue(refreshError) -> Rejects queued promises
+        Client->>Mutex: processQueue(refreshError)
         Client->>Store: onAuthFailure("unauthenticated") -> clearAuthUser()
-        Client->>View: Redirects to /login?session_expired=true
+        Note over Client: If on /app/* (non-public), redirect to<br/>/login?session_expired=true&returnTo=...
     else Network / 5xx Outage
-        API-->>Client: Network Failure / 500 Outage
-        Client->>Mutex: processQueue(refreshError) -> Rejects queued promises
+        API-->>Client: Network / 5xx Error
+        Client->>Mutex: processQueue(refreshError)
         Client->>Store: onAuthFailure("unavailable") -> setStatus("unavailable")
-        Client->>View: Renders Connection Outage Screen (Session Preserved)
+        Store-->>Guard: status === "unavailable" -> Render Retry Screen
     end
 ```
 
-#### Refresh Mutex Invariants
+#### Refresh Mutex & Error Sanitization Invariants
 
-7. **Authentication Endpoint Bypass:** Login, registration, password reset, and verification endpoints bypass 401 interception, allowing credential rejection messages to reach forms directly.
-8. **Loop Prevention:** Both the initial failed request and all queued requests carry `_retry = true`, ensuring failed retries do not trigger recursive refresh attempts.
-9. **Raw Axios Invocation:** The token refresh call (`POST /api/auth/refresh-token`) is executed using raw `axios.post` instead of `apiClient`, preventing recursive interceptor loops.
-
-#### Error Sanitization (`getApiErrorMessage`)
-
-All API errors pass through `getApiErrorMessage(error)` before display:
-
-- **Server Errors (5xx):** Sanitized to generic safe notices (_"An unexpected server error occurred. Please try again later."_).
-- **Validation Errors (400):** Extracts field-level Zod messages from `data.errors` and joins them into readable text.
-- **Internal Details Filtering:** Identifies and filters database or driver details (`prisma`, `syntax error`, `foreign key`, `unique constraint`, `connection pool`, `econnrefused`), replacing them with safe operational messages.
-- **Standard HTTP Codes:** Distinct handling for 429 Rate Limits, 403 Forbidden, 401 Unauthorized, and 404 Not Found.
+- **Auth Endpoint Bypass (`AUTH_BYPASS_URLS`):** Eight auth endpoints (`/auth/login`, `/auth/signup`, `/auth/refresh-token`, `/auth/magic-link`, `/auth/magic-link/verify`, `/auth/mfa/verify`, `/auth/forgot-password`, `/auth/reset-password`) bypass 401 refresh interception so credential errors reach forms directly.
+- **Recursion Guards:** Both initial and queued retries set `_retry = true`, and the refresh call invokes raw `axios.post("/api/auth/refresh-token", ...)` rather than `apiClient`.
+- **Error Sanitization (`getApiErrorMessage`):** Maps `5xx` responses to a generic safe notice, joins safe `400` Zod field validation errors, strips database/driver error strings (e.g., `prisma`, `foreign key`, `unique constraint`, `econnrefused`), and provides clear messages for `429`, `403`, `401`, and `404`.
 
 ---
 
-## 4. Core Execution Flows
+## 4. Core Client Execution Flows
+
+For backend endpoint contracts, middleware pipelines, and server-side token mechanics, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ### 4.1 Application Bootstrap & Session Validation
 
-Session bootstrap executes on initial mount to verify active cookies and hydrate the user profile:
-
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as User Browser
-    participant Router as AppRouter
+    actor User as Browser
+    participant App as App / AppRouter
     participant Store as useAuthStore
     participant API as Backend (/api)
+    participant Guard as AuthGuard
 
-    User->>Router: Mounts application (URL: /app)
-    Router->>Store: bootstrapAuth() (sets status: loading)
-    Store->>API: GET /auth/me (Sends HttpOnly accessToken cookie)
+    User->>App: Mounts SPA (e.g. /app)
+    App->>Store: bootstrapAuth() -> status: "loading"
+    Store->>API: GET /auth/me (HttpOnly cookies)
 
-    alt Valid Session (200 OK)
-        API-->>Store: 200 OK (UserProfile)
-        Store->>Store: setAuthUser(profile) -> status: authenticated
-        Router->>User: Renders AppShell and requested feature view
-    else No Active Session (401 Unauthorized)
-        API-->>Store: 401 Unauthorized
-        Store->>Store: clearAuthUser() -> status: unauthenticated
-        Router->>User: AuthGuard redirects to /login?returnTo=%2Fapp
-    else Service Offline / 5xx Outage
-        API-->>Store: Network Error / 5xx Outage
-        Store->>Store: setStatus(unavailable)
-        Router->>User: AuthGuard renders Service Unavailable panel with Retry action
+    alt 200 OK
+        API-->>Store: UserProfile
+        Store->>Store: status: "authenticated"
+        Guard->>User: Renders AppShell + Feature View
+    else 401 Unauthorized
+        API-->>Store: 401
+        Store->>Store: clearAuthUser() -> status: "unauthenticated"
+        Guard->>User: Redirects to /login?returnTo=%2Fapp
+    else Network / 5xx Outage
+        API-->>Store: Error
+        Store->>Store: status: "unavailable"
+        Guard->>User: Renders Service Unavailable + Retry Connection
     end
 ```
-
----
 
 ### 4.2 Multi-Factor Authentication (MFA)
 
-When primary authentication encounters an MFA-enabled account, verification proceeds inline within the login view:
+Password login (`LoginPage`), magic link verification (`MagicLinkVerifyPage`), and MFA-gated social OAuth callbacks (`/login?mfaToken=...&provider=...`) share an inline two-step verification flow:
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User
-    participant Page as LoginPage
+    participant Page as LoginPage / MagicLinkVerifyPage
     participant API as Backend (/api)
     participant Store as useAuthStore
 
-    User->>Page: Submits email and password
-    Page->>API: POST /auth/login (email, password)
-    API-->>Page: 200 OK (mfaRequired: true, mfaToken)
+    User->>Page: Submits credentials or verifies magic link
+    API-->>Page: 200 OK { mfaRequired: true, mfaToken }
+    Note over Page: Hold mfaToken in component state;<br/>switch view to inline verification form.
 
-    Note over Page: Store mfaToken in component state.<br/>Display inline MFA verification form.
-
-    alt Option A: 6-Digit TOTP Code
-        User->>Page: Enters 6-digit authenticator code
-        Page->>API: POST /auth/mfa/verify (mfaToken, code: 123456)
-    else Option B: Single-Use Recovery Code
-        User->>Page: Enters recovery code (e.g. A1B2C-3D4E5)
-        Page->>API: POST /auth/mfa/verify (mfaToken, code: A1B2C-3D4E5)
-    end
-
-    API-->>Page: 200 OK (Sets HttpOnly accessToken and refreshToken cookies)
-    Page->>Page: Clear mfaToken from local state
-    Page->>Store: bootstrapAuth()
-    Store->>API: GET /auth/me
-    API-->>Store: 200 OK (UserProfile)
-    Page->>User: Navigates to /app
+    User->>Page: Enters 6-digit TOTP or recovery code
+    Page->>API: POST /auth/mfa/verify { mfaToken, code }
+    API-->>Page: 200 OK (Sets HttpOnly session cookies)
+    Page->>Store: bootstrapAuth() -> GET /auth/me
+    Page->>User: Navigates to returnTo or /app
 ```
 
----
-
-### 4.3 Session Management & Revocation
-
-The active session registry (`/app/sessions`) displays active client terminals and provides revocation controls:
+### 4.3 Session Management & Revocation (`SessionsPage`)
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User
-    participant Page as SessionsPage
-    participant Modal as Revocation Modal
+    participant Page as SessionsPage (/app/sessions)
     participant API as Backend (/api)
     participant Store as useAuthStore
 
-    User->>Page: Navigates to /app/sessions
+    User->>Page: Opens /app/sessions
     Page->>API: GET /sessions
-    API-->>Page: 200 OK (Active sessions list)
-    Page->>User: Displays active device sessions (Current session tagged)
+    API-->>Page: Active sessions (isCurrent tagged)
 
-    alt Single Session Revocation
-        User->>Page: Clicks Revoke Device for session
-        Page->>Modal: Opens Revocation Modal
-        User->>Modal: Confirms revocation
-        Modal->>API: DELETE /sessions/:id
-        API-->>Modal: 200 OK
-        Modal->>Page: Removes session from view and displays confirmation
-    else Sign Out Everywhere (Global Revocation)
-        User->>Page: Clicks Sign Out Everywhere
-        Page->>Modal: Opens Confirmation Modal
-        User->>Modal: Confirms global sign-out
-        Modal->>API: POST /auth/logout-all
-        API-->>Modal: 200 OK (All sessions revoked, cookies cleared)
-        Modal->>Store: clearAuthUser() -> status: unauthenticated
-        Page->>User: Redirects to /login?session_expired=true
+    alt Single Remote Session Revocation
+        User->>Page: Confirms modal -> DELETE /sessions/:id
+        API-->>Page: 200 OK
+        Page->>User: Filters session from local list
+    else Current Session or Sign Out Everywhere
+        User->>Page: Confirms DELETE /sessions/:id (isCurrent) or POST /auth/logout-all
+        API-->>Page: 200 OK
+        Page->>Store: clearAuthUser() -> status: "unauthenticated"
+        Page->>User: Navigates to /login
     end
 ```
 
----
+### 4.4 Role-Based Access Control (`AdminUsersPage` & `AdminRolesPage`)
 
-### 4.4 Role-Based Access Control (RBAC)
+- **Guard & Navigation Filtering:** `AppShell` hides admin items unless the user holds `ADMIN` or `user.read`, while `RoleGuard` enforces route access on `/app/users` (`ADMIN` or `user.read`) and `/app/admin/roles` (`ADMIN` only).
+- **Anti-Self-Demotion UI:** In `AdminUsersPage`, opening the role modal for the current operator (`targetUser.id === currentAuthUser.id`) displays a warning and disables the `USER` role option; backend middleware additionally enforces Last-Admin protection ([ARCHITECTURE.md](./ARCHITECTURE.md)).
+- **Role Governance:** `AdminRolesPage` allows `ADMIN` operators to inspect immutable `ADMIN` capabilities and toggle configurable `USER` permissions (`dashboard.view`, `user.read`, while keeping `profile.read` locked and marking roadmap capabilities read-only).
 
-Administrative views enforce role verification, self-demotion prevention, and permission immutability:
+### 4.5 Federated OAuth 2.0 & Account Linking Lifecycle
+
+The backend PKCE handshake, identity resolution, and Pre-Resolution Session Gate are specified in [OAUTH.md](./OAUTH.md). From the SPA boundary:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Admin
-    participant UsersPage as AdminUsersPage (/app/users)
-    participant RolesPage as AdminRolesPage (/app/admin/roles)
-    participant API as Backend (/api)
+    actor User as Browser
+    participant Sec as SecurityPage (/app/security)
+    participant Backend as Backend OAuth Flow (/api/auth/oauth/*)
+    participant Store as useAuthStore
 
-    Admin->>UsersPage: Views user directory (RoleGuard verifies ADMIN or user.read)
-    UsersPage->>API: GET /users?page=1&limit=20
-    API-->>UsersPage: 200 OK (Paginated users list)
-    UsersPage->>Admin: Displays user directory with current user highlighted
+    Note over User, Store: 1. In-Session Account Linking
+    User->>Sec: Clicks Connect (Google or GitHub)
+    Sec->>Backend: Full-page navigation: /api/auth/oauth/:provider?returnTo=/app/security
+    Backend-->>Sec: 302 Redirect: /app/security?linked=:provider (or ?error=...)
+    Sec->>Store: Existing session hydrated via bootstrapAuth() / UserProfile
+    Sec->>User: Shows banner & strips ?linked/?error via navigate(..., { replace: true })
 
-    opt Role Promotion or Demotion
-        Admin->>UsersPage: Updates role for user (USER to ADMIN)
-        Note over UsersPage: Anti-Self Demotion: USER role disabled for current admin.<br/>Backend enforces Last-Admin protection.
-        UsersPage->>API: PATCH /users/:id/role (roleName: ADMIN)
-        API-->>UsersPage: 200 OK (Updated User)
+    Note over User, Store: 2. Account Disconnection & Zero-Orphan Guard
+    User->>Sec: Clicks Disconnect -> DELETE /api/auth/oauth/:provider
+    alt Sole Sign-In Method (No Password & 1 Provider)
+        Backend-->>Sec: 400 Bad Request (Zero-Orphan Guard)
+        Sec->>User: Displays inline Alert via getApiErrorMessage()
+    else Alternative Sign-In Exists
+        Backend-->>Sec: 200 OK
+        Sec->>Store: bootstrapAuth() -> GET /auth/me
+        Sec->>User: Updates connected badges & shows confirmation
     end
-
-    Admin->>RolesPage: Views Role Governance (ADMIN role required)
-    RolesPage->>API: GET /roles/USER/permissions
-    RolesPage->>API: GET /roles/ADMIN/permissions
-    API-->>RolesPage: 200 OK (Role permissions definitions)
-    RolesPage->>Admin: Displays locked ADMIN permissions and configurable USER permissions
 ```
+
+- **Redirect Hygiene:** Both `GuestGuard` and `LoginPage` sanitize `returnTo` values, and `SecurityPage` / `LoginPage` intercept `?error=` or `?linked=` parameters cleanly (`SecurityPage` strips them via `navigate(ROUTES.APP.SECURITY, { replace: true })`).
+- **Zero-Orphan Governance:** `SecurityPage` relies on `UserProfile.oauthProviders` from `GET /auth/me` ([ADR-101](./Engineering-Decisions.md#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)) and backend Zero-Orphan validation ([ADR-104](./Engineering-Decisions.md#adr-104--zero-orphan-disconnect-protection-and-oauth-account-disconnection-governance)) to prevent locking out passwordless single-provider accounts.
 
 ---
 
 ## 5. Design System & Visual Tokens
 
-The frontend interface is governed by the Hallmark Design System Console theme (`styles/tokens.css`):
+The frontend uses the Hallmark Console theme (`apps/web/src/styles/tokens.css`, `apps/web/src/styles/base.css`, and `apps/web/src/index.css`):
 
 ```mermaid
 flowchart LR
@@ -445,39 +405,30 @@ flowchart LR
     end
 
     subgraph Semantics ["Semantic Meaning Axis"]
-        Accent["--color-accent (Amber)<br/>oklch(82% 0.15 80)<br/>Operator Action"]
-        Cool["--color-cool (Cool Blue)<br/>oklch(77% 0.12 245)<br/>System & Telemetry"]
+        Accent["--color-accent (Amber)<br/>oklch(82% 0.15 80)<br/>Primary Actions"]
+        Cool["--color-cool (Cool Blue)<br/>oklch(77% 0.12 245)<br/>Telemetry & System"]
         Ok["--color-ok (Emerald)<br/>oklch(76% 0.15 150)<br/>Verified & Active"]
-        Bad["--color-bad (Coral)<br/>oklch(70% 0.17 25)<br/>Revocation, Risk & Errors"]
+        Bad["--color-bad (Coral)<br/>oklch(70% 0.17 25)<br/>Revocation & Errors"]
     end
 
     Surfaces --> Semantics
 ```
 
-### 5.1 Hallmark Console Palette & OKLCH Surfaces
+### 5.1 OKLCH Surfaces & Semantic Tokens
 
-- **Surface Elevation by Tone:** Surface elevation is established through discrete OKLCH lightness levels separated by 1px rules rather than drop shadows (`--shadow-card: none`):
-  - Base Canvas (`--color-paper`): Dark charcoal background.
-  - Panels & Cards (`--color-paper-2`): Elevated slate containers.
-  - Inputs & Wells (`--color-paper-3`): Recessed input controls and table rows.
-  - Hairline Dividers (`--color-rule`): 1px precision panel dividers.
-- **Semantic Color Meaning:**
-  - **Amber (`--color-accent`):** Reserved for primary operator actions (_"Sign In"_, _"Save Changes"_, _"Enable 2FA"_).
-  - **Cool Blue (`--color-cool`):** Applied to system-generated tokens, IP addresses, and metadata labels.
-  - **Emerald (`--color-ok`):** Indicates verified security status, active MFA, and successful events.
-  - **Coral (`--color-bad`):** Denotes destructive actions (_"Revoke Device"_, _"Sign Out Everywhere"_), expired tokens, and critical errors.
+- **Elevation by Tone & Hairline Rules:** Hierarchy uses discrete dark OKLCH surfaces (`--color-paper`, `--color-paper-2`, `--color-paper-3`) separated by `1px` borders (`--color-rule`, `--color-rule-2`) with `--shadow-card: none`.
+- **Semantic Accents:** Amber (`--color-accent`) for primary operator actions, Cool Blue (`--color-cool`) for telemetry and system identifiers, Emerald (`--color-ok`) for verified/active states, and Coral (`--color-bad`) for destructive actions and errors.
 
-### 5.2 Typographic Hierarchy & Tabular Figures
+### 5.2 Typography & Tabular Figures
 
-- **Headings & Body:** `Host Grotesk` (weights 400 and 500) with tight letter tracking on display headings.
-- **Machine Figures & Telemetry:** `Atkinson Hyperlegible Mono` paired with `font-variant-numeric: tabular-nums` (`.num`, `td.num`). Applied to IP addresses, UUIDs, recovery codes, and ISO timestamps to guarantee vertical alignment in data tables.
+- **Prose & Controls:** `Host Grotesk` (`--font-display`, `--font-body`) loaded via `apps/web/index.html`, with tight display tracking (`--tracking-display: -0.03em`).
+- **Telemetry & Identifiers:** `Atkinson Hyperlegible Mono` (`--font-outlier`) with `font-variant-numeric: tabular-nums` (`.num`, `.figure`, `td.num`) for IP addresses, timestamps, UUIDs, and recovery codes.
 
-### 5.3 Responsive Layouts & Breakpoints
+### 5.3 Responsive Layout & Containment
 
-- **Desktop (≥1024px):** Fixed 240px sidebar; content centered in `max-w-6xl` canvas; multi-column data tables with inline actions.
-- **Tablet (640px – 1024px):** Persistent header bar with slide-over drawer; 2-column metric cards; tables maintain horizontal scroll containers.
-- **Mobile (<640px):** Sticky 48px header with drawer toggle; touch targets minimum 44px; multi-column tables adapt into stacked key-value cards.
-- **Horizontal Containment:** `overflow-x: clip` applied on root layout containers to prevent horizontal viewport sway.
+- **Desktop (`>= 1024px` / `lg`):** Persistent `256px` (`w-64`) sidebar with centered `max-w-6xl` main workspace.
+- **Tablet & Mobile (`< 1024px`):** Sticky mobile header with slide-over navigation drawer; `base.css` scales `--gutter` (`64px` -> `24px` at `<= 60rem` -> `16px` at `<= 40rem`) and feature grids collapse via `sm:` (`640px`) breakpoints with horizontal scroll wrappers (`overflow-x-auto`) on dense tables.
+- **Viewport Stability:** `overflow-x: clip` on `html, body` prevents horizontal viewport overflow, and `prefers-reduced-motion: reduce` collapses transition/animation durations.
 
 ---
 
@@ -485,46 +436,35 @@ flowchart LR
 
 ### 6.1 Code Splitting & Asset Strategy
 
-- **Route-Level Splitting:** Feature pages are loaded on demand using `React.lazy()` with `<Suspense>` boundaries located at the layout level (`routes/index.tsx`).
-- **Vendor Splitting:** Core application runtime dependencies (React, React Router, Axios, Zustand) are packaged separately from feature views, allowing browsers to cache shared libraries across route navigations.
-- **Shared Utilities:** Validation schemas, formatters, and reusable UI primitives form shared chunks referenced as needed.
-
----
+- **Route-Level Lazy Loading:** All 15 page components in `apps/web/src/routes/index.tsx` load asynchronously via `React.lazy()`, wrapped in `<Suspense>` boundaries at the layout (`AuthLayout`, `AppShell`) and standalone route level.
+- **Automatic Chunk Sharing:** Vite/Rollup automatically extracts shared vendor and utility modules across lazy route chunks without manual chunk overrides in `vite.config.ts`.
 
 ### 6.2 HTTP Caching Directives
 
-AuthSphere applies distinct caching policies across static assets, documentation, and dynamic API endpoints:
+AuthSphere enforces strict cache separation across dynamic API payloads, OpenAPI docs, and static SPA assets ([ADR-106](./Engineering-Decisions.md#adr-106--global-non-cacheable-http-baseline-cache-control-no-store-with-targeted-documentation-revalidation-no-cache)):
 
-| Resource Type                               | Cache-Control Header                  | Enforcement Layer                                  | Operational Behavior                                                                                          |
-| :------------------------------------------ | :------------------------------------ | :------------------------------------------------- | :------------------------------------------------------------------------------------------------------------ |
-| **API Endpoints (`/api/*`)**                | `Cache-Control: no-store`             | Express Global Ingress (`app.ts`)                  | Prohibits browsers, shared proxies, and CDNs from storing sensitive authentication, session, or profile data. |
-| **OpenAPI Docs (`/openapi.json`, `/docs`)** | `Cache-Control: no-cache`             | Express OpenAPI Router (`common/openapi/index.ts`) | Enables conditional revalidation via `ETag` and `304 Not Modified`, preventing schema drift.                  |
-| **Static Assets (`/assets/*-[hash].*`)**    | `public, max-age=31536000, immutable` | Web Server / Edge CDN                              | Content-hashed bundles emitted by Vite are cached indefinitely across edge nodes and browsers.                |
-| **SPA Root (`index.html`)**                 | `Cache-Control: no-cache`             | Web Server / Edge CDN                              | Forces conditional revalidation to ensure immediate adoption of new deployment chunk hashes.                  |
-
----
+| Resource Type                               | Cache-Control Directive               | Enforcement Layer                                               | Operational Behavior                                                              |
+| :------------------------------------------ | :------------------------------------ | :-------------------------------------------------------------- | :-------------------------------------------------------------------------------- |
+| **API Endpoints (`/api/*`)**                | `Cache-Control: no-store`             | Express Global Ingress (`apps/api/src/app.ts`)                  | Prohibits browsers, proxies, and CDNs from storing sensitive auth/session data.   |
+| **OpenAPI Docs (`/openapi.json`, `/docs`)** | `Cache-Control: no-cache`             | Express OpenAPI Router (`apps/api/src/common/openapi/index.ts`) | Enables `ETag` conditional revalidation (`304 Not Modified`) without stale specs. |
+| **Static Assets (`/assets/*-[hash].*`)**    | `public, max-age=31536000, immutable` | Web Server / Edge CDN                                           | Content-hashed Vite bundles cache indefinitely across edge nodes and browsers.    |
+| **SPA Entry (`index.html`)**                | `Cache-Control: no-cache`             | Web Server / Edge CDN                                           | Forces conditional revalidation so clients adopt newly deployed chunk hashes.     |
 
 ### 6.3 Error Handling Matrix
 
-Every meaningful operational state provides clear user feedback and explicit recovery actions:
-
-| Operational State                | UI Presentation & Behavior                                                         | Recovery Path                                                           |
-| :------------------------------- | :--------------------------------------------------------------------------------- | :---------------------------------------------------------------------- |
-| **Initial Loading**              | Layout-matching geometric pulsing skeleton (`Skeleton.tsx`).                       | Resolves automatically upon data arrival; zero cumulative layout shift. |
-| **Empty Data State**             | Direct explanation of missing data (e.g. _"No active sessions found"_).            | Contextual action (e.g. _"Refresh"_).                                   |
-| **Validation Error (400)**       | Accessible inline field descriptions with error borders.                           | User corrects invalid form input; error clears on input change.         |
-| **Session Expired (401)**        | Silent token refresh; redirects to `/login?session_expired=true` if unrecoverable. | Re-authenticates; return path preserved via `?returnTo=...`.            |
-| **Forbidden Access (403)**       | Inline 403 Forbidden banner explaining required roles or permissions.              | Active session preserved; CTA button to _"Return to Overview"_.         |
-| **Rate Limited (429)**           | Alert banner (_"Too many requests. Please slow down and try again."_).             | Actions disabled during rate limit cooldown period.                     |
-| **Service Outage (5xx/Offline)** | Full-page / panel "Service Unavailable" screen.                                    | Session preserved in memory; manual _"Retry Connection"_ button.        |
-
----
+| Operational State                | UI Presentation & Behavior                                                                                | Recovery Path                                                                       |
+| :------------------------------- | :-------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------- |
+| **Initial Loading**              | Layout-matching pulsing skeleton (`Skeleton.tsx`, guard skeletons).                                       | Resolves automatically on data arrival without layout shift.                        |
+| **Empty Data State**             | Explicit zero-state copy (e.g., _"No active sessions found."_).                                           | Contextual refresh or creation action.                                              |
+| **Validation Error (400)**       | Inline field error messages via React Hook Form + Zod (`auth.schemas.ts`).                                | User corrects invalid input; clears on validation pass.                             |
+| **Session Expired (401)**        | Silent refresh via mutex; on protected `/app/*`, redirects to `/login?session_expired=true&returnTo=...`. | Re-authenticates and returns to preserved `returnTo` path.                          |
+| **Forbidden Access (403)**       | Inline 403 panel (`RoleGuard`) or permission alert + background `refreshUser()`.                          | Active session preserved; _"Return to Overview"_ navigation action.                 |
+| **Rate Limited (429)**           | Sanitized `Alert` notice (`getApiErrorMessage`).                                                          | User waits for rate-limit cooldown before retrying.                                 |
+| **Service Outage (5xx/Offline)** | Guard-level `"Service Unavailable"` panel (`status === "unavailable"`).                                   | In-memory session retained; manual `"Retry Connection"` triggers `bootstrapAuth()`. |
 
 ### 6.4 Quality Gates & Verification
 
-All frontend code and architecture artifacts are verified through automated quality gates:
-
-- **TypeScript Compilation:** `npm run typecheck` validates strict typing across monorepo workspaces without errors.
-- **ESLint Analysis:** `npm run lint` enforces React hooks and formatting rules.
-- **Production Build:** `npm run build -w @authsphere/web` verifies clean Vite bundle compilation and tree-shaking.
-- **Accessibility:** Designed to comply with WCAG 2.1 AA standards, including visible focus indicators (`:focus-visible`), proper ARIA roles, live regions, accessible SVGs, and minimum 44px mobile touch targets.
+- **Type Checking:** `npm run typecheck` (or `npm run typecheck -w @authsphere/web`, running `tsc -b --noEmit`).
+- **Linting:** `npm run lint` (or `npm run lint -w @authsphere/web`, running `eslint .`).
+- **Production Build:** `npm run build -w @authsphere/web` (clean + `tsc -b` + `vite build`).
+- **Accessibility:** `:focus-visible` outlines (`--color-focus`), semantic dialog/alert ARIA attributes, `44px` mobile touch targets on standard controls, and `prefers-reduced-motion` support.

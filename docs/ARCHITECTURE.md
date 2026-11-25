@@ -1,12 +1,12 @@
 # Architecture & System Design — AuthSphere
 
-This document provides a comprehensive overview of **AuthSphere's** system architecture, component interactions, data models, and core execution flows for an authentication and session-management platform with production-oriented security controls.
+This document is the Single Source of Truth (SSOT) for **AuthSphere's** monorepo/backend layered architecture, Canonical Route Inventory & OpenAPI 3.1 Registry, rate limit tiers, Prisma ER data model, and core backend execution lifecycles.
 
 > **AuthSphere Architecture & Engineering Documentation Suite:**
 >
 > - [ARCHITECTURE.md](./ARCHITECTURE.md) — System Design, Component Topology & Core Data Models
 > - [FRONTEND_ARCHITECTURE.md](./FRONTEND_ARCHITECTURE.md) — Frontend Architecture, Component Topology & Control Plane
-> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 101 Formal ADRs, Security Invariants & Technical Trade-offs
+> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 107 Formal ADRs, Security Invariants & Technical Trade-offs
 > - [OAUTH.md](./OAUTH.md) — OAuth 2.0 PKCE Social Authentication & Integration Protocols
 > - [DEPLOYMENT.md](./DEPLOYMENT.md) — Cloud Infrastructure, Dual-Compute (Lambda/ECS) & Runbooks
 > - [TESTING.md](./TESTING.md) — Hermetic Test Pyramid, Invariant Verification & CI Strategies
@@ -15,184 +15,198 @@ This document provides a comprehensive overview of **AuthSphere's** system archi
 
 ## 1. System Overview & Monorepo Architecture
 
-AuthSphere is organized as a multi-package monorepo managed via npm workspaces:
+AuthSphere is organized as an npm workspaces monorepo separating the backend API/worker runtime, frontend SPA, shared domain contracts, and infrastructure definitions:
 
 ```text
 authsphere/ (Monorepo Root)
 ├── apps/
-│   ├── api/                  # Express.js REST API service (Node.js >=24)
-│   │   ├── prisma/           # Database schema, migrations, and seed script
+│   ├── api/                  # Express.js REST API & background worker (Node.js >=24)
+│   │   ├── prisma/           # Prisma schema, SQL migrations, and seed script
 │   │   └── src/
 │   │       ├── common/       # Global errors, utilities, ApiResponse envelopes, OpenAPI registry
 │   │       ├── config/       # Process-aware environment validation (env.ts)
 │   │       ├── generated/    # Explicitly generated Prisma client
 │   │       ├── lib/          # Singleton infrastructure clients (Prisma, Redis, Logger, Crypto, JWT, TOTP, Queue)
-│   │       ├── middlewares/  # Security, tracing, origin guard, rate limiting, RBAC middlewares
+│   │       ├── middlewares/  # Security, tracing, origin guard, rate limiting, auth, validation middlewares
 │   │       ├── modules/      # Feature modules (auth, authorization, sessions, roles, users, health, email)
 │   │       ├── types/        # Express ambient type declarations
-│   │       ├── workers/      # Standalone background queue worker (email.worker.ts)
+│   │       ├── workers/      # Standalone BullMQ email worker entrypoint (email.worker.ts)
 │   │       ├── app.ts        # Pure Express application setup
-│   │       ├── server.ts     # HTTP server entrypoint (ECS Fargate container)
+│   │       ├── server.ts     # HTTP server entrypoint (containerized runtime)
 │   │       └── lambda.ts     # AWS Lambda serverless entrypoint (@codegenie/serverless-express)
-│   └── web/                  # React & Vite frontend application
+│   └── web/                  # React & Vite SPA (see FRONTEND_ARCHITECTURE.md)
 │       ├── vercel.ts         # Code-first edge reverse proxy configuration (@vercel/config/v1)
 │       └── vite.config.ts    # Development reverse proxy configuration
 ├── packages/
-│   └── shared/               # Shared domain constants (ROLES, PERMISSIONS, etc.) and TypeScript types
-├── infra/                    # Infrastructure as Code
-│   ├── ecs/                  # AWS ECS Task Definitions (API & Worker)
-│   └── lambda/               # AWS SAM / CloudFormation Template & build scripts
-├── docker/                   # Multi-container local orchestration (docker-compose.dev.yml, docker-compose.infra.yml)
+│   └── shared/               # Shared domain constants (ROLES, PERMISSIONS, OAUTH_PROVIDERS, SECURITY_EVENT_TYPES) & TS types
+├── infra/                    # Infrastructure as Code (ecs/ task definitions, lambda/ SAM template)
+├── docker/                   # Local orchestration (docker-compose.dev.yml, docker-compose.infra.yml)
 └── Dockerfile                # Multi-stage production container build (base -> builder -> runner)
 ```
 
-> **Related Architectural Decisions:** See [Architecture & Project Boundaries ADRs](./Engineering-Decisions.md#architecture--project-boundaries) for monorepo boundary principles and feature-based modular design.
+> **Related ADRs:** See [Architecture & Project Boundaries](./Engineering-Decisions.md#architecture--project-boundaries) for monorepo boundary principles and feature-based modular design.
 
 ---
 
 ## 2. Layered Component Architecture
 
-HTTP requests traversing AuthSphere pass through a deterministic pipeline across distinct architectural boundaries. Global security and ingress middlewares run ahead of route matching, while protected endpoints evaluate authentication prior to user-keyed rate limiting and authorization guards:
+HTTP requests pass through a deterministic ingress pipeline in `apps/api/src/app.ts`, followed by route-specific authentication, rate-limiting, validation, and authorization guards:
 
 ```mermaid
 flowchart TD
-    Client["HTTP Client / Browser"] -->|"Public Requests /api/*"| Vercel["Vercel Edge Reverse Proxy"]
-    Vercel -->|"Rewrites /api/(.*) to /(.*)"| Express["Express.js App"]
+    Client["HTTP Client / Browser"] -->|"Same-Origin /api/*"| EdgeProxy["Edge Reverse Proxy (Vercel / Vite)"]
+    EdgeProxy -->|"Rewrites /api/(.*) to /(.*)"| Express["Express.js App (app.ts)"]
 
-    subgraph GlobalPipeline ["1. Global Ingress Middleware Pipeline (app.ts)"]
-        Helmet["Helmet Security Headers"]
-        CORS["CORS (Strict FRONTEND_URL and Credentials)"]
-        ReqID["Request ID Sanitization and Pino Logger"]
-        OriginGuard["Origin and Sec-Fetch-Site Guard (State Mutations)"]
+    subgraph GlobalPipeline ["1. Global Ingress Pipeline (app.ts)"]
+        Helmet["Helmet Headers + Cache-Control: no-store"]
+        CORS["CORS (FRONTEND_URL + credentials)"]
+        Tracing["requestId + requestLogger (Pino)"]
+        OriginGuard["originValidation (Sec-Fetch-Site + Origin/Referer)"]
         HealthBypass{"Route is /health/* ?"}
-        HealthHandler["In-Memory Health Probes (/health/live)"]
-        GlobalRL["Global Rate Limiter (100 req/min via Atomic Lua)"]
-        BodyParser["Body Parser (16kb Limit) and Cookie Parser"]
+        HealthRouter["Health Router (/health, /health/live, /health/ready)"]
+        GlobalRL["Global Rate Limiter (100 req/min IP via Redis Lua)"]
+        BodyParser["express.json (16kb) + cookieParser"]
 
-        Helmet --> CORS
-        CORS --> ReqID
-        ReqID --> OriginGuard
-        OriginGuard --> HealthBypass
-        HealthBypass -->|"Yes"| HealthHandler
-        HealthBypass -->|"No"| GlobalRL
-        GlobalRL --> BodyParser
+        Helmet --> CORS --> Tracing --> OriginGuard --> HealthBypass
+        HealthBypass -->|"Yes"| HealthRouter
+        HealthBypass -->|"No"| GlobalRL --> BodyParser
     end
 
-    subgraph RoutePipelines ["2. Route-Level Execution Pipelines"]
-        Router{"Target Route Type"}
+    subgraph RoutePipelines ["2. Route-Level Pipelines"]
+        Router{"Route Access Type"}
+        AuthGuard["auth Middleware (JWT + redis.mget revocation & permissions)"]
+        ProtectedGuards["User Rate Limiter + Zod validate + RBAC Guard"]
+        PublicGuards["IP Rate Limiter + optionalAuth (OAuth init) + Zod validate"]
 
-        AuthGuard["Auth Middleware (Verifies Access JWT, attaches req.auth)"]
-        UserRL["Route Rate Limiter (Dual-Key: Authenticated userId)"]
-        ZodValProtected["Zod Validation (Params, Query, Body)"]
-        RBACGuard["RBAC Authorization Guard (requireRole / requirePermission)"]
-
-        IPRL["Route Rate Limiter (Dual-Key: Client IP)"]
-        ZodValPublic["Zod Validation (Body, Params)"]
-
-        Router -->|"Protected (/sessions, /roles, /users, etc.)"| AuthGuard
-        AuthGuard --> UserRL
-        UserRL --> ZodValProtected
-        ZodValProtected --> RBACGuard
-
-        Router -->|"Public (/auth/signup, /login, etc.)"| IPRL
-        IPRL --> ZodValPublic
+        Router -->|"Protected"| AuthGuard --> ProtectedGuards
+        Router -->|"Public"| PublicGuards
     end
 
     subgraph FeatureLayer ["3. Feature Module Layer"]
-        Controller["Module Controller (HTTP Translation and ApiResponse Envelopes)"]
-        Service["Module Service (Domain Logic and Security Decisions)"]
-        Repository["Module Repository (Prisma 7 ORM and SQL Queries)"]
+        Controller["Controller (HTTP translation, cookies, ApiResponse)"]
+        Service["Service (Domain logic, crypto, security events)"]
+        Repository["Repository (Prisma 7 ORM + SQL error mapping)"]
 
-        Controller --> Service
-        Service --> Repository
+        Controller --> Service --> Repository
     end
 
     subgraph InfraLayer ["4. Infrastructure Layer"]
-        Redis[("Redis Cache and Store")]
-        QueueSystem["Queue Dispatcher (BullMQ / Inline / Sync)"]
-        Worker["Email Worker Daemon"]
-        EmailGateway["Email Provider Strategy (Gmail SMTP / OAuth2 / Resend)"]
-        CryptoLib["Crypto Library (WebCrypto HS256 / Argon2id / AES-256-GCM)"]
-        Postgres[("PostgreSQL Database: Neon and PgBouncer")]
+        Redis[("Redis (Rate Limits, Revocation, Cache, OAuth State, BullMQ)")]
+        QueueSystem["Email Queue Dispatcher (bullmq | inline | sync)"]
+        Worker["Email Worker (APP_ROLE=worker)"]
+        EmailGateway["Email Provider (Gmail SMTP/OAuth2 | Resend)"]
+        CryptoLib["Crypto & JWT (Argon2id, AES-256-GCM, WebCrypto HS256)"]
+        Postgres[("PostgreSQL (@prisma/adapter-pg + pg.Pool)")]
 
-        QueueSystem -->|"QUEUE_DRIVER=bullmq"| Redis
-        Worker -->|"Poll and Dequeue"| Redis
-        Worker -->|"Dispatch"| EmailGateway
-        QueueSystem -->|"QUEUE_DRIVER=inline or sync"| EmailGateway
+        QueueSystem -->|"bullmq"| Redis
+        Worker -->|"Dequeue"| Redis
+        Worker --> EmailGateway
+        QueueSystem -->|"inline / sync"| EmailGateway
     end
 
     Express --> Helmet
     BodyParser --> Router
-    RBACGuard --> Controller
-    ZodValPublic --> Controller
+    ProtectedGuards --> Controller
+    PublicGuards --> Controller
 
-    GlobalRL -->|"Atomic Pipeline"| Redis
-    UserRL -->|"Atomic Pipeline"| Redis
-    IPRL -->|"Atomic Pipeline"| Redis
-    Service -->|"Permission and Leeway Cache"| Redis
-    Service -->|"Enqueue Email Jobs"| QueueSystem
-    Service -->|"Argon2id and AES-256-GCM"| CryptoLib
-    Repository -->|"Prisma Pg Adapter"| Postgres
+    GlobalRL --> Redis
+    AuthGuard --> Redis
+    ProtectedGuards --> Redis
+    PublicGuards --> Redis
+    Service --> QueueSystem
+    Service --> CryptoLib
+    Repository --> Postgres
 ```
 
 ### Layer Responsibilities
 
-| Architectural Layer            | Primary Responsibility                                                                                                                                                                                                                        | Architectural Rule                                                                                                                                         |
-| :----------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Global Middleware Pipeline** | Request tracing, CORS validation, origin and `Sec-Fetch-Site` verification, health check bypass, global IP rate limiting, and deferred payload parsing (16kb limit).                                                                          | Rejects malformed, oversized, untrusted-origin, or rate-limited requests before JSON parsing or route matching.                                            |
-| **Route Middleware Pipeline**  | JWT authentication, user-keyed vs IP-keyed rate limiting, multi-target Zod input validation, and RBAC authorization guards.                                                                                                                   | Enforces `auth -> rateLimiter -> validate -> requireRole/requirePermission`. Authentication runs ahead of user-keyed rate limits and authorization guards. |
-| **Controller Layer**           | HTTP protocol translation, extracting pre-validated input, setting/clearing HTTP-only cookies, and returning standardized API response envelopes (`ApiResponse`: `{ success: boolean, message: string, data: T \| null, errors?: unknown }`). | Pure HTTP orchestration with zero business logic or direct database access. Delegates all state mutations to services.                                     |
-| **Service Layer**              | Core authentication and session orchestration, password verification, cryptographic operations, MFA challenge resolution, session generation, and cache invalidation.                                                                         | Independent of Express `req`/`res`. Throws domain-specific `AppError` subclasses.                                                                          |
-| **Repository Layer**           | Data persistence using Prisma 7 ORM with PostgreSQL adapter (`@prisma/adapter-pg` + `pg.Pool`). Translates database errors (e.g. `P2002` duplicate key) into domain errors.                                                                   | Encapsulates all database operations and transactions. No business logic.                                                                                  |
-| **Infrastructure Layer**       | Singleton clients for PostgreSQL (`prisma`), Redis (`ioredis`), Logging (`pino`), and background email delivery (`emailQueue` / `emailService`).                                                                                              | Singletons instantiated in `src/lib/`. Decoupled from application framework.                                                                               |
+| Architectural Layer            | Primary Responsibility                                                                                                                                                                                          | Architectural Rule                                                                                                                                                                                                                                                        |
+| :----------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Global Middleware Pipeline** | Proxy trust (`TRUST_PROXY`), Helmet headers, `Cache-Control: no-store`, CORS, sanitized `X-Request-Id`, Pino logging, origin validation, `/health` bypass, global IP limit, body parsing.                       | Rejects untrusted-origin or flooded requests before JSON parsing (`16kb` limit) or feature routing. `openApiRouter` (`/openapi.json`, `/docs`) uses `no-cache`.                                                                                                           |
+| **Route Middleware Pipeline**  | JWT authentication (`auth` / `optionalAuth`), dual-key rate limiting, multi-target Zod validation (`body`, `params`, `query`), and RBAC guards (`requireRole`, `requirePermission`, `requireSelfOrPermission`). | On protected routes, `auth` always precedes `rateLimiter` so `userId` keys are populated. Permission guards precede `rateLimiter` on `GET /auth/security-events` and `GET /users`; role/self guards follow `validate` on `/users/:id`, `/users/:id/role`, and `/roles/*`. |
+| **Controller Layer**           | Extracts validated inputs, manages `HttpOnly` cookies, and serializes envelopes (`ApiResponse.success`: `{ success: true, message, data }`; `errorHandler`: `{ success: false, message, errors? }`).            | Pure HTTP translation with zero business logic or direct database access. `UnauthorizedError` automatically clears the `accessToken` cookie in `errorHandler`.                                                                                                            |
+| **Service Layer**              | Authentication orchestration, password/MFA verification, session rotation, permission caching, and audit event recording.                                                                                       | Framework-independent; throws `AppError` subclasses.                                                                                                                                                                                                                      |
+| **Repository Layer**           | Data persistence via Prisma 7 ORM (`@prisma/adapter-pg` + `pg.Pool`) and translation of Prisma error codes (`P2002`, `P2025`) to domain errors.                                                                 | Encapsulates all queries and interactive transactions (`$transaction`).                                                                                                                                                                                                   |
+| **Infrastructure Layer**       | Singleton clients (`prisma`, `redis`, `logger`, `emailQueue`) and cryptographic/JWT utilities in `apps/api/src/lib/`.                                                                                           | Decoupled from Express handlers; bounded timeouts for serverless safety.                                                                                                                                                                                                  |
 
-> **Related Architectural Decisions:** See [Validation, Middleware & Authorization ADRs](./Engineering-Decisions.md#validation-middleware--authorization) for pipeline ordering, Zod validation contracts, and rate limiting policies.
+> **Related ADRs:** See [Validation, Middleware & Authorization](./Engineering-Decisions.md#validation-middleware--authorization) for pipeline ordering, Zod contracts, and OpenAPI parity.
 
-### 2.1 Complete Route Inventory & OpenAPI 3.1 Operation Registry (33 Operations)
+### 2.1 Canonical Route Inventory & OpenAPI 3.1 Operation Registry (34 Operations)
 
-AuthSphere enforces a strict 1:1 bidirectional parity invariant (`apps/api/tests/unit/openapi.test.ts`) between mounted Express route stacks and code-first OpenAPI 3.1 documentation (`[ADR-071]`). The system exposes and registers exactly **33 distinct operations** across 5 public feature modules:
+AuthSphere enforces strict 1:1 bidirectional parity (`apps/api/tests/unit/openapi.test.ts`) between mounted Express routers and the code-first OpenAPI 3.1 document (`[ADR-071]`), exposing **34 operations** across 5 feature modules (plus `/openapi.json` and `/docs` mounted via `openApiRouter`):
 
-| Module       | Method   | Route Path                            | Access / Authorization Guards                                 | Rate Limit Policy                                       | Operation Description & Egress Contract                                                                                                                   |
-| :----------- | :------- | :------------------------------------ | :------------------------------------------------------------ | :------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Health**   | `GET`    | `/health`                             | Public                                                        | None                                                    | Root alias liveness probe; returns `LivenessData` (`status: "UP"`).                                                                                       |
-| **Health**   | `GET`    | `/health/live`                        | Public                                                        | None                                                    | AWS ALB zero-I/O in-memory liveness probe; returns `LivenessData`.                                                                                        |
-| **Health**   | `GET`    | `/health/ready`                       | Public                                                        | None                                                    | Deep readiness probe concurrently evaluating PostgreSQL and Redis connectivity; returns `ReadinessData` (503 on dependency outage).                       |
-| **Auth**     | `POST`   | `/auth/signup`                        | Public                                                        | `SIGNUP`<br/>(5 req / 15m, IP)                          | Registers new user with Argon2id password; enqueues verification email; returns user metadata.                                                            |
-| **Auth**     | `POST`   | `/auth/verify-email`                  | Public                                                        | `VERIFY_EMAIL`<br/>(10 req / 5m, IP)                    | Verifies email via cryptographic token; marks user verified and timestamps `verifiedAt`.                                                                  |
-| **Auth**     | `POST`   | `/auth/resend-verification`           | Public                                                        | `RESEND_VERIFICATION`<br/>(5 req / 15m, IP)             | Resends email verification token; enumeration-safe silent return on unregistered email.                                                                   |
-| **Auth**     | `POST`   | `/auth/login`                         | Public                                                        | `LOGIN`<br/>(10 req / 1m, IP)                           | Verifies credentials; sets `accessToken` & `refreshToken` cookies, or yields ephemeral 5m `mfaToken` challenge if MFA enabled.                            |
-| **Auth**     | `POST`   | `/auth/refresh-token`                 | Public<br/>_(HttpOnly Cookie)_                                | `REFRESH_TOKEN`<br/>(30 req / 1m, IP)                   | Performs atomic CAS refresh token rotation; leverages 30s Redis leeway cache for concurrent request grace periods.                                        |
-| **Auth**     | `POST`   | `/auth/logout`                        | Public<br/>_(HttpOnly Cookie)_                                | None                                                    | Revokes active session corresponding to `refreshToken` cookie and clears authentication cookies.                                                          |
-| **Auth**     | `POST`   | `/auth/logout-all`                    | Protected (`auth`)                                            | None                                                    | Revokes all active database sessions owned by caller and clears authentication cookies.                                                                   |
-| **Auth**     | `GET`    | `/auth/me`                            | Protected (`auth`)                                            | None                                                    | Resolves caller identity; returns `CurrentUserProfile` including `mfaEnabled` boolean and verification status `[ADR-101]`.                                |
-| **Auth**     | `POST`   | `/auth/forgot-password`               | Public                                                        | `FORGOT_PASSWORD`<br/>(5 req / 15m, IP)                 | Dispatches password reset link token; returns enumeration-safe silent success.                                                                            |
-| **Auth**     | `POST`   | `/auth/reset-password`                | Public                                                        | `RESET_PASSWORD`<br/>(10 req / 5m, IP)                  | Resets password via token; mandates MFA verification code if account has `mfaEnabled: true`.                                                              |
-| **Auth**     | `POST`   | `/auth/change-password`               | Protected (`auth`)                                            | `CHANGE_PASSWORD`<br/>(5 req / 15m, User)               | Updates password for authenticated user; requires MFA code verification if MFA enabled.                                                                   |
-| **Auth**     | `POST`   | `/auth/mfa/setup`                     | Protected (`auth`)                                            | `MFA_VERIFY_SETUP`<br/>(5 req / 5m, User)               | Generates AES-256-GCM encrypted TOTP secret and returns `otpauth://` QR setup URI.                                                                        |
-| **Auth**     | `POST`   | `/auth/mfa/verify-setup`              | Protected (`auth`)                                            | `MFA_VERIFY_SETUP`<br/>(5 req / 5m, User)               | Confirms initial TOTP 6-digit code, activates MFA on account, and returns single-use recovery codes.                                                      |
-| **Auth**     | `POST`   | `/auth/mfa/verify`                    | Public                                                        | `MFA_VERIFY`<br/>(10 req / 1m, IP)                      | Verifies second factor (TOTP or recovery code) against ephemeral `mfaToken`; creates session and issues auth cookies.                                     |
-| **Auth**     | `POST`   | `/auth/mfa/disable`                   | Protected (`auth`)                                            | `MFA_DISABLE`<br/>(5 req / 15m, User)                   | Deactivates MFA after verifying current password or TOTP code; purges encrypted secrets and recovery codes.                                               |
-| **Auth**     | `POST`   | `/auth/mfa/regenerate-recovery-codes` | Protected (`auth`)                                            | `MFA_REGENERATE_RECOVERY_CODES`<br/>(5 req / 15m, User) | Replaces existing recovery codes with fresh set of single-use codes (requires password/TOTP).                                                             |
-| **Auth**     | `POST`   | `/auth/magic-link`                    | Public                                                        | `MAGIC_LINK_REQUEST`<br/>(5 req / 15m, IP)              | Requests passwordless login magic link email; enumeration-safe silent return on non-existent accounts.                                                    |
-| **Auth**     | `POST`   | `/auth/magic-link/verify`             | Public                                                        | `MAGIC_LINK_VERIFY`<br/>(10 req / 5m, IP)               | Consumes single-use magic link token; yields active session or ephemeral `mfaToken` if MFA enabled.                                                       |
-| **Auth**     | `GET`    | `/auth/security-events`               | Protected (`auth`)                                            | `SECURITY_EVENTS_READ`<br/>(60 req / 1m, User)          | Returns paginated audit trail of security-sensitive events (`LOGIN_SUCCESS`, `LOGOUT`, `MFA_...`).                                                        |
-| **Auth**     | `GET`    | `/auth/oauth/google`                  | Public (`optionalAuth`)                                       | `OAUTH_INITIATE`<br/>(20 req / 1m, IP)                  | Initiates Google OAuth 2.0 PKCE flow; issues browser-bound transaction cookie `oauth_verifier_<state>` and 302 Redirect to Google.                        |
-| **Auth**     | `GET`    | `/auth/oauth/google/callback`         | Public                                                        | `OAUTH_CALLBACK`<br/>(20 req / 1m, IP)                  | Completes Google OAuth PKCE exchange; sets auth cookies and issues 302 Redirect to `/app` (or `/app/security?linked=google`, or `/login?mfa=...`).        |
-| **Auth**     | `GET`    | `/auth/oauth/github`                  | Public (`optionalAuth`)                                       | `OAUTH_INITIATE`<br/>(20 req / 1m, IP)                  | Initiates GitHub OAuth 2.0 PKCE flow; issues browser-bound transaction cookie `oauth_verifier_<state>` and 302 Redirect to GitHub.                        |
-| **Auth**     | `GET`    | `/auth/oauth/github/callback`         | Public                                                        | `OAUTH_CALLBACK`<br/>(20 req / 1m, IP)                  | Completes GitHub OAuth PKCE exchange; sets auth cookies and issues 302 Redirect to `/app` (or `/app/security?linked=github`, or `/login?mfa=...`).        |
-| **Sessions** | `GET`    | `/sessions`                           | Protected (`auth`)                                            | `SESSIONS_READ`<br/>(60 req / 1m, User)                 | Lists all active device sessions for current user (`id`, `ipAddress`, `userAgent`, `expiresAt`, `isCurrent`).                                             |
-| **Sessions** | `DELETE` | `/sessions/:id`                       | Protected (`auth`)                                            | `SESSION_REVOKE`<br/>(20 req / 1m, User)                | Revokes active session by UUIDv7 ID; enforces ownership; wipes auth cookies if revoking current session.                                                  |
-| **Users**    | `GET`    | `/users`                              | Protected (`auth` +<br/>`requireRole(ADMIN)`)                 | `USERS_LIST`<br/>(30 req / 1m, User)                    | Administrative paginated listing of all registered users (`page`, `limit`); returns user summaries with `mfaEnabled` and pagination metadata `[ADR-099]`. |
-| **Users**    | `GET`    | `/users/:id`                          | Protected (`auth` +<br/>`requireSelfOrPermission(USER_READ)`) | `USER_READ`<br/>(60 req / 1m, User)                     | Retrieves user profile by ID with `mfaEnabled` and verification status; egress sanitization via `UserProfileSchema`.                                      |
-| **Users**    | `PATCH`  | `/users/:id/role`                     | Protected (`auth` +<br/>`requireRole(ADMIN)`)                 | `USER_CHANGE_ROLE`<br/>(10 req / 1m, User)              | Reassigns user role; blocks self-role modification; acquires exclusive `ADMIN` row lock preventing last-admin demotion `[ADR-067]`.                       |
-| **Roles**    | `GET`    | `/roles/:roleName/permissions`        | Protected (`auth` +<br/>`requireRole(ADMIN)`)                 | `ROLE_READ_PERMISSIONS`<br/>(60 req / 1m, User)         | Reads permissions assigned to role (`USER` or `ADMIN`); cached in Redis (24h TTL) with transparent DB fallback `[ADR-100]`.                               |
-| **Roles**    | `PUT`    | `/roles/:roleName/permissions`        | Protected (`auth` +<br/>`requireRole(ADMIN)`)                 | `ROLE_UPDATE_PERMISSIONS`<br/>(10 req / 1m, User)       | Updates role permissions; enforces `ADMIN` immutability (403); deduplicates permissions via Zod; invalidates Redis cache post-commit `[ADR-037]`.         |
+| Module       | Method   | Route Path                            | Access / Authorization Guards                             | Rate Limit Policy                             | Operation Summary & Egress Contract                                                                                                           |
+| :----------- | :------- | :------------------------------------ | :-------------------------------------------------------- | :-------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Health**   | `GET`    | `/health`                             | Public                                                    | None                                          | Root alias liveness probe; returns `LivenessData` (`status: "UP"`).                                                                           |
+| **Health**   | `GET`    | `/health/live`                        | Public                                                    | None                                          | Zero-I/O in-memory liveness probe; returns `LivenessData`.                                                                                    |
+| **Health**   | `GET`    | `/health/ready`                       | Public                                                    | `HEALTH` (60/1m, IP)                          | Concurrent PostgreSQL + Redis readiness probe; returns `ReadinessData` (`200` or `503`).                                                      |
+| **Auth**     | `POST`   | `/auth/signup`                        | Public                                                    | `SIGNUP` (5/15m, IP)                          | Creates unverified user (Argon2id), stores SHA-256 verification token (24h), enqueues verification email (`201`).                             |
+| **Auth**     | `POST`   | `/auth/verify-email`                  | Public                                                    | `VERIFY_EMAIL` (10/5m, IP)                    | Consumes verification token; sets `isEmailVerified` and `verifiedAt` (idempotent if already verified).                                        |
+| **Auth**     | `POST`   | `/auth/resend-verification`           | Public                                                    | `RESEND_VERIFICATION` (5/15m, IP)             | Upserts verification token and enqueues email; enumeration-safe silent `200` on missing/verified email.                                       |
+| **Auth**     | `POST`   | `/auth/login`                         | Public                                                    | `LOGIN` (10/1m, IP)                           | Verifies password (dummy hash on miss); issues `accessToken` + `refreshToken` cookies, or `mfaRequired` 5m `mfaToken`.                        |
+| **Auth**     | `POST`   | `/auth/refresh-token`                 | Public _(Refresh Cookie)_                                 | `REFRESH_TOKEN` (30/1m, IP)                   | Atomic CAS refresh rotation with Redis leeway grace cache (`AUTH_REFRESH_TOKEN_LEEWAY_SECONDS`); revokes on reuse.                            |
+| **Auth**     | `POST`   | `/auth/logout`                        | Public _(Refresh Cookie)_                                 | None                                          | Deletes session, writes `auth:revoked-session:{sid}` to Redis, clears auth cookies, records `LOGOUT`.                                         |
+| **Auth**     | `POST`   | `/auth/logout-all`                    | Protected (`auth`)                                        | None                                          | Deletes all user sessions, writes `auth:user-revoked-at:{userId}`, clears auth cookies, records `LOGOUT`.                                     |
+| **Auth**     | `GET`    | `/auth/me`                            | Protected (`auth`)                                        | None                                          | Returns sanitized `CurrentUserProfile` (`permissions`, `mfaEnabled`, `hasPassword`, `oauthProviders`, `remainingRecoveryCodes?`) `[ADR-101]`. |
+| **Auth**     | `POST`   | `/auth/forgot-password`               | Public                                                    | `FORGOT_PASSWORD` (5/15m, IP)                 | Enqueues 24h reset token email (or social-login reminder if `!passwordHash`); enumeration-safe silent `200`.                                  |
+| **Auth**     | `POST`   | `/auth/reset-password`                | Public                                                    | `RESET_PASSWORD` (10/5m, IP)                  | Resets password via token; requires TOTP/recovery `code` if MFA enabled; revokes sessions + sets `auth:user-revoked-at`.                      |
+| **Auth**     | `POST`   | `/auth/change-password`               | Protected (`auth`)                                        | `CHANGE_PASSWORD` (5/15m, User)               | Updates password (or sets initial password if `!passwordHash`); requires MFA `code` if enabled; revokes sessions and clears auth cookies.     |
+| **Auth**     | `POST`   | `/auth/mfa/setup`                     | Protected (`auth`)                                        | `MFA_VERIFY_SETUP` (5/5m, User)               | Generates Base32 TOTP secret, encrypts via AES-256-GCM, returns `secret` and `otpauthUri`.                                                    |
+| **Auth**     | `POST`   | `/auth/mfa/verify-setup`              | Protected (`auth`)                                        | `MFA_VERIFY_SETUP` (5/5m, User)               | Verifies 6-digit TOTP code, enables MFA, stores hashed recovery codes, returns 10 single-use `XXXXX-XXXXX` recovery codes.                    |
+| **Auth**     | `POST`   | `/auth/mfa/verify`                    | Public                                                    | `MFA_VERIFY` (10/1m, IP)                      | Completes `mfaToken` challenge with TOTP or recovery code; issues session cookies; warns when `remainingRecoveryCodes <= 2`.                  |
+| **Auth**     | `POST`   | `/auth/mfa/disable`                   | Protected (`auth`)                                        | `MFA_DISABLE` (5/15m, User)                   | Verifies TOTP or recovery `code`; clears `mfaSecret`, deletes recovery codes/challenges, revokes all sessions, clears cookies.                |
+| **Auth**     | `POST`   | `/auth/mfa/regenerate-recovery-codes` | Protected (`auth`)                                        | `MFA_REGENERATE_RECOVERY_CODES` (5/15m, User) | Verifies TOTP or recovery `code`; replaces existing recovery codes with a fresh set of 10 hashed codes.                                       |
+| **Auth**     | `POST`   | `/auth/magic-link`                    | Public                                                    | `MAGIC_LINK_REQUEST` (5/15m, IP)              | Upserts 15m SHA-256 magic link token and enqueues email; enumeration-safe silent `200`.                                                       |
+| **Auth**     | `POST`   | `/auth/magic-link/verify`             | Public                                                    | `MAGIC_LINK_VERIFY` (10/5m, IP)               | Consumes magic link token, auto-verifies email if unverified, and issues session cookies or 5m `mfaToken` challenge.                          |
+| **Auth**     | `GET`    | `/auth/security-events`               | Protected (`auth` + `requirePermission(DASHBOARD_VIEW)`)  | `SECURITY_EVENTS_READ` (60/1m, User)          | Returns paginated chronological (`createdAt DESC`) security audit trail for caller.                                                           |
+| **Auth**     | `GET`    | `/auth/oauth/google`                  | Public (`optionalAuth`)                                   | `OAUTH_INITIATE` (20/1m, IP)                  | Initiates Google PKCE flow; sets `oauth_verifier_<state>` cookie and `302` redirects to Google. See [OAUTH.md](./OAUTH.md).                   |
+| **Auth**     | `GET`    | `/auth/oauth/google/callback`         | Public                                                    | `OAUTH_CALLBACK` (20/1m, IP)                  | Completes Google PKCE exchange, resolves identity, sets cookies or MFA redirect. See [OAUTH.md](./OAUTH.md).                                  |
+| **Auth**     | `GET`    | `/auth/oauth/github`                  | Public (`optionalAuth`)                                   | `OAUTH_INITIATE` (20/1m, IP)                  | Initiates GitHub PKCE flow; sets `oauth_verifier_<state>` cookie and `302` redirects to GitHub. See [OAUTH.md](./OAUTH.md).                   |
+| **Auth**     | `GET`    | `/auth/oauth/github/callback`         | Public                                                    | `OAUTH_CALLBACK` (20/1m, IP)                  | Completes GitHub PKCE exchange, resolves identity, sets cookies or MFA redirect. See [OAUTH.md](./OAUTH.md).                                  |
+| **Auth**     | `DELETE` | `/auth/oauth/:provider`               | Protected (`auth`)                                        | `OAUTH_UNLINK` (10/15m, User)                 | Disconnects `google` or `github`; enforces Zero-Orphan invariant (`400` if sole sign-in method). See [OAUTH.md](./OAUTH.md).                  |
+| **Sessions** | `GET`    | `/sessions`                           | Protected (`auth`)                                        | `SESSIONS_READ` (60/1m, User)                 | Lists active (`expiresAt > NOW`) sessions for caller with `isCurrent` sorted first.                                                           |
+| **Sessions** | `DELETE` | `/sessions/:id`                       | Protected (`auth`)                                        | `SESSION_REVOKE` (20/1m, User)                | Ownership-enforced (`403` on foreign ID) session deletion + Redis `auth:revoked-session:{id}`; clears cookies if `isCurrent`.                 |
+| **Users**    | `GET`    | `/users`                              | Protected (`auth` + `requirePermission(USER_READ)`)       | `USERS_LIST` (30/1m, User)                    | Paginated user directory (`page`, `limit <= 100`) sanitized via `usersResponseSchema.paginatedUsers` `[ADR-099]`.                             |
+| **Users**    | `GET`    | `/users/:id`                          | Protected (`auth` + `requireSelfOrPermission(USER_READ)`) | `USER_READ` (60/1m, User)                     | Retrieves sanitized `UserProfile` by UUIDv7 ID (`mfaEnabled`, `isEmailVerified`, `role`).                                                     |
+| **Users**    | `PATCH`  | `/users/:id/role`                     | Protected (`auth` + `requireRole(ADMIN)`)                 | `USER_CHANGE_ROLE` (10/1m, User)              | Blocks self-modification (`403`); locks `ADMIN` role row to prevent last-admin demotion `[ADR-067]`; revokes target sessions in DB + Redis.   |
+| **Roles**    | `GET`    | `/roles/:roleName/permissions`        | Protected (`auth` + `requireRole(ADMIN)`)                 | `ROLE_READ_PERMISSIONS` (60/1m, User)         | Returns role permissions from Redis (`role:permissions:<role>`, 24h TTL) with DB fallback `[ADR-100]`.                                        |
+| **Roles**    | `PUT`    | `/roles/:roleName/permissions`        | Protected (`auth` + `requireRole(ADMIN)`)                 | `ROLE_UPDATE_PERMISSIONS` (10/1m, User)       | Updates non-`ADMIN` role permissions (`403` on `ADMIN`); deduplicates via Zod; invalidates `role:permissions:<role>` `[ADR-037]`.             |
+
+### 2.2 Rate Limit Tiers & Canonical Redis Keyspace
+
+`apps/api/src/middlewares/rate-limit.ts` enforces fixed-window rate limits using a single atomic Redis `EVAL` script (`INCR` + conditional `EXPIRE` on count `1`):
+
+- **Key Format:** `rl:<policy.name>:<identifier>:<bucket>`, where `<bucket> = Math.floor(Date.now() / policy.windowMs)` and `<identifier>` is `req.auth?.userId` for `"user"` policies (falling back to client IP) or `getClientIp(req)` for `"ip"` policies.
+- **Response Headers & Fail-Open:** Sets IETF `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` on all evaluated responses, plus `Retry-After` on `429`. Bypasses transparently when `redis.status !== "ready"` or on Redis errors.
+
+| Tier Category                  | Policies (`RATE_LIMIT_POLICIES`)                                                                                                      | Quota / Window   | Key Type |
+| :----------------------------- | :------------------------------------------------------------------------------------------------------------------------------------ | :--------------- | :------- |
+| **Global Ingress**             | `GLOBAL`                                                                                                                              | 100 req / 1m     | IP       |
+| **Readiness Probe**            | `HEALTH`                                                                                                                              | 60 req / 1m      | IP       |
+| **High-Risk Public Auth**      | `SIGNUP`, `FORGOT_PASSWORD`, `RESEND_VERIFICATION`, `MAGIC_LINK_REQUEST`                                                              | 5 req / 15m      | IP       |
+| **Public Token / Code Verify** | `VERIFY_EMAIL`, `RESET_PASSWORD`, `MAGIC_LINK_VERIFY`                                                                                 | 10 req / 5m      | IP       |
+| **Public Credential / MFA**    | `LOGIN`, `MFA_VERIFY` (10/1m); `OAUTH_INITIATE`, `OAUTH_CALLBACK` (20/1m); `REFRESH_TOKEN` (30/1m)                                    | 10–30 req / 1m   | IP       |
+| **Sensitive User Mutations**   | `MFA_VERIFY_SETUP` (5/5m); `CHANGE_PASSWORD`, `MFA_DISABLE`, `MFA_REGENERATE_RECOVERY_CODES` (5/15m); `OAUTH_UNLINK` (10/15m)         | 5–10 req / 5–15m | User     |
+| **Admin Mutations**            | `USER_CHANGE_ROLE`, `ROLE_UPDATE_PERMISSIONS`                                                                                         | 10 req / 1m      | User     |
+| **Authenticated Reads/Revoke** | `SESSION_REVOKE` (20/1m); `USERS_LIST` (30/1m); `USER_READ`, `ROLE_READ_PERMISSIONS`, `SESSIONS_READ`, `SECURITY_EVENTS_READ` (60/1m) | 20–60 req / 1m   | User     |
+
+#### Canonical Redis Keyspace
+
+| Key Pattern                                | TTL                                       | Purpose                                                                                                        |
+| :----------------------------------------- | :---------------------------------------- | :------------------------------------------------------------------------------------------------------------- |
+| `rl:<policy>:<identifier>:<bucket>`        | Remainder of fixed window                 | Atomic fixed-window rate-limit counter                                                                         |
+| `role:permissions:<role>`                  | `86400s` (24h)                            | Cached permission array for `USER` / `ADMIN` (`authorizationService`)                                          |
+| `auth:refresh-leeway:<sid>:<oldTokenHash>` | `AUTH_REFRESH_TOKEN_LEEWAY_SECONDS` (30s) | Concurrent CAS refresh-token grace cache (`AuthTokens` JSON)                                                   |
+| `auth:revoked-session:<sid>`               | `JWT_ACCESS_EXPIRES_IN_MS`                | Immediate single-session access-JWT revocation marker (`logout`, `DELETE /sessions/:id`)                       |
+| `auth:user-revoked-at:<userId>`            | `JWT_ACCESS_EXPIRES_IN_MS`                | Epoch-second floor rejecting older access JWTs (`logoutAll`, password reset/change, `mfaDisable`, role change) |
+| `oauth:state:<state>`                      | `600s` (10m)                              | Single-use OAuth PKCE state (`GETDEL`); see [OAUTH.md](./OAUTH.md)                                             |
+| `bull:authsphere-email:*`                  | Managed by BullMQ                         | Email job queue & dead-letter retention (last 500 failed jobs) when `QUEUE_DRIVER=bullmq`                      |
 
 ---
 
 ## 3. Data Architecture & Entity-Relationship Model
 
-AuthSphere models user identity, active sessions, multi-factor authentication, role-based permissions, OAuth federated accounts, and security audit events across 12 Prisma models:
+`apps/api/prisma/schema.prisma` defines 12 PostgreSQL models backing identity, sessions, MFA, RBAC, OAuth federation, and security auditing:
 
 ```mermaid
 erDiagram
@@ -284,6 +298,7 @@ erDiagram
     MfaChallenge {
         string id PK "UUIDv7"
         string userId FK "onDelete: Cascade"
+        enum type "LOGIN_SUCCESS | OAUTH_LOGIN | MAGIC_LINK_LOGIN"
         datetime expiresAt "Indexed (5m TTL)"
         datetime createdAt
     }
@@ -308,7 +323,7 @@ erDiagram
     SecurityEvent {
         string id PK "UUIDv7"
         string userId FK "onDelete: Cascade"
-        enum type "LOGIN_SUCCESS | LOGOUT | MFA_..."
+        enum type "SecurityEventType enum"
         string ipAddress "Nullable"
         string userAgent "Nullable"
         json metadata "Nullable audit context"
@@ -318,19 +333,19 @@ erDiagram
 
 ### Relational & Key Invariants
 
-1. **Universal UUIDv7 Primary Keys & Composite Join Keys:** AuthSphere defines 12 Prisma models. All 11 independent database entities (`User`, `Role`, `Permission`, `Session`, `EmailVerificationToken`, `PasswordResetToken`, `MfaRecoveryCode`, `MfaChallenge`, `OAuthAccount`, `MagicLinkToken`, and `SecurityEvent`) use time-ordered UUIDv7 identifiers (`@default(uuid(7))`). UUIDv7 embeds a 48-bit Unix millisecond timestamp in the high bits, ensuring sequential B-tree index insertion locality and minimizing page splits while providing cryptographically random entropy to prevent ID enumeration. The 12th model, `RolePermission`, is a relational join entity utilizing a composite primary key (`@@id([roleId, permissionId])`).
-2. **Explicit Deletion Cascade Policy:** Deleting a `User` cascades to all user-owned dependent entities (`Session`, `EmailVerificationToken`, `PasswordResetToken`, `MfaRecoveryCode`, `MfaChallenge`, `OAuthAccount`, `MagicLinkToken`, and `SecurityEvent`). Conversely, `User.roleId` enforces `onDelete: Restrict` to prevent accidental deletion of assigned roles. Deleting `SecurityEvent` records on account purge represents a deliberate operational audit-retention trade-off.
-3. **PostgreSQL Token Persistence:** Relational persistence in PostgreSQL stores exclusively one-way cryptographic SHA-256 digests (`tokenHash`, `codeHash`). Raw verification and magic link tokens are never written in plaintext to the PostgreSQL database. Note that raw tokens transit Redis in job payloads during BullMQ email queue delivery; whether these payloads touch disk depends on the underlying Redis snapshotting/append-only file configuration (RDB/AOF), so disk-level persistence guarantees apply strictly to the PostgreSQL database.
+1. **UUIDv7 Primary Keys & Composite Join Key:** The 11 independent entities use `@default(uuid(7))` for time-ordered B-tree locality without sequential ID enumeration. `RolePermission` uses a composite primary key (`@@id([roleId, permissionId])`).
+2. **Cascade & Constraint Rules:** Deleting a `User` cascades to all user-owned records (`Session`, tokens, MFA records, `OAuthAccount`, `SecurityEvent`), whereas `User.roleId` uses `onDelete: Restrict`. `OAuthAccount` enforces `@@unique([provider, providerId])` and `@@unique([userId, provider])`.
+3. **Hashed PostgreSQL Token Storage:** PostgreSQL persists only one-way SHA-256 digests (`tokenHash`, `codeHash`) for sessions, verification/reset/magic-link tokens, and recovery codes. Raw outbound tokens transit Redis only if `QUEUE_DRIVER=bullmq`.
 
-> **Related Architectural Decisions:** See [Data Access, ORM & Transactions ADRs](./Engineering-Decisions.md#data-access-orm--transactions) for UUIDv7 selection rationale, foreign key cascade policies, and unique constraint error handling.
+> **Related ADRs:** See [Data Access, ORM & Transactions](./Engineering-Decisions.md#data-access-orm--transactions) for UUIDv7 selection, cascade policies, and Prisma error translation.
 
 ---
 
 ## 4. End-to-End Core System Flows
 
-### 4.1 Primary Authentication & Token Refresh Flow
+### 4.1 Primary Authentication, Introspection & Token Refresh
 
-The standard authentication lifecycle pairs short-lived access JWTs with database-backed refresh tokens governed by atomic Compare-And-Swap (CAS) rotation and an ephemeral Redis leeway cache:
+Authentication pairs short-lived access JWTs (`15m` default) with database-backed refresh JWTs (`30d` default) governed by atomic Compare-And-Swap (CAS) rotation and a Redis leeway grace window:
 
 ```mermaid
 sequenceDiagram
@@ -338,83 +353,66 @@ sequenceDiagram
     actor Client as Client / Browser
     participant API as API Server
     participant DB as PostgreSQL
-    participant Redis as Redis Cache
+    participant Redis as Redis Store
 
     Note over Client, Redis: Phase 1 — Standard Login (MFA Disabled)
     Client->>API: POST /auth/login { email, password }
-    API->>DB: findUserByEmail(email)
-    API->>API: Verify Argon2id password hash (or dummy verify on miss)
-    API->>DB: createSession(UUIDv7 sid, SHA-256 tokenHash)
-    API-->>Client: 200 OK + Set-Cookie: accessToken (15m, path="/"), refreshToken (30d, path="/")
+    API->>DB: findUserByEmailWithRole(email)
+    API->>API: Verify Argon2id hash (or DUMMY_PASSWORD_HASH on miss)
+    API->>DB: createSession(UUIDv7 sid, SHA-256 tokenHash; prunes same IP+UA)
+    API-->>Client: 200 OK + Set-Cookie: accessToken, refreshToken (HttpOnly, Path="/")
 
-    Note over Client, Redis: Phase 2 — Authenticated Request
+    Note over Client, Redis: Phase 2 — Authenticated Request (auth middleware)
     Client->>API: GET /auth/me (accessToken cookie)
-    API->>API: Verify access JWT signature and claims (sub, sid, role)
-    API->>Redis: GET role:permissions:USER
-    alt Cache Miss
-        Redis-->>API: null
-        API->>DB: Query permissions for role
-        API->>Redis: SETEX role:permissions:USER 86400 [...]
-    else Cache Hit
-        Redis-->>API: ["profile.read", "profile.update"]
+    API->>API: Verify access JWT (HS256: sub, sid, role, iat)
+    API->>Redis: MGET auth:revoked-session:{sid}, auth:user-revoked-at:{sub}, role:permissions:{role}
+    alt Revoked in Redis
+        API-->>Client: 401 Unauthorized + Clear Auth Cookies
+    else Active
+        opt Permissions Cache Miss
+            API->>DB: Query role permissions
+            API->>Redis: SETEX role:permissions:{role} 86400 [...]
+        end
+        API->>API: Attach req.auth { userId, role, sessionId, permissions }
+        API-->>Client: 200 OK (Sanitized CurrentUserProfile)
     end
-    API->>API: Attach req.auth context { userId, role, sid, permissions }
-    API-->>Client: 200 OK { success: true, data: userProfile (including mfaEnabled) }
 
-    Note over Client, Redis: Phase 3 — Refresh Token Rotation (CAS + Bounded Cache Retry)
+    Note over Client, Redis: Phase 3 — Refresh Token Rotation (CAS + Bounded Leeway)
     Client->>API: POST /auth/refresh-token (refreshToken cookie)
-    API->>API: Verify refresh JWT and compute SHA-256 oldTokenHash
+    API->>API: Verify refresh JWT & compute SHA-256 oldTokenHash
     API->>Redis: GET auth:refresh-leeway:{sid}:{oldTokenHash}
-    opt Leeway Cache Hit (Recent Rotation Grace Period)
-        Redis-->>API: Cached AuthTokens
-        API->>DB: findSessionById(sid) (Validate active session persistence)
+    opt Leeway Cache Hit
+        API->>DB: findSessionById(sid)
         alt Active Session Exists
-            API-->>Client: 200 OK (Return synchronized token pair)
-        else Session Revoked/Purged
-            API->>Redis: DEL auth:refresh-leeway:{sid}:{oldTokenHash} (Purge dead leeway cache)
-            API-->>Client: 401 Unauthorized ("Invalid session")
+            API-->>Client: 200 OK + Set-Cookie (Synchronized token pair)
+        else Session Missing / Revoked
+            API->>Redis: DEL auth:refresh-leeway:{sid}:{oldTokenHash}
+            API-->>Client: 401 Unauthorized + Clear Auth Cookies
         end
     end
-
-    API->>DB: findSessionById(sid) and verify ownership
-    API->>DB: Atomic CAS: rotateSession(id=sid, tokenHash=oldTokenHash)
+    API->>DB: findSessionById(sid) & atomic CAS rotateSession(id=sid, tokenHash=oldTokenHash)
     alt CAS Succeeded (Winner)
         API->>Redis: SET auth:refresh-leeway:{sid}:{oldTokenHash} (EX 30s)
         API-->>Client: 200 OK + Set-Cookie (Rotated token pair)
-    else CAS Failed (Loser / Concurrent Contention)
-        API->>Redis: GET auth:refresh-leeway:{sid}:{oldTokenHash}
-        opt Cache Miss on First Check (Publication Lag)
-            API->>API: Bounded sleep (150ms backoff)
-            API->>Redis: GET auth:refresh-leeway:{sid}:{oldTokenHash}
-        end
-        alt Cached Tokens Retrieved (Concurrent Win)
-            API-->>Client: 200 OK (Return winner's cached token pair)
-        else Cache Still Empty or Redis Unavailable (Replay Breach)
-            alt Replay Deletion Mode is GLOBAL
-                API->>DB: deleteAllSessionsByUserId(userId) (Revoke all active sessions)
-            else Replay Deletion Mode is SESSION
-                API->>DB: deleteSessionById(sid) (Revoke compromised session)
-            end
-            API-->>Client: 401 Unauthorized ("Compromised session detected")
+    else CAS Failed (Concurrent Contention or Replay)
+        API->>Redis: GET auth:refresh-leeway:{sid}:{oldTokenHash} (retry once after 150ms if empty)
+        alt Leeway Cache Populated
+            API-->>Client: 200 OK + Set-Cookie (Winner's token pair)
+        else Cache Empty (Replay Breach)
+            API->>DB: Revoke session (SESSION mode) or all user sessions (GLOBAL mode)
+            API-->>Client: 401 Unauthorized + Clear Auth Cookies
         end
     end
 ```
 
-#### User Profile Introspection (`GET /auth/me`)
+- **Client-Device Session Supersession (`[ADR-102]`):** `createSession()` atomically deletes prior sessions sharing the exact `(userId, userAgent, ipAddress)` tuple before inserting the new session.
+- **Profile Introspection (`GET /auth/me`):** `authResponseSchema.currentUserProfile` acts as a runtime egress firewall (`[ADR-088]`, `[ADR-101]`), returning `{ id, email, firstName, lastName, role, permissions, mfaEnabled, verifiedAt, createdAt, oauthProviders, hasPassword, remainingRecoveryCodes? }` while stripping secrets and password hashes.
 
-When the client hydrates an active session, `GET /auth/me` resolves caller identity through `authResponseSchema.currentUserProfile` as a runtime egress sanitization firewall (`[ADR-088]`):
-
-- **Sanitized Profile Payload:** `{ id, email, firstName, lastName, role, mfaEnabled, verifiedAt, createdAt }`.
-- **Immediate MFA Awareness:** Exposing `mfaEnabled: boolean` directly within current user profile responses gives frontend applications instant awareness of whether second-factor authentication is configured on the account, eliminating the need for speculative challenge probing or extra API roundtrips `[ADR-101]`.
-- **Credential & Secret Protection:** Password hashes, symmetric encryption keys, encrypted TOTP secrets (`mfaSecret`), and backup recovery code hashes are strictly excluded from the serialization envelope.
-
-> **Related Architectural Decisions:** See [Authentication & Session Management ADRs](./Engineering-Decisions.md#authentication--session-management) for token rotation invariants, CAS concurrency semantics, and replay scope policies.
-
----
+> **Related ADRs:** See [Authentication & Session Management](./Engineering-Decisions.md#authentication--session-management).
 
 ### 4.2 Multi-Factor Authentication (MFA) & Ephemeral Challenge Flow
 
-When MFA is enabled on an account, primary credential verification yields an ephemeral 5-minute challenge token (`mfaToken`) instead of active session cookies, withholding session issuance until the second factor succeeds:
+When `mfaEnabled` is true during password login, OAuth social login, or magic link verification, session issuance is withheld behind an ephemeral 5-minute `MfaChallenge` (`mfaToken` UUIDv7):
 
 ```mermaid
 sequenceDiagram
@@ -423,56 +421,37 @@ sequenceDiagram
     participant API as API Server
     participant DB as PostgreSQL
 
-    Note over Client, DB: Step 1 — Primary Authentication (First Factor)
-    Client->>API: POST /auth/login { email, password }
-    API->>DB: findUserByEmail(email) and verify Argon2id hash
-    API->>DB: createMfaChallenge(userId, 5m TTL)
-    API-->>Client: 200 OK { mfaRequired: true, mfaToken: "UUIDv7" }
+    Note over Client, DB: Step 1 — First Factor Verified (Login / OAuth / Magic Link)
+    API->>DB: createMfaChallenge(userId, 5m TTL, type=LOGIN_SUCCESS|OAUTH_LOGIN|MAGIC_LINK_LOGIN)
+    API-->>Client: 200 OK { mfaRequired: true, mfaToken } (or 302 /login?mfa=true&mfaToken=...)
 
-    Note over Client, DB: Step 2 — Unified Second Factor Verification
+    Note over Client, DB: Step 2 — Second Factor Verification
     Client->>API: POST /auth/mfa/verify { mfaToken, code }
-    API->>DB: findMfaChallengeById(mfaToken)
-    alt Challenge Expired or Missing
-        API-->>Client: 400 Bad Request ("Invalid or expired MFA challenge")
-    else Challenge Valid
-        alt Code matches 6-digit TOTP (totp.isTotpCode)
-            API->>API: Decrypt mfaSecret (AES-256-GCM)
-            API->>API: Verify TOTP time window
+    API->>DB: findMfaChallengeById(mfaToken, expiresAt >= NOW)
+    alt Challenge Missing or Expired
+        API-->>Client: 400 Bad Request
+    else Valid Challenge
+        alt 6-digit TOTP Code
+            API->>API: Decrypt mfaSecret (AES-256-GCM) & verify TOTP (+/- 30s tolerance)
             API->>DB: Atomically advance mfaLastUsedWindow (Monotonic Replay Guard)
-        else Code is 10-char Alphanumeric Recovery Code
-            API->>API: Compute SHA-256 codeHash
-            API->>DB: Atomic single-use burn: verifyAndConsumeRecoveryCode (usedAt: null to NOW)
+        else Recovery Code (XXXXX-XXXXX)
+            API->>DB: Atomic single-use burn (usedAt: null -> NOW)
         end
-        API->>DB: deleteMfaChallenge(mfaToken)
-        API->>DB: createSession(UUIDv7 sid, SHA-256 tokenHash)
-        API-->>Client: 200 OK + Set-Cookie: accessToken, refreshToken
+        API->>DB: deleteMfaChallenge(mfaToken) & createSession(...)
+        API->>DB: recordSecurityEvent(challenge.type, { mfaVerified: true, usedRecoveryCode })
+        API-->>Client: 200 OK + Set-Cookie: accessToken, refreshToken (+ lowRecoveryCodesWarning if <= 2 left)
     end
 ```
 
-> **Related Architectural Decisions:** See [Multi-Factor Authentication ADRs](./Engineering-Decisions.md#multi-factor-authentication-mfa) for symmetric secret encryption, monotonic replay windows, and polymorphic TOTP vs recovery code resolution.
+> **Related ADRs:** See [Multi-Factor Authentication (MFA)](./Engineering-Decisions.md#multi-factor-authentication-mfa) and [ADR-107](./Engineering-Decisions.md#adr-107--deferred-mfa-security-event-attribution-via-polymorphic-challenge-state).
 
----
+### 4.3 OAuth 2.0 PKCE Integration
 
-### 4.3 OAuth 2.0 PKCE & Identity Resolution Architecture
+AuthSphere acts strictly as an **OAuth 2.0 Client** (Google and GitHub) using Authorization Code Flow with `S256` PKCE, Redis single-use `GETDEL` state (`oauth:state:<state>`), browser-bound `oauth_verifier_<state>` cookies scoped via `getOAuthVerifierCookiePath()`, pre-resolution session revalidation for in-session linking, `409 Conflict` anti-takeover guards, and Zero-Orphan disconnection governance (`DELETE /auth/oauth/:provider`).
 
-AuthSphere acts strictly as an **OAuth 2.0 Client** using the **Authorization Code Flow with PKCE (RFC 7636 / RFC 9700)**, enabling federated social authentication and account linking across external identity providers (Google and GitHub):
+For the full protocol specification, sequence diagrams, provider strategies, identity resolution matrix, and threat model, see the SSOT in **[OAUTH.md](./OAUTH.md)**.
 
-- **Protocol Standard:** Implements the OAuth 2.0 Authorization Code Grant with Proof Key for Code Exchange (RFC 7636 / RFC 9700 PKCE using `S256`).
-- **Cryptographic Binding:** The 32-byte code verifier is stored in a browser-bound, per-transaction HttpOnly cookie (`oauth_verifier_<state>`) scoped to `/api/auth/oauth` with a 10-minute TTL, isolating multi-tab authentication flows.
-- **Atomic Single-Use State:** Random 32-byte CSRF state tokens are cached in Redis (`oauth:state:<state>`, 600s TTL) and consumed atomically via `GETDEL` upon callback processing to prevent replay attacks.
-- **Pre-Resolution Session Gate:** If initiating linking from an authenticated state, AuthSphere validates the active session in PostgreSQL before token exchange; revoked or invalid sessions fail immediately with `401 Unauthorized`.
-- **Anti-Account Takeover Guard:** Unauthenticated OAuth logins attempting to claim an existing local password-registered email are rejected with `409 Conflict`, requiring password verification before linking.
-- **Provider Normalization & Trust Boundary:** User profiles are retrieved over authenticated TLS (Google via authenticated UserInfo endpoint over TLS without local ID-token signature validation against JWKS; GitHub via user emails API) and normalized into unified identity records.
-
-For complete end-to-end sequence flows, provider attribute matrices, security invariants, and curl test scripts, refer to the authoritative specification in [OAUTH.md](./OAUTH.md).
-
-> **Related Architectural Decisions:** See [Security, Cryptography & Credentials ADRs](./Engineering-Decisions.md#security-cryptography--credentials) for OAuth strategy patterns, atomic state invalidation, and conflict-guarded identity workflows.
-
----
-
-### 4.4 Passwordless Magic Link Authentication Flow
-
-Magic link authentication provides enumeration-safe token generation with single-use atomic consumption:
+### 4.4 Passwordless Magic Link Flow
 
 ```mermaid
 sequenceDiagram
@@ -482,43 +461,33 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant Queue as Email Dispatcher
 
-    Note over Client, Queue: Step 1 — Request Flow
     Client->>API: POST /auth/magic-link { email }
-    API->>API: Rate Limiter (5 req / 15m) and Zod email validation
     API->>DB: findUserByEmail(email)
-    alt User Exists
-        API->>API: Generate 32-byte crypto token and SHA-256 digest
-        API->>DB: UPSERT MagicLinkToken (userId @unique, 15m TTL)
-        API->>Queue: enqueueMagicLinkEmail(rawToken, email)
-    else User Not Found
-        Note over API: Early return to prevent account enumeration
+    opt User Exists
+        API->>DB: UPSERT MagicLinkToken (SHA-256 tokenHash, 15m TTL)
+        API->>Queue: enqueueMagicLinkEmail(email, rawToken)
     end
-    API-->>Client: 200 OK ("If an account exists, a magic link has been sent")
+    API-->>Client: 200 OK (Enumeration-safe silent response)
 
-    Note over Client, DB: Step 2 — Verification & Session Issuance
     Client->>API: POST /auth/magic-link/verify { token }
-    API->>API: Rate Limiter (10 req / 5m) and SHA-256 digest
-    API->>DB: findMagicLinkTokenWithUser(tokenHash) (expiresAt >= NOW)
-    alt Token Invalid, Expired, or Consumed
-        API-->>Client: 400 Bad Request ("Invalid or expired magic link token")
-    else Token Valid and MFA Enabled
-        API->>DB: Atomic consume: user.update(magicLinkToken: { delete: {} })
-        API->>DB: createMfaChallenge(userId, 5m TTL)
-        API-->>Client: 200 OK { mfaRequired: true, mfaToken }
-    else Token Valid and MFA Disabled
-        API->>DB: Atomic consume: user.update(magicLinkToken: { delete: {} }, isEmailVerified: true)
-        API->>DB: createSession(UUIDv7 sid, SHA-256 tokenHash)
-        API-->>Client: 200 OK + Set-Cookie: accessToken, refreshToken
+    API->>DB: findMagicLinkTokenWithUser(SHA-256(token), expiresAt >= NOW)
+    alt Invalid / Expired
+        API-->>Client: 400 Bad Request
+    else Valid Token
+        API->>DB: consumeMagicLinkToken (delete token; set isEmailVerified=true if false)
+        alt mfaEnabled === true
+            API->>DB: createMfaChallenge(userId, 5m TTL, MAGIC_LINK_LOGIN)
+            API-->>Client: 200 OK { mfaRequired: true, mfaToken }
+        else mfaEnabled === false
+            API->>DB: createSession & recordSecurityEvent(MAGIC_LINK_LOGIN)
+            API-->>Client: 200 OK + Set-Cookie: accessToken, refreshToken
+        end
     end
 ```
 
-> **Related Architectural Decisions:** See [Security, Cryptography & Credentials ADRs](./Engineering-Decisions.md#security-cryptography--credentials) for silent enumeration-safe returns and 1-to-1 token lifecycle guarantees.
+### 4.5 Active Session Management & Dual-Tier Revocation
 
----
-
-### 4.5 Active Session Management & Revocation Flow
-
-Users can inspect active login sessions across devices and revoke individual remote sessions or perform global revocation:
+Users inspect active sessions via `GET /sessions` and terminate individual sessions via `DELETE /sessions/:id` or all sessions via `POST /auth/logout-all`:
 
 ```mermaid
 sequenceDiagram
@@ -526,80 +495,37 @@ sequenceDiagram
     actor Client as User Browser
     participant API as AuthSphere API
     participant DB as PostgreSQL
+    participant Redis as Redis Store
 
-    Note over Client, DB: 1. Listing Active Sessions
-    Client->>API: GET /sessions (accessToken cookie)
-    API->>API: auth middleware attaches req.auth { userId, sid }
+    Client->>API: GET /sessions
     API->>DB: findActiveSessionsByUserId(userId, expiresAt > NOW)
-    API-->>Client: 200 OK [ { id, ipAddress, userAgent, createdAt, expiresAt, isCurrent } ]
+    API-->>Client: 200 OK (Sorted with isCurrent first)
 
-    Note over Client, DB: 2. Revoking a Session
-    Client->>API: DELETE /sessions/:id (accessToken cookie)
-    API->>API: auth middleware and Zod UUIDv7 param validation
-    API->>DB: findSessionById(sessionId)
-    alt Session Not Found
-        API-->>Client: 404 Not Found ("Session not found")
-    else Session Belongs to Another User (session.userId !== req.auth.userId)
-        API-->>Client: 403 Forbidden ("You cannot revoke another user's session")
-    else Current Session Revoked (sessionId === req.auth.sid)
-        API->>DB: deleteSessionById(sessionId)
-        API->>DB: createSecurityEvent(LOGOUT, { isCurrentSession: true })
-        API-->>Client: 200 OK + Clear Auth Cookies ("Session revoked successfully")
-    else Remote Session Revoked (sessionId !== req.auth.sid)
-        API->>DB: deleteSessionById(sessionId)
-        API->>DB: createSecurityEvent(LOGOUT, { isCurrentSession: false })
-        API-->>Client: 200 OK ("Session revoked successfully")
+    Client->>API: DELETE /sessions/:id
+    API->>DB: findSessionById(id)
+    alt Not Found
+        API-->>Client: 404 Not Found
+    else Foreign Session (session.userId !== req.auth.userId)
+        API-->>Client: 403 Forbidden
+    else Owned Session
+        API->>DB: deleteSessionByIdAndUserId(id, userId)
+        API->>Redis: SET auth:revoked-session:{id} "1" (EX accessTokenTTL)
+        API->>DB: recordSecurityEvent(LOGOUT, { revokedSessionId, isCurrentSession })
+        API-->>Client: 200 OK (Clears auth cookies if isCurrentSession)
     end
 ```
 
-> **Related Architectural Decisions:** See [Authentication & Session Management ADRs](./Engineering-Decisions.md#authentication--session-management) for hard-deletion strategies and ownership-enforced revocation.
-
----
+For user-wide invalidation (`POST /auth/logout-all`, password change/reset, `mfaDisable`, and admin `PATCH /users/:id/role`), AuthSphere writes `auth:user-revoked-at:{userId}` in Redis (TTL equal to access token lifetime) so any in-flight access JWT issued at or before that timestamp is immediately rejected on the next request (`[ADR-105]`).
 
 ### 4.6 Outbound Email Dispatch Architecture (Tri-Driver Queue)
 
-Outbound email delivery is decoupled from the synchronous HTTP request-response cycle via a configurable tri-driver queue architecture:
+`apps/api/src/modules/email/email.queue.ts` switches delivery mechanics via `QUEUE_DRIVER`, using `email.factory.ts` to select `gmailProvider` (App Password or OAuth2 via Nodemailer) or `resendProvider` (HTTPS API):
 
-```mermaid
-flowchart TD
-    API["API Handler (POST /auth/signup, magic-link, etc.)"] -->|"enqueueEmailJob"| Dispatcher{"QUEUE_DRIVER Switch"}
-
-    Dispatcher -->|"Driver: bullmq"| BullMQQueue["BullMQ Queue in Redis"]
-    Dispatcher -->|"Driver: inline"| EventLoop["In-Process Asynchronous setImmediate"]
-    Dispatcher -->|"Driver: sync"| InBand["Synchronous Execution Guard in AWS Lambda"]
-
-    subgraph RedisTransit ["Redis Storage Perimeter"]
-        BullMQQueue
-    end
-
-    subgraph DedicatedWorker ["Dedicated Container (APP_ROLE=worker)"]
-        BullMQWorker["BullMQ Worker Process"]
-        EmailServiceWorker["Email Service (Template Rendering)"]
-    end
-
-    subgraph ApiProcess ["API Container / Lambda Instance"]
-        EventLoop --> EmailServiceInline["Email Service (Template Rendering)"]
-        InBand --> EmailServiceSync["Email Service (Awaited before response)"]
-    end
-
-    BullMQQueue -->|"Poll and Dequeue"| BullMQWorker
-    BullMQWorker --> EmailServiceWorker
-
-    EmailServiceWorker --> Gateway{"Email Provider Strategy"}
-    EmailServiceInline --> Gateway
-    EmailServiceSync --> Gateway
-
-    Gateway -->|"Provider: resend"| ResendAPI["Resend HTTPS API"]
-    Gateway -->|"Provider: gmail"| GmailDelivery["Gmail SMTP or OAuth2 via Nodemailer"]
-```
-
-| Queue Driver | Runtime Environment                    | Delivery Characteristics                                                                                      | Failure & Retry Semantics                                                                                                     |
-| :----------- | :------------------------------------- | :------------------------------------------------------------------------------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------- |
-| **`bullmq`** | AWS ECS Fargate / Clustered Containers | Asynchronous background offload. Completely isolates HTTP response latency from email transit.                | Up to 4 exponential retries across 5 total attempts. Failed jobs retained in dead-letter storage. Requires `APP_ROLE=worker`. |
-| **`inline`** | Single-Container / Development / Demos | Asynchronous event-loop offload via `setImmediate()`. Eliminates Redis command overhead on serverless tiers.  | Ephemeral in-process execution. Jobs may be lost on unexpected container termination.                                         |
-| **`sync`**   | AWS Lambda (`isLambdaRuntime`)         | Awaits email dispatch in-band before completing the Lambda handler invocation to prevent mid-flight freezing. | Bounded by Lambda invocation timeout. Delivery remains subject to network timeouts and provider errors.                       |
-
-> **Related Architectural Decisions:** See [Observability, Reliability & Operations ADRs](./Engineering-Decisions.md#observability-reliability--operations) for queue driver migration, Lambda runtime guards, and failed-job retention policies.
+| `QUEUE_DRIVER` | Execution Context              | Delivery & Retry Semantics                                                                                                                                                                            |
+| :------------- | :----------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`bullmq`**   | Containerized / Worker mode    | Enqueues to Redis queue `authsphere-email`; 5 total attempts (4 exponential backoff retries from `2s`); retains last 500 failed jobs; processed by `src/workers/email.worker.ts` (`APP_ROLE=worker`). |
+| **`inline`**   | Single-node / Local dev        | Fires asynchronously via `setImmediate()` without Redis queue overhead; errors logged without failing HTTP response.                                                                                  |
+| **`sync`**     | AWS Lambda (`isLambdaRuntime`) | Awaits provider delivery in-band before returning the HTTP response so Lambda does not freeze mid-flight.                                                                                             |
 
 ---
 
@@ -607,137 +533,38 @@ flowchart TD
 
 ### 5.1 Cryptographic & Credential Security Profile
 
-| Security Domain           | Architectural Mechanism                                              | Implementation Details                                                                                                                                                                                        |
-| :------------------------ | :------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Password Hashing**      | Argon2id with chosen benchmarked parameters                          | Parameters: 64MB memory, 3 iterations, degree of parallelism 4. Mitigates login timing differences via pre-computed dummy verification on non-existent accounts.                                              |
-| **Secret Isolation**      | Dual-secret separation (`JWT_ACCESS_SECRET` vs `JWT_REFRESH_SECRET`) | Completely partitions cryptographic keys. Access tokens use short 15-minute TTLs with dynamic permission evaluation. Access secret compromise cannot forge 30-day refresh tokens or hijack database sessions. |
-| **MFA Secret Encryption** | AES-256-GCM authenticated encryption at rest                         | Secrets encrypted before storage (`ivHex:authTagHex:ciphertextHex`). 32-byte key derived from `env.MFA_ENCRYPTION_KEY` using SHA-256.                                                                         |
-| **Replay Protection**     | Monotonic integer window indexing                                    | Tracks `mfaLastUsedWindow` in PostgreSQL to reject TOTP re-submissions within the active 30s window and locks out preceding time steps. Single-use hashed backup recovery codes (`XXXXX-XXXXX`).              |
-| **Token Cryptography**    | Native WebCrypto JOSE (HS256)                                        | Pinned to HMAC-SHA256 (`HS256`) via WebCrypto JOSE, avoiding native C++ bindings for portability across Node.js and AWS Lambda.                                                                               |
+| Security Domain             | Mechanism                                     | Implementation (`apps/api/src/lib/`)                                                                                        |
+| :-------------------------- | :-------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------- |
+| **Password Hashing**        | Argon2id + pre-computed `DUMMY_PASSWORD_HASH` | `memoryCost: 65536` (64 MiB), `timeCost: 3`, `parallelism: 4`, `hashLength: 32`; dummy verify mitigates login timing leaks. |
+| **JWT Signing & Isolation** | WebCrypto JOSE (`HS256`) with dual secrets    | Separate `JWT_ACCESS_SECRET` (`15m`) and `JWT_REFRESH_SECRET` (`30d`) with unique `jti` claims; no native C++ JWT bindings. |
+| **MFA Secret Encryption**   | AES-256-GCM authenticated encryption at rest  | 12-byte random IV, `ivHex:authTagHex:ciphertextHex`, 32-byte key derived via `SHA-256(MFA_ENCRYPTION_KEY)`.                 |
+| **MFA Replay Protection**   | Monotonic TOTP window + hashed backup codes   | `mfaLastUsedWindow` rejects reused/older 30s steps (`+/- 30s` clock tolerance); 10 single-use `XXXXX-XXXXX` recovery codes. |
+| **Token Digests**           | SHA-256 opaque digests                        | Used for refresh tokens, verification/reset/magic-link tokens, and recovery codes before PostgreSQL persistence.            |
 
-### 5.2 Ingress, Proxy & Anti-Abuse Controls
+### 5.2 Ingress, Proxy Parity & Origin Controls
 
-1. **Reverse Proxy Parity & Root Cookie Scoping:**
-   - **Production Edge Proxy:** Configured via code-first TypeScript specification (`apps/web/vercel.ts` using `@vercel/config/v1`), rewriting `/api/:path*` to the backend. Browsers communicate strictly same-origin (`/api/*`), preserving `SameSite=Lax` cookies and eliminating CORS preflights.
-   - **Development Proxy Parity:** Vite dev server mirrors the `/api` reverse proxy route identically.
-   - **Root Cookie Scoping:** Authentication cookies are scoped to root `path: "/"` to ensure uniform delivery across proxy rewrites.
-2. **Proxy Trust & Client IP Resolution:**
-   - `TRUST_PROXY` environment variable validated and type-coerced at startup via Zod.
-   - Client IP resolution relies on Express `req.ip` (`proxy-addr`), treating client attribution and IP rate limiting as proxy-derived under the ingress topology.
-3. **Resource Isolation & Origin Validation:**
-   - Evaluates all state-changing HTTP requests (`POST`, `PUT`, `PATCH`, `DELETE`) using browser `Sec-Fetch-Site` metadata paired with normalized `Origin`/`Referer` header checking against `env.FRONTEND_URL`.
-   - Fast-paths `same-origin`/`same-site` requests, blocks explicit `cross-site` mutations from untrusted origins, and rejects opaque `Origin: "null"` sandboxed iframe requests.
-4. **Multi-Tiered Atomic Lua Rate Limiting:**
-   - Redis-backed rate limiting using an atomic Lua script (`INCR` + conditional `EXPIRE` in 1 command via `redis.eval`), reducing Redis roundtrips by 75%.
-   - Centralized `RATE_LIMIT_POLICIES` dictionary defines per-endpoint quotas. Dual-key strategy uses IP for unauthenticated routes and `userId` for authenticated routes.
-   - Fail-open resilience: Redis connectivity blips bypass rate limiting transparently rather than blocking legitimate traffic.
-5. **Process-Aware Environment Partitioning:**
-   - Configuration schemas partition validation into `sharedConfig`, `apiConfig`, and `workerConfig` based on `APP_ROLE: api | worker`, preventing code from referencing unvalidated cross-role variables, while deployment pipelines inject only required secrets per task definition.
-
-> **Related Architectural Decisions:** See [Security, Cryptography & Credentials ADRs](./Engineering-Decisions.md#security-cryptography--credentials) and [Validation, Middleware & Authorization ADRs](./Engineering-Decisions.md#validation-middleware--authorization) for complete cryptographic profiles, origin guards, and rate limiting specifications.
+1. **Same-Origin Reverse Proxy & Cookies:** Production (`apps/web/vercel.ts` via `@vercel/config/v1`) and local dev (`apps/web/vite.config.ts`) rewrite `/api/(.*)` upstream to `/(.*)` and redirect `/docs` and `/openapi.json` to `/api/*`. Auth cookies (`accessToken`, `refreshToken`) use `httpOnly: true`, `sameSite: "lax"`, `priority: "high"`, `secure: NODE_ENV === "production"`, and `path: "/"`.
+2. **Proxy Trust & Client IP:** `app.set("trust proxy", env.TRUST_PROXY)` parses boolean, hop count, or subnet config at startup so Express `req.ip` resolves client attribution behind edge/load-balancer hops.
+3. **Origin & Fetch-Metadata Guard (`originValidation`):** Guards `POST`, `PUT`, `PATCH`, and `DELETE` requests by fast-pathing `sec-fetch-site: same-origin | same-site`, blocking `cross-site` mutations unless matching `env.FRONTEND_URL`, rejecting `Origin: "null"`, and permitting non-browser clients lacking `Origin`/`Referer`.
+4. **Process-Aware Env Partitioning (`config/env.ts`):** Validates `sharedConfig` plus either `apiConfig` or `workerConfig` depending on `APP_ROLE`, enforcing inline/sync email credentials when `QUEUE_DRIVER` is `inline` or `sync`.
 
 ---
 
-## 6. Infrastructure & Deployment Architecture
+## 6. Compute & Infrastructure Boundaries
 
-AuthSphere implements a **Shared Backing State, Interchangeable Compute** model. Both serverless (AWS Lambda) and containerized (AWS ECS Fargate) compute targets compile from a single TypeScript codebase and run against the exact same managed cloud backing tier:
+AuthSphere runs a **Shared Backing State, Interchangeable Compute** design compiled from one codebase:
 
-```mermaid
-flowchart TD
-    subgraph Client ["Client Presentation Tier (Edge)"]
-        Browser["User Browser (React 19 SPA)"]
-        VercelProxy["Vercel Edge Reverse Proxy (/api/*)<br/>Same-Origin Ingress · HttpOnly Cookies · Zero CORS"]
-        Browser -->|"Same-Origin HTTPS"| VercelProxy
-    end
+- **Dual Entrypoints:** `apps/api/src/server.ts` serves containerized/long-lived HTTP deployments, while `apps/api/src/lambda.ts` wraps `app.ts` with `@codegenie/serverless-express` for AWS Lambda. `apps/api/src/workers/email.worker.ts` runs standalone when `APP_ROLE=worker`.
+- **PostgreSQL Pool Bounds (`lib/prisma.ts`):** Runtime compute uses `@prisma/adapter-pg` with `pg.Pool` bounded via `DATABASE_POOL_MAX ?? (isLambdaRuntime ? 2 : 10)` (`5s` connect timeout, `10s` query timeout) for PgBouncer transaction pooling, while schema migrations require a direct session-mode URL (`pg_advisory_lock`).
+- **Fail-Fast Redis (`lib/redis.ts`):** Configured with `lazyConnect: true`, `enableOfflineQueue: false`, `maxRetriesPerRequest: 1`, `connectTimeout: 2000`, and `commandTimeout: 1000` so Redis outages fail open on rate limits and caching instead of stalling requests.
+- **Decoupled Health Probes:** `/health` and `/health/live` perform zero external I/O; `/health/ready` concurrently probes PostgreSQL and Redis (`200` vs `503`).
 
-    subgraph Compute ["Interchangeable Backend Compute Tier (AWS ap-south-1)"]
-        subgraph Option1 ["Option 1: Primary Serverless Compute (AWS Lambda)"]
-            FURL["Lambda Function URL<br/>Direct HTTPS Access · AuthType: NONE"]
-            Lambda["AWS Lambda Function (authsphere-api)<br/>Node.js 24 · 512 MB · Single ESM Bundle"]
-            FURL --> Lambda
-        end
-
-        subgraph Option2 ["Option 2: Reference Container Compute (AWS ECS Fargate)"]
-            ALB["Application Load Balancer (Port 80)<br/>Public DNS · Layer 4 Security Perimeter"]
-            ECS_API["authsphere-api Task (Node.js 24 Alpine)<br/>Continuous libuv Event Loop · Port 3000"]
-            ECS_Worker["authsphere-worker Task (BullMQ Daemon)<br/>Optional Decoupled Background Worker"]
-            ALB --> ECS_API
-        end
-    end
-
-    subgraph BackingTier ["Shared Managed Cloud Backing Tier"]
-        Neon["Neon Serverless PostgreSQL<br/>PgBouncer Transaction Pooling (Port 5432)"]
-        Upstash["Upstash Serverless Redis<br/>TLS Encrypted (rediss://) · Atomic Lua Scripts"]
-        EmailService["Transactional Email Service<br/>Google Gmail SMTP / OAuth2 (Port 465) or Resend API (HTTPS)"]
-    end
-
-    VercelProxy -->|"Encrypted Upstream HTTPS"| FURL
-    VercelProxy -->|"Plaintext HTTP Port 80 (Demo Leg)"| ALB
-
-    Lambda -->|"Pooled Connection (pg.Pool max: 2)"| Neon
-    Lambda -->|"Fail-Fast Atomic Lua"| Upstash
-    Lambda -->|"Synchronous Delivery (QUEUE_DRIVER=sync)"| EmailService
-
-    ECS_API -->|"Pooled Connection (pg.Pool max: 10)"| Neon
-    ECS_API -->|"Persistent Connection"| Upstash
-    ECS_API -->|"Inline Dispatch (QUEUE_DRIVER=inline)"| EmailService
-
-    ECS_API -.->|"Optional: Enqueue (QUEUE_DRIVER=bullmq)"| Upstash
-    ECS_Worker -.->|"Optional: Dequeue and Retries"| Upstash
-    ECS_Worker -.->|"Optional: Worker Dispatch"| EmailService
-```
-
-### Key Infrastructure Invariants
-
-1. **Dual Database Connections:** Migrations require session-scoped advisory locks (`pg_advisory_lock`) that transaction poolers do not support. CI/CD pipelines connect directly (`DATABASE_URL_DIRECT`). Runtime compute (API, Worker, Lambda) connects exclusively through the PgBouncer transaction pooler (`DATABASE_URL_POOLED` mapped to `DATABASE_URL`) with bounded socket limits (Lambda max 2, ECS max 10).
-2. **Deterministic Release Sequencing:** The CI/CD release pipeline executes strictly in order: **validate -> build/package artifact -> direct database migrations -> deploy -> automated smoke test** (`/health/live`, `/health/ready`). Artifacts are built and validated before migrations touch the database schema.
-3. **Container & Serverless Deployment Mechanisms:**
-   - **AWS Lambda Deployments:** Compiled via `tsup` into a single tree-shaken ESM bundle (`lambda.mjs`) externalizing native C++ bindings (`argon2`), packaged with `@codegenie/serverless-express`, and deployed via AWS SAM (`sam deploy` using `template.yaml`).
-   - **AWS ECS Deployments:** Multi-stage Docker image built and pushed to GitHub Container Registry (GHCR), dynamically rendered via `aws-actions/amazon-ecs-render-task-definition@v1`, and deployed via `aws-actions/amazon-ecs-deploy-task-definition@v2`.
-4. **Hardened Container Runtime:** Containers run as non-root `USER node` with `dumb-init` as PID 1 to proxy signals and reap zombie child processes, bounding request draining to a 10-second graceful window.
-5. **Decoupled Health Probes:** Decouples process liveness (`/health/live`, zero-I/O in-memory probe for load balancers) from dependency readiness (`/health/ready`, concurrent evaluation of PostgreSQL and Redis), preventing cascading service deregulation during temporary dependency blips.
-
-For complete cloud configurations, SAM templates, task definitions, migration commands, and operational runbooks, refer to [DEPLOYMENT.md](./DEPLOYMENT.md).
-
-> **Related Architectural Decisions:** See [Observability, Reliability & Operations ADRs](./Engineering-Decisions.md#observability-reliability--operations) for dual-database pooling strategy, container signal handling, and release pipeline sequencing.
+For cloud topology diagrams, AWS Lambda SAM / ECS Fargate configurations, environment variable catalogs, CI/CD release pipelines, and runbooks, see **[DEPLOYMENT.md](./DEPLOYMENT.md)**.
 
 ---
 
-## 7. Testing Architecture & Invariant Verification
+## 7. Verification & Testing Boundaries
 
-AuthSphere enforces a hermetic, 3-layer test pyramid combining **Vitest** and **Supertest** to verify all system boundaries and security invariants without external network dependencies:
+AuthSphere enforces a hermetic 3-tier **Vitest + Supertest** pyramid (`fileParallelism: false`) covering pure in-memory unit invariants (cryptography, TOTP, Zod validation, email templates/drivers, and 34-route OpenAPI 3.1 parity), isolated integration suites against a dedicated test PostgreSQL database and Redis DB index 1 with an in-memory email spy, and end-to-end user journeys.
 
-```mermaid
-graph TD
-    subgraph TP ["Test Pyramid Architecture"]
-        E2E["Layer 3: E2E User Journeys"]
-        INT["Layer 2: Critical Integration Tests"]
-        UNIT["Layer 1: Focused Unit Tests"]
-    end
-
-    subgraph HI ["Hermetic Isolation"]
-        TestDB[("Dedicated Test Database: authsphere_test")]
-        TestRedis[("Dedicated Redis: DB Index 1")]
-        EmailSpy["In-Memory Email Spy Outbox"]
-        PureMemory["Pure In-Memory / Spied Mocks (Zero I/O)"]
-
-        E2E --> TestDB
-        INT --> TestDB
-        E2E --> TestRedis
-        INT --> TestRedis
-        E2E --> EmailSpy
-        INT --> EmailSpy
-        UNIT -.-> PureMemory
-    end
-```
-
-### Verification Philosophy
-
-- **Layer 1: Focused Unit Tests (Zero I/O):** Pure in-memory verification of cryptographic primitives (Argon2id, AES-256-GCM, HMAC), TOTP RFC 6238 window stepping, Zod input sanitization, OpenAPI 3.1 router parity (verifying exact 1:1 bidirectional alignment across all 33 registered operations and mounted Express routers), email template rendering, BullMQ enqueue semantics, and the deterministic ADR-076 CAS vs. Redis race condition state machine (verified hermetically via method spies in `refresh-token-race.test.ts`).
-- **Layer 2: Critical Integration Tests (Database & Redis DB 1):** Full-stack HTTP request lifecycles across registration, login, MFA challenge/verify/disable, OAuth strategies, active sessions, RBAC guards, rate limits, error envelopes, the live ADR-076 rotation race window, and Redis fail-open degradation (in `auth.test.ts`).
-- **Layer 3: Stateful E2E User Journeys:** Multi-step workflows verifying the complete auth lifecycle (signup -> verify -> login -> refresh -> logout), multi-device session revocation, and administrative privilege elevation and demotion.
-- **Deterministic Controls:** Test suites run with `fileParallelism: false` to eliminate database contention. `cleanTestState()` performs cascade truncations on user tables and flushes Redis DB 1 between tests while preserving baseline roles and permissions. Outbound emails are captured via in-memory spies with zero network calls.
-
-For complete test execution commands, coverage thresholds, and hermetic setup patterns, refer to [TESTING.md](./TESTING.md).
-
-> **Related Architectural Decisions:** See [Testing, Quality & Security Invariants ADRs](./Engineering-Decisions.md#testing-quality--security-invariants) for test pyramid specifications and deterministic test environment isolation.
+For suite structure, test counts, coverage thresholds, and CLI execution commands, see **[TESTING.md](./TESTING.md)**.
