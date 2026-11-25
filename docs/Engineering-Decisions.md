@@ -2683,19 +2683,22 @@ Expose `mfaEnabled: boolean` as a first-class attribute in the authenticated use
 
 Re-authenticating on a client device that already possesses an active session overwrites the client's single HttpOnly refresh token cookie, stranding the previous session record in PostgreSQL as an un-rotatable orphan and generating duplicate client device listings during active session introspection (`GET /sessions` [ADR-068]).
 
+Previously, attempting to deduplicate via a `(userId, userAgent, ipAddress)` tuple broke in production: dynamic ISP DHCP leases, cellular handovers (CGNAT), and cloud proxy routing constantly rotated client IPs, causing the tuple match to fail and spawning duplicate ghost sessions on the same physical browser.
+
 ### Decision
 
 Enforce atomic client-device session supersession in `authRepository.createSession` within a Prisma interactive transaction:
 
-1. **Atomic Pruning:** Before inserting a new session record, delete all active sessions matching the caller's device tuple: `(userId, userAgent, ipAddress)`.
-2. **Encapsulated Lifecycle:** Centralizing pruning inside `createSession` automatically covers all entry points (`login`, `mfaVerifyLogin`, `oauthCallback`, `verifyMagicLink` [ADR-039]) without controller-level branching.
-3. **SSOT Read Path:** `sessionsService.getActiveSessions` queries the database directly without ad-hoc in-memory deduplication filters.
+1. **Atomic Pruning:** Before inserting a new session record, delete prior sessions matching the caller's device context: `(userId, userAgent)`. Volatile IP addresses are excluded from session identity and stored strictly as audit telemetry.
+2. **Encapsulated Lifecycle:** Centralizing pruning inside `createSession` automatically covers all entry points (`login`, `mfaVerifyLogin`, `oauthCallback`, `verifyMagicLink` [ADR-039]) without controller-level branching or leaky cookie abstractions.
+3. **SSOT Read Path:** `sessionsService.getActiveSessions` queries the database directly without ad-hoc in-memory deduplication filters, sorting the active caller session first (`isCurrent`).
 
 ### Rationale & Invariants
 
-- **Accurate Telemetry:** Eliminates ghost sessions and preserves an exact 1:1 mapping between physical devices and active session records.
+- **Dynamic IP Resilience:** Eliminates volatile IP address checks from session identification; IP changes never prevent supersession.
+- **Accurate Telemetry:** Eliminates ghost duplicate sessions and preserves an exact 1:1 mapping between distinct devices and active session records.
 - **Transactional Hard Deletion:** Orphaned refresh token hashes are hard-deleted in the same transaction [ADR-013, ADR-029], instantly revoking replay vectors.
-- **Scoped Invalidation:** Deletion is strictly bounded to the matching `(userId, userAgent, ipAddress)` tuple; remote sessions on other devices or networks remain unaffected.
+- **Zero Controller Overhead:** Keeps controllers and services pure, serverless-agnostic, and clean.
 
 ---
 
