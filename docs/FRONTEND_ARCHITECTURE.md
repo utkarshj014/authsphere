@@ -466,5 +466,5 @@ AuthSphere enforces strict cache separation across dynamic API payloads, OpenAPI
 
 - **Type Checking:** `npm run typecheck` (or `npm run typecheck -w @authsphere/web`, running `tsc -b --noEmit`).
 - **Linting:** `npm run lint` (or `npm run lint -w @authsphere/web`, running `eslint .`).
-- **Production Build:** `npm run build -w @authsphere/web` (clean + `tsc -b` + `vite build`).
+- **Production Build:** `npm run build:web` (or `npm run build -w @authsphere/web` orchestrated after `npm run build:shared`).
 - **Accessibility:** `:focus-visible` outlines (`--color-focus`), semantic dialog/alert ARIA attributes, `44px` mobile touch targets on standard controls, and `prefers-reduced-motion` support.

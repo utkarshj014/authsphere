@@ -168,7 +168,18 @@ Both production Vercel Edge and local Vite Dev route browser requests same-origi
 > 2. Leave `VITE_API_URL` empty in production (`apps/web/.env` / Vercel) so browser calls stay relative to `/api/*`.
 > 3. OAuth PKCE verifier cookies (`oauth_verifier_<state>`) dynamically resolve their `Path` from `OAUTH_CALLBACK_BASE_URL` (or `${FRONTEND_URL}/api/auth/oauth`) to `/api/auth/oauth` in production (`apps/api/src/common/utils/cookie.ts`). See [`docs/OAUTH.md`](./OAUTH.md#edge-reverse-proxy--cookie-path-alignment).
 
-### 4.2. Transport Legs & `TRUST_PROXY` Calibration
+### 4.2. Vercel Project Settings & Monorepo Build Orchestration
+
+Because AuthSphere is an npm monorepo with cross-workspace dependencies, the frontend build is orchestrated from the monorepo root:
+
+| Setting              | Configured Value                | Behavior / Rationale                                                                                       |
+| :------------------- | :------------------------------ | :--------------------------------------------------------------------------------------------------------- |
+| **Root Directory**   | `apps/web`                      | Scopes deployment to frontend, auto-detects Vite, and loads [`apps/web/vercel.ts`](../apps/web/vercel.ts). |
+| **Build Command**    | `cd ../.. && npm run build:web` | **Override ON**. Triggers root orchestration (`npm run build:shared && npm run build -w @authsphere/web`). |
+| **Output Directory** | `dist`                          | Default (Not Overridden). Resolves to `apps/web/dist` where Vite emits the SPA bundle.                     |
+| **Install Command**  | _(Default / Auto)_              | Default (Not Overridden). Automatically runs `npm install` across all monorepo workspaces.                 |
+
+### 4.3. Transport Legs & `TRUST_PROXY` Calibration
 
 - **Upstream Transport:** Vercel terminates browser TLS. Upstream is encrypted HTTPS to Lambda Function URL, or plaintext HTTP port `80` to the reference ECS ALB (intentional portfolio trade-off).
 - **`TRUST_PROXY` Depth:** Set to `1` on Lambda (`Browser -> Vercel -> Lambda`) and `2` on ECS (`Browser -> Vercel -> ALB -> Container`) so Express `req.ip` extracts the client IP from `X-Forwarded-For` (`RATE_LIMIT_POLICIES` keys public routes by IP and protected routes by `userId`). Because direct backend endpoints are publicly reachable for evaluator testing, IP attribution is best-effort.
