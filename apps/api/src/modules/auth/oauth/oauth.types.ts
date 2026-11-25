@@ -2,8 +2,9 @@ import type { OAuthProviderName } from "@authsphere/shared";
 
 export interface OAuthStateData {
   provider: OAuthProviderName;
-  userId?: string;
-  sessionId?: string;
+  userId?: string | undefined;
+  sessionId?: string | undefined;
+  returnTo?: string | undefined;
 }
 
 export interface OAuthProfile {

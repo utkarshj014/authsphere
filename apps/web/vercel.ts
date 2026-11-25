@@ -9,6 +9,21 @@ export const config: VercelConfig = {
       destination: "/api/docs/",
       permanent: true,
     },
+    {
+      source: "/docs",
+      destination: "/api/docs/",
+      permanent: true,
+    },
+    {
+      source: "/docs/",
+      destination: "/api/docs/",
+      permanent: true,
+    },
+    {
+      source: "/openapi.json",
+      destination: "/api/openapi.json",
+      permanent: true,
+    },
   ],
   rewrites: [
     routes.rewrite("/api/(.*)", `${backendUrl}/$1`),

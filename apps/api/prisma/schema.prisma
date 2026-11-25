@@ -166,9 +166,10 @@ model MfaRecoveryCode {
 model MfaChallenge {
   id String @id @default(uuid(7))
 
-  userId    String   @map("user_id")
-  expiresAt DateTime @map("expires_at")
-  createdAt DateTime @default(now()) @map("created_at")
+  userId    String            @map("user_id")
+  type      SecurityEventType @default(LOGIN_SUCCESS)
+  expiresAt DateTime          @map("expires_at")
+  createdAt DateTime          @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

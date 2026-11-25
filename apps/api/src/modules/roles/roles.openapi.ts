@@ -17,6 +17,30 @@ export const RolePermissionsSchema = registry.register(
   }),
 );
 
+// ─── GET /roles/{roleName}/permissions ─────────────────────────────
+
+registry.registerPath({
+  method: "get",
+  path: "/roles/{roleName}/permissions",
+  tags: ["Roles"],
+  summary: "Get role permissions",
+  description:
+    "Retrieves the currently assigned permissions for a given role. Requires admin role.",
+  security: cookieSecurity,
+  request: {
+    params: rolesRequestSchema.getRolePermissionsParams,
+  },
+  responses: {
+    200: successResponse(
+      "Permissions retrieved successfully",
+      RolePermissionsSchema,
+    ),
+    ...authedErrors,
+    403: errorResponse("Forbidden — admin role required"),
+    404: errorResponse("Role not found"),
+  },
+});
+
 // ─── PUT /roles/{roleName}/permissions ─────────────────────────────
 
 registry.registerPath({

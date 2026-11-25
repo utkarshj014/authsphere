@@ -44,7 +44,7 @@ export async function ensureBaselineSeed() {
 
     const userRolePermissions = [
       PERMISSIONS.PROFILE_READ,
-      PERMISSIONS.PROFILE_UPDATE,
+      PERMISSIONS.DASHBOARD_VIEW,
     ];
     for (const permName of userRolePermissions) {
       const perm = dbPermissions.find((p) => p.name === permName);

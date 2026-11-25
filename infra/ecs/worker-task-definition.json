@@ -62,6 +62,10 @@
           "valueFrom": "/authsphere/prod/GMAIL_USER"
         },
         {
+          "name": "GMAIL_APP_PASSWORD",
+          "valueFrom": "/authsphere/prod/GMAIL_APP_PASSWORD"
+        },
+        {
           "name": "GOOGLE_CLIENT_ID",
           "valueFrom": "/authsphere/prod/GOOGLE_CLIENT_ID"
         },

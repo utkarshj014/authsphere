@@ -5,7 +5,6 @@ import { asyncHandler } from "../../common/errors/index.js";
 
 /**
  * Lightweight process liveness probe.
- * Suitable for AWS ALB target group health checks and container orchestrators.
  * Pure in-memory execution ensures zero external dependency I/O.
  */
 export const getLiveness = asyncHandler(

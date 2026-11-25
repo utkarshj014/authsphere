@@ -37,6 +37,12 @@ app.use(
   }),
 );
 
+// Global non-cacheable baseline for all API endpoints
+app.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
 app.use(
   cors({
     origin: env.FRONTEND_URL,
@@ -55,7 +61,7 @@ app.use(requestLogger);
 app.use(originValidation);
 
 // Health Check Routes
-// Mounted ahead of rate limiting & body parsing: ALB liveness probes require pure in-memory zero-I/O execution
+// Mounted ahead of rate limiting & body parsing: liveness checks require pure in-memory zero-I/O execution
 app.use("/health", healthRouter);
 
 // Global Rate Limiter Middleware

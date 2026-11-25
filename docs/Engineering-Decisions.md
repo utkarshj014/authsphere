@@ -1,13 +1,14 @@
 # Architecture Decision Records (ADR) — AuthSphere
 
-This document records the architectural and engineering decisions made during the design, development, and evolution of **AuthSphere** — a production-grade, highly secure authentication and session management platform.
+This document records the **107 formal architectural and engineering decisions** (`ADR-001` through `ADR-107`) made during the design and evolution of **AuthSphere** — an authentication, authorization, and session-management platform.
 
-> **Companion Documentation Suite:**
+> **AuthSphere Architecture & Engineering Documentation Suite:**
 >
-> - [System Architecture & Design (ARCHITECTURE.md)](ARCHITECTURE.md) — High-level mental model, layered component architecture, domain entity relationships, and core authentication lifecycles.
-> - [OAuth 2.0 Architecture & Integration Guide (OAUTH.md)](OAUTH.md) — Authoritative protocol specification for federated identity providers, PKCE browser-cookie binding, and identity resolution.
-> - [Cloud Deployment & Operations Guide (DEPLOYMENT.md)](DEPLOYMENT.md) — Operational runbooks for dual-target compute (AWS Lambda vs. ECS Fargate), database connection topologies, CI/CD, and disaster recovery.
-> - [Testing & Quality Assurance Guide (TESTING.md)](TESTING.md) — Hermetic testing pyramid, test environment isolation, and security invariant verification suites.
+> - [ARCHITECTURE.md](ARCHITECTURE.md) — System Design, Layered Topology, Prisma ER Model & Canonical Route Inventory
+> - [FRONTEND_ARCHITECTURE.md](FRONTEND_ARCHITECTURE.md) — SPA Presentation Shells, Routing Guards, Token Refresh Mutex & Visual Tokens
+> - [OAUTH.md](OAUTH.md) — OAuth 2.0 PKCE Protocol, Identity Resolution Matrix & Threat Mitigation
+> - [DEPLOYMENT.md](DEPLOYMENT.md) — Dual-Target Compute (Lambda / ECS Fargate), Neon/Upstash Topologies & CI/CD
+> - [TESTING.md](TESTING.md) — Hermetic Test Pyramid, Isolation Guarantees & Security Invariant Verification
 
 ---
 
@@ -34,6 +35,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-084: Pure TypeScript Safe Transactional Email Templating Engine](#adr-084--pure-typescript-safe-transactional-email-templating-engine)
 - [ADR-085: Code-First Edge Reverse Proxy Configuration via `@vercel/config/v1`](#adr-085--code-first-edge-reverse-proxy-configuration-via-vercelconfigv1)
 - [ADR-086: Development-to-Production Reverse Proxy Parity via Vite Local Server](#adr-086--development-to-production-reverse-proxy-parity-via-vite-local-server)
+- [ADR-103: Decoupled Transactional Email via Dedicated Gmail App Password with Preserved OAuth2 Fallback](#adr-103--decoupled-transactional-email-via-dedicated-gmail-app-password-with-preserved-oauth2-fallback)
 
 </details>
 
@@ -57,6 +59,7 @@ This document records the architectural and engineering decisions made during th
 - [ADR-088: Runtime Egress Data Sanitization Firewall via Zod Response Schemas](#adr-088--runtime-egress-data-sanitization-firewall-via-zod-response-schemas)
 - [ADR-089: Asynchronous Security Event Notification Pipeline for High-Risk Credential Mutations](#adr-089--asynchronous-security-event-notification-pipeline-for-high-risk-credential-mutations)
 - [ADR-090: Keyless Cloud Deployment via AWS IAM OpenID Connect (OIDC) Federation](#adr-090--keyless-cloud-deployment-via-aws-iam-openid-connect-oidc-federation)
+- [ADR-106: Global Non-Cacheable HTTP Baseline (`Cache-Control: no-store`) with Targeted Documentation Revalidation (`no-cache`)](#adr-106--global-non-cacheable-http-baseline-cache-control-no-store-with-targeted-documentation-revalidation-no-cache)
 
 </details>
 
@@ -77,6 +80,9 @@ This document records the architectural and engineering decisions made during th
 - [ADR-076: Refresh Token Rotation with Atomic CAS and Ephemeral Leeway Window](#adr-076--refresh-token-rotation-with-atomic-cas-and-ephemeral-leeway-window)
 - [ADR-082: Pre-Resolution Session Gate for Authenticated Account Linking](#adr-082--pre-resolution-session-gate-for-authenticated-account-linking)
 - [ADR-092: Configurable Replay Revocation Scope (`AUTH_REUSE_DELETION_MODE`)](#adr-092--configurable-replay-revocation-scope-auth_reuse_deletion_mode)
+- [ADR-102: Client-Device Session Supersession on Authentication](#adr-102--client-device-session-supersession-on-authentication)
+- [ADR-104: Zero-Orphan Disconnect Protection and OAuth Account Disconnection Governance](#adr-104--zero-orphan-disconnect-protection-and-oauth-account-disconnection-governance)
+- [ADR-105: Redis-Backed Dual-Tier Session Revocation Engine with Multi-Key Pipelining (`redis.mget`)](#adr-105--redis-backed-dual-tier-session-revocation-engine-with-multi-key-pipelining-redismget)
 
 </details>
 
@@ -90,6 +96,8 @@ This document records the architectural and engineering decisions made during th
 - [ADR-049: Proactive Low Recovery Code Warning Threshold](#adr-049--proactive-low-recovery-code-warning-threshold)
 - [ADR-057: Ephemeral Multi-Challenge MFA Architecture with Single-Use Invalidation](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation)
 - [ADR-091: Polymorphic Unified MFA Input Resolution (TOTP vs Recovery Code)](#adr-091--polymorphic-unified-mfa-input-resolution-totp-vs-recovery-code)
+- [ADR-101: Zero-Side-Effect Client MFA State Introspection via Current User Profile Contract](#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)
+- [ADR-107: Deferred MFA Security Event Attribution via Polymorphic Challenge State](#adr-107--deferred-mfa-security-event-attribution-via-polymorphic-challenge-state)
 
 </details>
 
@@ -113,6 +121,8 @@ This document records the architectural and engineering decisions made during th
 - [ADR-066: Multi-Tier Rate Limiting for OAuth Callbacks and Passwordless Magic Links](#adr-066--multi-tier-rate-limiting-for-oauth-callbacks-and-passwordless-magic-links)
 - [ADR-067: Atomic Last-Admin Demotion Guard via Exclusive Role Row-Locking](#adr-067--atomic-last-admin-demotion-guard-via-exclusive-role-row-locking)
 - [ADR-071: Code-First OpenAPI 3.1 Specification and Interactive Swagger UI Documentation via Zod Registry](#adr-071--code-first-openapi-31-specification-and-interactive-swagger-ui-documentation-via-zod-registry)
+- [ADR-099: Paginated Administrative User Directory and Standard Offset Query Strategy](#adr-099--paginated-administrative-user-directory-and-standard-offset-query-strategy)
+- [ADR-100: Dedicated Role Permission Introspection with Cached Read Path and Administrative Immutability](#adr-100--dedicated-role-permission-introspection-with-cached-read-path-and-administrative-immutability)
 
 </details>
 
@@ -166,7 +176,7 @@ This document records the architectural and engineering decisions made during th
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-098)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-107)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -266,6 +276,15 @@ This document records the architectural and engineering decisions made during th
 - [ADR-096: Multi-Stage Container Architecture with Non-Root Execution and PID 1 Signal Reaping (`dumb-init`)](#adr-096--multi-stage-container-architecture-with-non-root-execution-and-pid-1-signal-reaping-dumb-init)
 - [ADR-097: Single-File Tree-Shaken ESM Lambda Bundling with Native C++ Addon Externalization (`tsup`)](#adr-097--single-file-tree-shaken-esm-lambda-bundling-with-native-c-addon-externalization-tsup)
 - [ADR-098: Unified Dual-Target Deployment Pipeline (Serverless Lambda vs Containerized ECS Fargate)](#adr-098--unified-dual-target-deployment-pipeline-serverless-lambda-vs-containerized-ecs-fargate)
+- [ADR-099: Paginated Administrative User Directory and Standard Offset Query Strategy](#adr-099--paginated-administrative-user-directory-and-standard-offset-query-strategy)
+- [ADR-100: Dedicated Role Permission Introspection with Cached Read Path and Administrative Immutability](#adr-100--dedicated-role-permission-introspection-with-cached-read-path-and-administrative-immutability)
+- [ADR-101: Zero-Side-Effect Client MFA State Introspection via Current User Profile Contract](#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)
+- [ADR-102: Client-Device Session Supersession on Authentication](#adr-102--client-device-session-supersession-on-authentication)
+- [ADR-103: Decoupled Transactional Email via Dedicated Gmail App Password with Preserved OAuth2 Fallback](#adr-103--decoupled-transactional-email-via-dedicated-gmail-app-password-with-preserved-oauth2-fallback)
+- [ADR-104: Zero-Orphan Disconnect Protection and OAuth Account Disconnection Governance](#adr-104--zero-orphan-disconnect-protection-and-oauth-account-disconnection-governance)
+- [ADR-105: Redis-Backed Dual-Tier Session Revocation Engine with Multi-Key Pipelining (`redis.mget`)](#adr-105--redis-backed-dual-tier-session-revocation-engine-with-multi-key-pipelining-redismget)
+- [ADR-106: Global Non-Cacheable HTTP Baseline (`Cache-Control: no-store`) with Targeted Documentation Revalidation (`no-cache`)](#adr-106--global-non-cacheable-http-baseline-cache-control-no-store-with-targeted-documentation-revalidation-no-cache)
+- [ADR-107: Deferred MFA Security Event Attribution via Polymorphic Challenge State](#adr-107--deferred-mfa-security-event-attribution-via-polymorphic-challenge-state)
 
 </details>
 
@@ -301,32 +320,12 @@ Layer-first folder structures (`controllers/`, `services/`, `models/`) fragment 
 
 ### Decision
 
-Organize backend code inside `apps/api/src/modules/` by feature domain. Each module encapsulates its routes, controllers, services, repositories, validation schemas, and types.
+Organize backend code inside `apps/api/src/modules/` by feature domain (`auth`, `sessions`, `authorization`, `users`, `roles`, `health`, `email`). Each module encapsulates its own `*.route.ts`, `*.controller.ts`, `*.service.ts`, `*.repository.ts`, `*.validation.ts`, `*.openapi.ts`, `*.types.ts`, and `index.ts` barrel export.
 
-### Current Modules
+### Rationale
 
-| Module           | Domain Boundary                                                 |
-| ---------------- | --------------------------------------------------------------- |
-| `auth/`          | Credential verification, signup, login, OAuth, magic links, MFA |
-| `sessions/`      | Active device session tracking, listing, and remote revocation  |
-| `authorization/` | Role and permission resolution, caching, and evaluation         |
-| `users/`         | User identity, profile management, and administrative roles     |
-| `roles/`         | System role and permission definition mappings                  |
-| `health/`        | Operational liveness and readiness dependency probing           |
-| `email/`         | In-memory and external transactional notification dispatch      |
-
-### Module File Convention
-
-| File              | Responsibility                                                           |
-| ----------------- | ------------------------------------------------------------------------ |
-| `*.route.ts`      | Express router with route definitions and middleware wiring              |
-| `*.controller.ts` | HTTP request/response handling, cookie management, response formatting   |
-| `*.service.ts`    | Business logic, orchestration, error decisions                           |
-| `*.repository.ts` | Database queries and transactional mutations via Prisma                  |
-| `*.validation.ts` | Zod schemas and inferred TypeScript types for request input              |
-| `*.openapi.ts`    | OpenAPI 3.1 endpoint registrations and co-located documentation metadata |
-| `*.types.ts`      | Shared TypeScript type definitions for the module                        |
-| `index.ts`        | Barrel re-export for external consumers                                  |
+- **Cohesion:** Related routes, business logic, persistence, validation, and OpenAPI declarations evolve together in one directory.
+- **Clear Boundaries:** Enforces strict unidirectional layering (`route -> controller -> service -> repository`), documented further in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
@@ -593,11 +592,7 @@ JWT Access Tokens include the Session ID (`sid`). Database-generated primary key
 
 ### Decision
 
-Generate Session IDs in the service layer using `import { uuidv7 } from "uuidv7"` _before_ database insertion or JWT signing:
-
-```typescript
-const sessionId = existingSessionId ?? uuidv7();
-```
+Generate Session IDs in the service layer via `existingSessionId ?? uuidv7()` (`uuidv7` package) _before_ database insertion or JWT signing.
 
 ### Rationale
 
@@ -610,21 +605,23 @@ const sessionId = existingSessionId ?? uuidv7();
 
 ## ADR-016 — Centralized Auth Cookie Sanitization in Error Middleware
 
-**Status:** Accepted
+**Status:** Accepted _(Amended for Silent Token Rotation)_
 
 ### Context
 
-Stale auth cookies after authentication failure cause redundant failed requests.
+Stale auth cookies after authentication failure cause redundant failed requests. However, unconditionally clearing both `accessToken` and `refreshToken` cookies on any `UnauthorizedError` destroyed valid long-lived `refreshToken` cookies when short-lived access tokens expired on protected routes, breaking silent refresh token rotation.
 
 ### Decision
 
-Clear `accessToken` and `refreshToken` cookies in the global `errorHandler` whenever `UnauthorizedError` is caught. Cookie clearing reuses the same `CookieOptions` (path, httpOnly, secure, sameSite) defined in `common/utils/cookie.ts`.
+In the global `errorHandler`, catch `UnauthorizedError` and call `clearAccessTokenCookie(res)`, clearing only `accessToken` while preserving `refreshToken`. Cookie clearing reuses the standard `CookieOptions` defined in `common/utils/cookie.ts`.
+
+In contrast, refresh token failure, replay rejection, explicit logout (`POST /auth/logout`), "Sign Out Everywhere" (`POST /auth/logout-all`), password change, MFA disablement, and current session revocation explicitly clear both cookies (`clearAuthCookies(res)`).
 
 ### Rationale
 
-- Automatically purges invalid cookies on auth failure.
-- Eliminates duplicated `res.clearCookie()` across controllers.
-- Guarantees matching cookie attributes between set and clear.
+- Automatically purges expired/invalid access tokens on protected request failure.
+- Preserves the valid `refreshToken` cookie so the client Axios response interceptor can seamlessly execute silent token rotation (`POST /auth/refresh-token`).
+- Explicitly purges both cookies when a refresh token fails validation or when sessions are intentionally terminated.
 
 ---
 
@@ -670,8 +667,6 @@ Enforce expiration filtering in repository lookups (e.g., `where: { expiresAt: {
 
 **Status:** Accepted _(Codebase Standard & Convention)_
 
-> **Category Note:** This record captures a repository-wide coding standard and export convention rather than a distributed architectural decision. Maintained here for historical codebase convention tracking.
-
 ### Context
 
 Module files need a consistent export convention across controller, service, repository, and validation layers.
@@ -699,24 +694,13 @@ export const authService = { signup, login };
 
 **Status:** Accepted _(Codebase Standard & Convention)_
 
-> **Category Note:** This record captures a TypeScript/Node.js native ESM module resolution convention rather than a distributed architectural decision. Maintained here for historical codebase convention tracking.
-
 ### Context
 
 Native Node.js ESM requires explicit `.js` extensions. Deep imports become verbose as the codebase grows.
 
 ### Decision
 
-Barrel `index.ts` files at directory boundaries consolidate re-exports. Consumers import from `../../common/errors/index.js`.
-
-```typescript
-// Single barrel import replaces multiple deep imports
-import {
-  AppError,
-  asyncHandler,
-  UnauthorizedError,
-} from "../../common/errors/index.js";
-```
+Barrel `index.ts` files at directory boundaries consolidate re-exports so consumers import cleanly via a single entry point (e.g., `../../common/errors/index.js`).
 
 ### Rationale
 
@@ -850,20 +834,7 @@ Validation inside controllers creates boilerplate and must target different requ
 
 ### Decision
 
-`validate` middleware factory accepts a `ZodType` schema and explicit `ValidationTarget` (`BODY`, `PARAMS`, `QUERY`):
-
-```typescript
-export const validate = (
-  schema: ZodType,
-  target: ValidationTarget = ValidationTarget.BODY,
-) =>
-  asyncHandler(async (req, _res, next) => {
-    const input = schema.safeParse(req[target]);
-    if (!input.success) throw new ValidationError(formatZodError(input.error));
-    req[target] = input.data;
-    next();
-  });
-```
+Implement a `validate(schema: ZodType, target: ValidationTarget = ValidationTarget.BODY)` middleware factory using `asyncHandler` and `schema.safeParse(req[target])`. On failure, it throws `ValidationError(formatZodError(input.error))`; on success, it replaces `req[target]` with the parsed, stripped `input.data`.
 
 ### Rationale
 
@@ -1012,15 +983,8 @@ Tokens can be transported via headers, localStorage, or cookies — each with di
 Transport both tokens exclusively via `httpOnly`, `secure`, `sameSite: "lax"` cookies. Never exposed to client-side JS or response bodies.
 
 - **Access Token:** Path `/`, `maxAge` = `JWT_ACCESS_EXPIRES_IN_MS`.
-- **Refresh Token:** Path `/` (originally `/auth/refresh-token`, subsequently widened to `/auth` in ADR-042, and finalized to `/` in ADR-079), `maxAge` = `JWT_REFRESH_EXPIRES_IN_MS`.
+- **Refresh Token:** Path `/` (originally `/auth/refresh-token`, widened to `/auth` in [ADR-042](#adr-042--refresh-token-cookie-path-scoped-to-auth), and finalized to `/` in [ADR-079](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge) for reverse-proxy compatibility), `maxAge` = `JWT_REFRESH_EXPIRES_IN_MS`.
 - Both use `priority: "high"` to prevent browser eviction.
-
-> [!NOTE]
-> **Cookie Path Progression:**
->
-> 1. Initial implementation scoped refresh token cookie to `path: "/auth/refresh-token"`.
-> 2. [ADR-042](#adr-042--refresh-token-cookie-path-scoped-to-auth) widened path to `/auth` to enable `POST /auth/logout` session revocation.
-> 3. [ADR-079](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge) finalized path to root `/` to survive reverse-proxy prefix rewriting (`/api/*` -> backend `/auth/*`).
 
 ### Rationale
 
@@ -1040,20 +1004,7 @@ Role names and permission strings referenced across the API, middleware, validat
 
 ### Decision
 
-Define domain constants in `@authsphere/shared` as `as const` object maps with inferred union types:
-
-```typescript
-export const ROLES = { USER: "USER", ADMIN: "ADMIN" } as const;
-export type RoleName = (typeof ROLES)[keyof typeof ROLES];
-
-export const PERMISSIONS = {
-  PROFILE_READ: "profile.read",
-  USER_READ: "user.read",
-  ROLE_MANAGE: "role.manage",
-  // ...
-} as const;
-export type PermissionName = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
-```
+Define domain constants in `@authsphere/shared` as `as const` object maps (`ROLES`, `PERMISSIONS`, `OAUTH_PROVIDERS`, `SECURITY_EVENT_TYPES`) paired with inferred union types (e.g., `RoleName = (typeof ROLES)[keyof typeof ROLES]`).
 
 ### Rationale
 
@@ -1065,7 +1016,7 @@ export type PermissionName = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
 ## ADR-035 — Redis Permission Caching with Fail-Safe Bypass
 
-**Status:** Accepted
+**Status:** Accepted _(Extended by ADR-100)_
 
 ### Context
 
@@ -1099,7 +1050,7 @@ Implement composable Express middleware factories in `apps/api/src/modules/autho
 - `requirePermission(...permissions)`: Allows access only if the user holds all specified permissions (AND logic).
 - `requireSelfOrPermission(permission)`: Allows access if the requested resource matches `req.auth.userId` or if the user has the specified permission.
 
-Middleware is ordered predictably: `auth` -> `validate` -> `requireRole` / `requirePermission` -> `controller`.
+Route chains place `auth` ahead of `rateLimiter`, `validate`, and authorization guards (`requireRole` / `requirePermission` / `requireSelfOrPermission`) before invoking the controller.
 
 ### Rationale
 
@@ -1111,7 +1062,7 @@ Middleware is ordered predictably: `auth` -> `validate` -> `requireRole` / `requ
 
 ## ADR-037 — Atomic Role-Permission Replacement via Nested Prisma Mutations
 
-**Status:** Accepted
+**Status:** Accepted _(Extended by ADR-100)_
 
 ### Context
 
@@ -1139,13 +1090,7 @@ Duplicate array entries (e.g., `["profile.read", "profile.read"]`) cause unique 
 
 ### Decision
 
-Apply `.transform()` in Zod to silently deduplicate at the validation boundary:
-
-```typescript
-permissions: z.enum(PERMISSIONS)
-  .array()
-  .transform((items) => Array.from(new Set(items)));
-```
+Apply `.transform((items) => Array.from(new Set(items)))` on array Zod schemas (such as `permissions`) to silently deduplicate entries at the validation boundary.
 
 ### Rationale
 
@@ -1165,21 +1110,7 @@ JWT signing, refresh token hashing, and session persistence logic was duplicated
 
 ### Decision
 
-Consolidate into a single private helper `generateAuthTokensAndSession` that handles both session creation and rotation via an optional `existingSessionId` parameter:
-
-```typescript
-const generateAuthTokensAndSession = async (
-  userId: string,
-  roleName: RoleName,
-  ipAddress?: string,
-  userAgent?: string,
-  existingSessionId?: string,
-): Promise<AuthTokens> => {
-  const sessionId = existingSessionId ?? uuidv7();
-  // signs accessToken & refreshToken, persists new or rotates existing session
-  return { accessToken, refreshToken };
-};
-```
+Consolidate into a single private helper `generateAuthTokensAndSession(userId, roleName, ipAddress, userAgent?, existingSessionId?)` returning `Promise<AuthTokens>` that handles both session creation (`existingSessionId` omitted, generating a new `uuidv7`) and rotation (`existingSessionId` supplied).
 
 ### Rationale
 
@@ -1227,16 +1158,7 @@ The signup flow performs a `findUserByEmail` check before `createUserWithVerific
 
 ### Decision
 
-Catch `Prisma.PrismaClientKnownRequestError` with code `P2002` inside `createUserWithVerificationToken` in `auth.repository.ts` and rethrow as `AppError("Email already in use", 409)`. The service-layer `findUserByEmail` check remains as a fast-path optimization.
-
-```typescript
-catch (error) {
-  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-    throw new AppError("Email already in use", 409);
-  }
-  throw error;
-}
-```
+Catch `Prisma.PrismaClientKnownRequestError` with code `P2002` inside `createUserWithVerificationToken` in `auth.repository.ts` and rethrow as `AppError("Email already in use", 409)` (rethrowing any other error). The service-layer `findUserByEmail` check remains as a fast-path optimization.
 
 ### Rationale
 
@@ -1248,25 +1170,20 @@ catch (error) {
 
 ## ADR-042 — Refresh Token Cookie Path Scoped to `/auth`
 
-**Status:** Superseded by ADR-079
-
-> [!IMPORTANT]
-> **Superseded Status Note:**
-> This decision broadened the refresh token cookie path from `/auth/refresh-token` (ADR-033) to `/auth`. However, when routing through reverse-proxy topologies (such as Vercel Edge rewriting `/api/:path*` to backend compute), the browser-facing path is `/api/auth/*` while backend Express routing is mounted at `/auth/*`. Cookies scoped to `/auth` are never delivered by browsers on `/api/*` requests. Consequently, [ADR-079](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge) superseded this decision by broadening `refreshTokenCookieOptions.path` to root `"/"`.
+**Status:** Superseded by [ADR-079](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge)
 
 ### Context
 
-The refresh token cookie was originally scoped to `path: "/auth/refresh-token"` [ADR-033], which prevented the browser from sending it to `POST /auth/logout`. The logout endpoint reads `req.cookies.refreshToken` to identify and delete the session, but the cookie was absent due to path mismatch.
+The refresh token cookie was originally scoped to `path: "/auth/refresh-token"` [ADR-033], which prevented the browser from sending it to `POST /auth/logout` when reading `req.cookies.refreshToken` to revoke the session.
 
 ### Decision
 
-Broaden the refresh token cookie path from `/auth/refresh-token` to `/auth`. The cookie is sent to all endpoints under the `/auth` prefix, including `/auth/refresh-token`, `/auth/logout`, and `/auth/logout-all`.
+Broaden `refreshTokenCookieOptions.path` from `/auth/refresh-token` to `/auth`, delivering the cookie to `/auth/refresh-token`, `/auth/logout`, and `/auth/logout-all`.
 
 ### Rationale
 
-- **Functional Correctness:** Logout can now read and revoke the refresh token session.
-- **Consistency:** Both token refresh and session revocation endpoints receive the cookie without requiring the client to pass it in the request body.
-- **Evolutionary Step:** Served as the intermediate progression (`/auth/refresh-token` -> `/auth` -> `/`) before edge reverse proxy parity required root scoping in [ADR-079](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge).
+- **Functional Correctness:** Enabled `POST /auth/logout` to read and revoke the refresh token session without passing it in the request body.
+- **Supersession Context:** Served as the intermediate step before edge reverse-proxy prefix rewriting (`/api/*` -> `/auth/*`) required root `"/"` scoping in [ADR-079](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge).
 
 ---
 
@@ -1280,18 +1197,7 @@ The `requestId` middleware accepts client-supplied `X-Request-Id` headers to pre
 
 ### Decision
 
-Sanitize incoming `X-Request-Id` values by stripping control characters (`\x00-\x1F`, including `\r\n`) and capping length at 128 characters. If the sanitized result is empty, generate a server-side `crypto.randomUUID()` fallback. No format validation (e.g., UUID regex) is enforced.
-
-```typescript
-const sanitizedId =
-  typeof incomingId === "string"
-    ? incomingId
-        .replace(/[\r\n\x00-\x1F]/g, "")
-        .trim()
-        .slice(0, 128)
-    : "";
-const id = sanitizedId || randomUUID();
-```
+Sanitize incoming `X-Request-Id` strings by stripping control characters (`[\r\n\x00-\x1F]`), trimming whitespace, and capping length at 128 characters, falling back to `crypto.randomUUID()` if empty or non-string. No format validation (e.g., UUID regex) is enforced.
 
 ### Rationale
 
@@ -1331,11 +1237,7 @@ During primary authentication (`POST /auth/login`), users with MFA enabled compl
 
 ### Decision
 
-Generate a short-lived (5-minute expiration) intermediate `MfaChallenge` record (`mfaToken` UUIDv7) upon successful primary credential verification. Return `{ mfaRequired: true, mfaToken }` to the client without issuing JWT access or refresh tokens. The client must present `mfaToken` alongside the TOTP or recovery code to `POST /auth/mfa/verify`. The challenge is atomically deleted (`deleteMfaChallenge`) immediately upon verification.
-
-> [!NOTE]
-> **Cardinality Evolution (ADR-057):**
-> While ADR-045 establishes the ephemeral challenge mechanism and single-use verification token contract, [ADR-057](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation) evolved the relational schema from 1:1 to 1:Many (`User` -> `mfaChallenges MfaChallenge[]`) to allow concurrent login challenges across browser tabs without overwriting earlier pending tokens.
+Generate a short-lived (5-minute expiration) intermediate `MfaChallenge` record (`mfaToken` UUIDv7) upon successful primary credential verification. Return `{ mfaRequired: true, mfaToken }` to the client without issuing JWT access or refresh tokens. The client must present `mfaToken` alongside the TOTP or recovery code to `POST /auth/mfa/verify`. The challenge is atomically deleted (`deleteMfaChallenge`) immediately upon verification. ([ADR-057](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation) later evolved `MfaChallenge` from 1:1 to 1:Many on `User` to support concurrent login tabs.)
 
 ### Rationale
 
@@ -1355,22 +1257,7 @@ TOTP tokens remain mathematically valid across their 30-second time window (plus
 
 ### Decision
 
-Track the last successfully verified TOTP time window index on the user model (`mfaLastUsedWindow` integer column). During verification, calculate `matchedWindow = currentWindow + delta` (where `delta` is the window offset from `otplib.verifyCode`). Perform an atomic conditional database update:
-
-```typescript
-await prisma.user.updateMany({
-  where: {
-    id: userId,
-    OR: [
-      { mfaLastUsedWindow: null },
-      { mfaLastUsedWindow: { lt: matchedWindow } },
-    ],
-  },
-  data: { mfaLastUsedWindow: matchedWindow },
-});
-```
-
-If `updateMany` returns `{ count: 0 }`, the code is rejected as replayed or stale.
+Track the last successfully verified TOTP time window index on the user model (`mfaLastUsedWindow` integer column). During verification, calculate `matchedWindow = currentWindow + delta` (where `delta` is the window offset from `otplib.verifyCode`) and perform an atomic conditional `prisma.user.updateMany` matching `{ id: userId, OR: [{ mfaLastUsedWindow: null }, { mfaLastUsedWindow: { lt: matchedWindow } }] }` to set `mfaLastUsedWindow: matchedWindow`. If `updateMany` returns `{ count: 0 }`, reject the code as replayed or stale.
 
 ### Rationale
 
@@ -1390,16 +1277,7 @@ Users losing access to their authenticator device require backup recovery codes.
 
 ### Decision
 
-Generate formatted 11-character recovery codes (`XXXXX-XXXXX`) via `crypto.randomBytes(5)`. Store only SHA-256 digests (`recoveryCodeHashes`) in the `mfa_recovery_codes` table. Consume codes via atomic conditional updates (`verifyAndConsumeRecoveryCode`):
-
-```typescript
-await prisma.mfaRecoveryCode.updateMany({
-  where: { userId, codeHash, usedAt: null },
-  data: { usedAt: new Date() },
-});
-```
-
-Regenerating recovery codes (`mfaRegenerateRecoveryCodes`) hard-deletes all existing user recovery codes and creates 10 fresh hashed codes in a single `$transaction`.
+Generate formatted 11-character recovery codes (`XXXXX-XXXXX`) via `crypto.randomBytes(5)`. Store only SHA-256 digests (`codeHash`) in `mfa_recovery_codes`. Consume codes atomically via `prisma.mfaRecoveryCode.updateMany({ where: { userId, codeHash, usedAt: null }, data: { usedAt: new Date() } })` (`verifyAndConsumeRecoveryCode`). Regenerating recovery codes (`mfaRegenerateRecoveryCodes`) hard-deletes all existing user recovery codes and creates 10 fresh hashed codes in a single `$transaction`.
 
 ### Rationale
 
@@ -1458,19 +1336,7 @@ HTTP rate limiting requires coordinating counter increments and window expiratio
 
 ### Decision
 
-Execute counter increments and conditional expiration atomically in a single Redis command using an embedded Lua script (`redis.eval`) in `src/middlewares/rate-limit.ts`. The script sets the expiration TTL only on window initiation (`if count == 1`). Liveness probes (`/health/live`) bypass rate limiting to prevent infrastructure health checks from consuming Redis resources.
-
-```typescript
-// Atomically increments counter and sets window expiration on first hit
-const count = await redis.eval(
-  `local count = redis.call('INCR', KEYS[1])
-   if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
-   return count`,
-  1,
-  redisKey,
-  secondsRemainingInWindow,
-);
-```
+Execute counter increments and conditional expiration atomically in a single Redis command using an embedded Lua script (`redis.eval`) in `src/middlewares/rate-limit.ts` (`INCR KEYS[1]`, and `EXPIRE KEYS[1] ARGV[1]` only when `count == 1`). Liveness probes (`/health/live`, `/health`) bypass rate limiting to prevent infrastructure health checks from consuming Redis resources.
 
 ### Rationale
 
@@ -1493,13 +1359,7 @@ Rate limit parameters (window duration, request quota, key strategy) scattered a
 
 Define all rate limit policies as a single typed constant `RATE_LIMIT_POLICIES` in `src/middlewares/rate-limit.ts`, typed via `as const satisfies Record<string, RateLimitPolicy>`. The `rateLimiter(policy)` middleware factory consumes any policy from the dictionary.
 
-| Policy Tier           | Quota Window | Key Strategy | Primary Protection Scope                                   |
-| :-------------------- | :----------- | :----------- | :--------------------------------------------------------- |
-| **Global Baseline**   | 100 / 1 min  | IP           | All incoming HTTP traffic via top-level Express middleware |
-| **Standard Reads**    | 60 / 1 min   | User ID / IP | Profile queries, session introspection, audit history      |
-| **Authentication**    | 10–20 / 1m   | IP           | Login, MFA challenge verification, token rotation          |
-| **Account Mutations** | 5–10 / 1m    | User ID      | Role assignments, permission updates                       |
-| **Token Dispatches**  | 5 / 15 min   | IP / User ID | Password resets, email verification, magic link dispatches |
+Policy tiers define standard quotas and keying strategies across endpoints (Global Baseline, Standard Reads, Administrative Queries, Authentication, Account Mutations, and Token Dispatches). For the authoritative mapping of routes and rate-limit tiers, see [ARCHITECTURE.md (Canonical Route Inventory)](ARCHITECTURE.md#21-canonical-route-inventory--openapi-31-operation-registry-34-operations) and [Rate Limit Tiers](ARCHITECTURE.md#22-rate-limit-tiers--canonical-redis-keyspace).
 
 ### Rationale
 
@@ -1619,16 +1479,7 @@ Default Helmet settings are designed for monolithic server-rendered applications
 
 ### Decision
 
-Configure `helmet()` in `app.ts` with explicit API-oriented options:
-
-```typescript
-app.use(
-  helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" },
-    xFrameOptions: { action: "deny" },
-  }),
-);
-```
+Configure `helmet()` in `app.ts` with explicit API-oriented options: `crossOriginResourcePolicy: { policy: "cross-origin" }` and `xFrameOptions: { action: "deny" }`.
 
 ### Rationale
 
@@ -1705,11 +1556,7 @@ export interface OAuthProviderStrategy {
 }
 ```
 
-The core service (`oauth.service.ts`) dispatches requests dynamically via a provider strategy dictionary (`getOAuthStrategy(provider)`), propagating the PKCE challenge, verifier, and abort signal to upstream provider implementations [ADR-080, ADR-081].
-
-> [!NOTE]
-> **Relying Party Trust Boundary (Google):**
-> AuthSphere acts strictly as an OAuth 2.0 / OIDC Relying Party (Client). For Google social login, user identity claims (`email`, `email_verified`, `sub`) are retrieved directly from Google's authenticated UserInfo endpoint (`https://openidconnect.googleapis.com/v1/userinfo`) over TLS using the bearer access token [ADR-062], rather than locally verifying cryptographic signatures of Google's `id_token` against Google JWKS. Full protocol contracts are specified in [OAUTH.md](OAUTH.md).
+The core service (`oauth.service.ts`) dispatches requests dynamically via `getOAuthStrategy(provider)`, propagating the PKCE challenge, verifier, and abort signal [ADR-080, ADR-081]. AuthSphere operates strictly as an OAuth 2.0 Client (Authorization Code + PKCE), retrieving verified Google identity claims directly from Google's UserInfo endpoint over TLS (`[ADR-062]`) rather than verifying `id_token` JWKS signatures as a full OIDC Relying Party; see [OAUTH.md](OAUTH.md) for the complete protocol specification.
 
 ### Rationale
 
@@ -1730,19 +1577,7 @@ OAuth 2.0 authorization flows require cryptographic state parameters to prevent 
 
 ### Decision
 
-Store 32-byte cryptographically random state strings in Redis under `oauth:state:<state>` with a strict 10-minute TTL. The state value encapsulates flow metadata (`OAuthStateData`: `provider`, optional `userId`, and optional `sessionId` for session revalidation). Browser binding is established via a paired ephemeral cookie `oauth_verifier_${state}` (`Path=/api/auth/oauth`, `HttpOnly`, `SameSite=Lax`, 10-minute TTL) containing the PKCE code verifier [ADR-080]. During authorization callback processing, state is atomically fetched and deleted via Redis `GETDEL` (`redis.getDel`) before verifying provider matching:
-
-```typescript
-const rawData = await redis.getDel(`oauth:state:${state}`);
-if (!rawData)
-  throw new AppError("Invalid, expired, or already consumed OAuth state", 400);
-
-const data = JSON.parse(rawData) as OAuthStateData;
-if (data.provider !== expectedProvider) {
-  throw new AppError("OAuth state provider mismatch", 400);
-}
-return data;
-```
+Store 32-byte cryptographically random state strings in Redis under `oauth:state:<state>` with a strict 10-minute TTL, encapsulating flow metadata (`OAuthStateData`: `provider`, optional `userId`, `sessionId`, and `returnTo`). Browser binding is established via a paired ephemeral cookie `oauth_verifier_${state}` (`HttpOnly`, `SameSite=Lax`, 10-minute TTL, path dynamically resolved via `getOAuthVerifierCookiePath()` to match `/api/auth/oauth` behind the edge proxy or `/auth/oauth` in direct dev) containing the PKCE code verifier [ADR-080]. During callback processing, state is atomically fetched and deleted via Redis `GETDEL` (`redis.getdel`) and checked against `expectedProvider` before proceeding.
 
 ### Rationale
 
@@ -1820,21 +1655,7 @@ OAuth initiation and callback handlers perform identical HTTP-layer responsibili
 
 ### Decision
 
-Implement higher-order controller factories `initiateOAuthHandler` and `oauthCallbackHandler` in `oauth.controller.ts` parameterised by `OAuthProviderName`:
-
-```typescript
-export const initiateOAuthHandler = (provider: OAuthProviderName) =>
-  asyncHandler(async (req: Request, res: Response) => {
-    // Generates PKCE verifier + challenge, calls initiateOAuth, sets verifier cookie, redirects
-  });
-
-export const oauthCallbackHandler = (provider: OAuthProviderName) =>
-  asyncHandler(async (req: Request, res: Response) => {
-    // Reads + clears verifier cookie, calls handleOAuthCallback, sets auth cookies, returns ApiResponse
-  });
-```
-
-Specific provider controllers (`googleInitiate`, `googleCallback`, `githubInitiate`, `githubCallback`) are instantiated from these factories and exported for explicit route binding.
+Implement higher-order controller factories `initiateOAuthHandler(provider: OAuthProviderName)` and `oauthCallbackHandler(provider: OAuthProviderName)` in `oauth.controller.ts` to handle PKCE verifier cookies, state orchestration, auth cookie issuance, and redirects uniformly across providers. Specific provider controllers (`googleInitiate`, `googleCallback`, `githubInitiate`, `githubCallback`) are instantiated from these factories and exported alongside `unlinkOAuthHandler` for explicit route binding in `auth.route.ts`.
 
 ### Rationale
 
@@ -1854,20 +1675,7 @@ Passwordless magic link authentication allows users to request login links via e
 
 ### Decision
 
-Model `MagicLinkToken` as a strict 1-to-1 relationship on `User` in `schema.prisma` with a `userId @unique` constraint:
-
-```prisma
-model MagicLinkToken {
-  id        String   @id @default(uuid(7))
-  tokenHash String   @unique @map("token_hash")
-  userId    String   @unique @map("user_id")
-  expiresAt DateTime @map("expires_at")
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  @@map("magic_link_tokens")
-}
-```
-
-Token creation (`createMagicLinkToken`) uses Prisma `upsert`, atomically replacing the existing token hash and updating `expiresAt` (15-minute TTL).
+Model `MagicLinkToken` as a strict 1-to-1 relationship on `User` in `schema.prisma` (`tokenHash @unique`, `userId @unique`, `onDelete: Cascade`). Token creation (`createMagicLinkToken`) uses Prisma `upsert`, atomically replacing the existing token hash and updating `expiresAt` (15-minute TTL).
 
 ### Rationale
 
@@ -1898,18 +1706,6 @@ Implement a clean two-phase lookup and consumption workflow in `auth.repository.
 3. **Universal Account Support:**
    Magic links are available to any existing account, enabling users created via OAuth or password to log in passwordlessly.
 
-```typescript
-await prisma.user.update({
-  where: { id: userId },
-  data: {
-    ...(shouldMarkEmailVerified
-      ? { isEmailVerified: true, verifiedAt: new Date() }
-      : {}),
-    magicLinkToken: { delete: {} },
-  },
-});
-```
-
 ### Rationale
 
 - **No Delete-on-Read Race Conditions:** Reading expired tokens produces zero database mutations, preserving records for centralized lifecycle cleanup without spurious write locks.
@@ -1929,20 +1725,13 @@ OAuth initiation, OAuth callback redirection, magic link request, and magic link
 
 ### Decision
 
-Add specialized rate limit policies to `RATE_LIMIT_POLICIES` in `src/middlewares/rate-limit.ts`:
-
-| Policy               | Quota | Window | Key Type | Target Endpoints                     |
-| :------------------- | :---- | :----- | :------- | :----------------------------------- |
-| `OAUTH_INITIATE`     | 20    | 1 min  | IP       | `GET /auth/oauth/:provider`          |
-| `OAUTH_CALLBACK`     | 20    | 1 min  | IP       | `GET /auth/oauth/:provider/callback` |
-| `MAGIC_LINK_REQUEST` | 5     | 15 min | IP       | `POST /auth/magic-link`              |
-| `MAGIC_LINK_VERIFY`  | 10    | 5 min  | IP       | `POST /auth/magic-link/verify`       |
+Add specialized rate limit policies (`OAUTH_INITIATE`, `OAUTH_CALLBACK`, `MAGIC_LINK_REQUEST`, `MAGIC_LINK_VERIFY`) to `RATE_LIMIT_POLICIES` in `src/middlewares/rate-limit.ts`. For exact endpoint rate limits, quotas, and keying strategies, see [ARCHITECTURE.md (Rate Limit Tiers)](ARCHITECTURE.md#22-rate-limit-tiers--canonical-redis-keyspace).
 
 ### Rationale
 
 - **Abuse Prevention:** Throttles outbound email dispatch to protect SMTP quotas and prevent inbox flooding.
 - **Provider API Quota Protection:** Prevents rapid authorization code exchanges from triggering third-party OAuth rate limits.
-- **Brute-Force Mitigation:** Restricts magic link token submission attempts to 10 per 5 minutes per IP address.
+- **Brute-Force Mitigation:** Throttles magic link token submission attempts per IP window (`MAGIC_LINK_VERIFY`).
 
 ---
 
@@ -1956,26 +1745,7 @@ Demoting an administrator role requires ensuring at least one active administrat
 
 ### Decision
 
-Enforce the last-admin demotion guard inside an interactive database transaction in `users.repository.ts`. When demoting away from `ADMIN`, the transaction touches the single `ADMIN` record in the `roles` table (`tx.role.update`), acquiring an exclusive row-level lock that serializes all concurrent demotion attempts before evaluating `tx.user.count`:
-
-```typescript
-await prisma.$transaction(async (tx) => {
-  if (roleName !== ROLES.ADMIN) {
-    await tx.role.update({
-      where: { name: ROLES.ADMIN },
-      data: { updatedAt: new Date() },
-    });
-  }
-  const adminCount = await tx.user.count({
-    where: { role: { name: ROLES.ADMIN } },
-  });
-  if (adminCount <= 1) throw new ForbiddenError("Cannot demote the last admin");
-  return tx.user.update({
-    where: { id: userId },
-    data: { role: { connect: { name: roleName } } },
-  });
-});
-```
+Enforce the last-admin demotion guard inside an interactive `prisma.$transaction` in `users.repository.ts`. When demoting away from `ADMIN` (`roleName !== ROLES.ADMIN`), the transaction first touches the unique `ADMIN` row in `roles` (`tx.role.update`) to acquire an exclusive row-level lock, serializing concurrent demotion attempts before evaluating `tx.user.count` and rejecting with `ForbiddenError` if `adminCount <= 1`.
 
 ### Rationale
 
@@ -2001,30 +1771,10 @@ Implement dedicated `/sessions` endpoints (`GET /sessions`, `DELETE /sessions/:i
    Query active sessions filtering out expired records (`expiresAt: { gt: new Date() }`), selecting only `{ id, ipAddress, userAgent, createdAt, expiresAt }`, and annotating `isCurrent: session.id === req.auth.sessionId`. `tokenHash` is strictly excluded from response DTOs.
 
 2. **Strict Ownership Verification:**
-   Before deletion, verify session existence (throwing `404 AppError` if missing) and user ownership (`session.userId === req.auth.userId`, throwing `403 ForbiddenError` on mismatch). Deletion executes via `deleteSessionByIdAndUserId(sessionId, userId)`.
+   Before deletion, verify session existence (`404 AppError` if missing) and ownership (`session.userId === req.auth.userId`, throwing `403 ForbiddenError` on mismatch). Deletion executes via `deleteSessionByIdAndUserId(sessionId, userId)` alongside `recordSecurityEvent` (`LOGOUT` with `{ revokedSessionId, isCurrentSession }`).
 
 3. **Current-Session Cookie Invalidation:**
-   If `isCurrent` is true, invoke `clearAuthCookies(res)` in the controller to wipe access and refresh token cookies.
-
-```typescript
-const session = await sessionsRepository.findSessionById(sessionId);
-if (!session) throw new AppError("Session not found", 404);
-if (session.userId !== userId)
-  throw new ForbiddenError("You cannot revoke another user's session");
-
-await sessionsRepository.deleteSessionByIdAndUserId(sessionId, userId);
-await recordSecurityEvent(
-  userId,
-  SECURITY_EVENT_TYPES.LOGOUT,
-  ipAddress,
-  userAgent,
-  {
-    revokedSessionId: sessionId,
-    isCurrentSession: sessionId === currentSessionId,
-  },
-);
-return { isCurrent: sessionId === currentSessionId };
-```
+   If `isCurrent` is true (`sessionId === req.auth.sessionId`), invoke `clearAuthCookies(res)` in the controller to wipe access and refresh token cookies.
 
 ### Rationale
 
@@ -2055,24 +1805,6 @@ Introduce the `SecurityEvent` model with composite index `@@index([userId, creat
 3. **Indexed Paginated Retrieval:**
    Expose `GET /auth/security-events` with Zod-defaulted pagination (`page` default 1, `limit` default 20 max 100), fetching user events sorted by `createdAt DESC`.
 
-```typescript
-export const recordSecurityEvent = async (
-  userId: string,
-  type: SecurityEventTypeName,
-  ipAddress?: string,
-  userAgent?: string,
-  metadata?: Record<string, unknown>,
-) => {
-  await authRepository.createSecurityEvent({
-    userId,
-    type,
-    ...(ipAddress && { ipAddress }),
-    ...(userAgent && { userAgent }),
-    ...(metadata && { metadata }),
-  });
-};
-```
-
 ### Rationale
 
 - **Multi-Phase Traceability:** Preserves the complete authentication provenance across two-factor challenges.
@@ -2094,8 +1826,7 @@ Validating authentication, session management, and authorization requires provin
 Implement a 3-layer test pyramid utilizing **Vitest** and **Supertest** configured with strict environmental separation and hermetic boundaries:
 
 1. **Environmental & State Isolation:**
-   - Dedicated PostgreSQL database (`authsphere_test`) and dedicated Redis index (`redis://localhost:6379/1`).
-   - Dynamic configuration loading (`apps/api/src/config/env.ts`) reading `.env.test` under `NODE_ENV === "test"`.
+   - Dedicated isolated PostgreSQL database and Redis logical index configured via `.env.test` (`apps/api/src/config/env.ts` loads `.env.test` when `NODE_ENV === "test"`).
    - Deterministic serial test execution (`fileParallelism: false`) with atomic cascade truncations of mutable user tables preserving seeded roles and permissions (`cleanTestState()`) and self-healing baseline role seeding (`ensureBaselineSeed()`).
 
 2. **In-Memory Outbox & Spy Email Layer:**
@@ -2104,7 +1835,7 @@ Implement a 3-layer test pyramid utilizing **Vitest** and **Supertest** configur
 3. **Three-Tier Pyramid:**
    - **Focused Unit Tests (Pure In-Memory):** Direct execution of cryptography (Argon2id, AES-256-GCM, SHA-256 HMAC), TOTP generation, time parsing, Zod boundary schemas, and OpenAPI 3.1 specification generation / 1:1 bidirectional Express route parity.
    - **Critical Integration Tests:** HTTP request/response validation through Express routes, controllers, middleware, PostgreSQL, and Redis.
-   - **E2E User Journeys:** Stateful multi-step workflows verifying complete auth lifecycles, cross-device session introspection/revocation, and administrative privilege elevation/demotion.
+   - **E2E User Journeys:** Stateful multi-step workflows verifying complete auth lifecycles, cross-device session introspection/revocation, and administrative privilege elevation/demotion. See [TESTING.md](TESTING.md) for the canonical suite layout and execution commands.
 
 ### Rationale
 
@@ -2120,45 +1851,23 @@ Implement a 3-layer test pyramid utilizing **Vitest** and **Supertest** configur
 
 ### Context
 
-Manual OpenAPI or Swagger documentation maintained in YAML or JSON inevitably drifts from runtime validation schemas, generating inaccurate API client contracts, misleading endpoint consumers, and imposing high maintenance overhead. Conversely, decorating Express routing controllers with inline annotations or reflection mechanisms couples HTTP request handlers to documentation metadata and breaches AuthSphere's modular layer separation principles. The system requires an automated contract generation pipeline that reuses runtime Zod validation schemas to minimize schema drift, isolates documentation from request handlers, and avoids repeated serialization traversal on live endpoints.
+Manual OpenAPI specifications inevitably drift from runtime validation schemas, while inline controller decorators couple HTTP handlers to documentation metadata. AuthSphere needs an automated contract pipeline that reuses runtime Zod schemas without runtime overhead on live requests.
 
 ### Decision
 
-Generate an OpenAPI 3.1 specification code-first using `@asteasolutions/zod-to-openapi` (v9.1.0) and serve interactive documentation via `swagger-ui-express` at `/docs` alongside raw JSON at `/openapi.json`:
+Generate an OpenAPI 3.1 specification code-first using `@asteasolutions/zod-to-openapi` and serve Swagger UI at `/docs` alongside raw JSON at `/openapi.json`:
 
-1. **Central OpenAPIRegistry (`apps/api/src/common/openapi/registry.ts`)**: Extends Zod via `extendZodWithOpenApi(z)` and registers cookie-based security schemes (`accessTokenCookie`, `refreshTokenCookie`) modeled as `apiKey` in `cookie`. Swagger UI is configured to reflect that authentication is governed by browser-managed HttpOnly cookies rather than manual Bearer token pasting.
-2. **Reusable Envelopes, DRY Builders & Response Schemas (`apps/api/src/common/openapi/schemas.ts`)**: Registers shared universal envelopes (`MessageOnlyResponse`, `ErrorResponse`, `ValidationErrorResponse`) and exports type-safe composable builders (`jsonContent`, `successEnvelope`, `successResponse`, `messageResponse`, `errorResponse`, `jsonBody`). Domain response schemas originate directly in `*.validation.ts` (e.g. `authResponseSchema`, `userResponseSchema`, `sessionResponseSchema`), providing compile-time `Promise<T>` service typing and runtime `schema.parse()` egress validation on sensitive user endpoints, while being registered as named OpenAPI components in co-located `*.openapi.ts` via `.openapi(...)`. Common HTTP errors are DRYly centralized into `standardErrors` (400, 429, 500) and `authedErrors` (+401), while `403 Forbidden` is documented explicitly with precise domain descriptions on endpoints that genuinely enforce RBAC or business guards.
-3. **Co-located Module Path Declarations (`apps/api/src/modules/*/*.openapi.ts`)**: Modules register endpoints onto the shared registry without modifying underlying controller, service, or validation files. Side-effect aggregator `routes.ts` is protected against tree-shaker drops via `"sideEffects": true` in `package.json`.
-4. **Memoized Document Generation with Development Hot-Reload Bypass (`apps/api/src/common/openapi/index.ts`)**: `getOpenApiDocument()` builds and memoizes the OpenAPI 3.1 document on initial invocation in production and test environments, eliminating repetitive AST compilation on live endpoints. When `NODE_ENV === "development"`, caching is bypassed so schema edits are immediately reflected across `/openapi.json` and `/docs` without restarting the server.
-5. **Bidirectional Express Parity Enforcement (`apps/api/tests/unit/openapi.test.ts`)**: Automated unit tests dynamically extract mounted Express route layers and assert a strict 1:1 invariant ensuring every Express route is documented and every documented operation maps to an active Express route.
-
-```typescript
-export const successResponse = <T extends z.ZodTypeAny>(
-  description: string,
-  dataSchema: T,
-) => ({
-  description,
-  content: jsonContent(successEnvelope(dataSchema)),
-});
-
-export const authedErrors = {
-  ...standardErrors,
-  401: {
-    description: "Unauthorized — missing or invalid access token cookie",
-    content: jsonContent(ErrorResponseSchema),
-  },
-} as const;
-```
+1. **Central `OpenAPIRegistry` (`apps/api/src/common/openapi/registry.ts`):** Extends Zod via `extendZodWithOpenApi(z)` and registers cookie security schemes (`accessTokenCookie`, `refreshTokenCookie` modeled as `apiKey` in `cookie`).
+2. **Reusable Envelopes & Builders (`apps/api/src/common/openapi/schemas.ts`):** Registers shared envelopes (`MessageOnlyResponse`, `ErrorResponse`, `ValidationErrorResponse`), exports DRY response/error helpers (`successResponse`, `messageResponse`, `errorResponse`, `standardErrors`, `authedErrors`), and registers domain `*.validation.ts` response schemas via `.openapi(...)`.
+3. **Co-located Declarations (`apps/api/src/modules/*/*.openapi.ts`):** Modules register routes onto the shared registry without touching controllers; the side-effect aggregator `routes.ts` is preserved via `"sideEffects": true` in `package.json`.
+4. **Memoized Generation (`apps/api/src/common/openapi/index.ts`):** `getOpenApiDocument()` caches the generated document in production and test environments, bypassing cache when `NODE_ENV === "development"` for live schema reloads.
+5. **Bidirectional Express Parity (`apps/api/tests/unit/openapi.test.ts`):** Automated unit tests verify 1:1 parity between mounted Express routes and documented OpenAPI operations.
 
 ### Rationale
 
-- **Single Source of Truth & Zero Schema Drift:** Derives OpenAPI schemas directly from active Zod validation schemas across all request bodies and response payloads. Services strictly type returns via compile-time `Promise<T>` inference and sanitize sensitive user records at runtime via `schema.parse()`, eliminating contract drift across services, controllers, and documentation.
-- **Isolated Route Declarations:** Documentation declarations are isolated in dedicated `*.openapi.ts` files imported as side-effects, keeping Express controllers and routes free of documentation clutter.
-- **Automated Parity Verification:** Dynamic tests assert 1:1 bidirectional alignment between Express route stacks and OpenAPI path registrations, catching route omissions or phantom documentation entries.
-- **Environment-Aware Document Caching:** Caching the generated specification eliminates repeated schema traversal and AST compilation overhead in production while development mode bypasses cache for instant DX feedback.
-- **Tree-Shaking Safety:** Declaring `"sideEffects": true` ensures production bundlers and minifiers never discard route registration side-effect imports.
-- **Truthful, Granular Error Typing:** Shared status codes (400, 401, 429, 500) are centralized via `standardErrors` and `authedErrors`. Endpoint-specific 403 authorization failures are documented explicitly where business guards actually exist, avoiding phantom 403 documentation on standard authenticated endpoints.
-- **Accurate Cookie Security Modeling:** Explicitly documents HttpOnly cookie transport (`apiKey` in `cookie`) while establishing clear expectations that authentication is browser-managed rather than token-input driven.
+- **Zero Schema Drift:** Derives OpenAPI schemas directly from active Zod request and response schemas.
+- **Clean Layer Separation & Tree-Shaking Safety:** Keeps documentation declarations out of Express controllers while `"sideEffects": true` prevents bundler elimination of registration imports.
+- **Automated Parity & Environment Caching:** Guarantees routes and docs stay synchronized while eliminating AST traversal overhead in production.
 
 ---
 
@@ -2176,19 +1885,10 @@ The system requires moving email dispatch out of the synchronous request-respons
 
 Decouple email delivery from HTTP requests using a Redis-backed BullMQ task queue (`authsphere-email`):
 
-1. **Post-Commit Best-Effort Publication:** All database state mutations (user record creation, verification tokens, password reset tokens, security audit logs) must commit successfully before enqueuing an email job. The system intentionally accepts an asynchronous failure window between PostgreSQL commit and Redis enqueue: if the server process terminates abruptly after commit but before enqueue, the email remains unsent while database state remains authoritative. This trade-off is accepted to avoid the architectural overhead of a transactional outbox table and polling daemon.
-2. **Dedicated Queue Helpers:** Encapsulate queue publication within typed helpers (`enqueueVerificationEmail`, `enqueuePasswordResetEmail`, `enqueueMagicLinkEmail`, `enqueueSecurityNotificationEmail`) carrying minimal data payloads (`{ email, token }` or `{ email, eventType }`) rather than whole entity models.
-3. **Security Transit Perimeter:** Background queue payloads carry sensitive credentials (raw email verification tokens, password-reset tokens, and magic-link tokens). Redis is therefore classified as a sensitive data perimeter requiring TLS in transit, authenticated access, and network isolation from untrusted environments.
-4. **Supported Deployment Capability:** BullMQ represents a supported deployment capability for horizontally decoupled background workers (`APP_ROLE=worker`). Active default production deployments utilize `QUEUE_DRIVER=sync` on AWS Lambda (to prevent event-loop freeze upon response completion [ADR-079]) and `QUEUE_DRIVER=inline` on single-container ECS Fargate deployments (to eliminate idle Redis polling churn [ADR-078]), with BullMQ activated when dedicated horizontal worker compute is provisioned.
-
-```typescript
-export const enqueueVerificationEmail = (email: string, token: string) =>
-  enqueueEmailJob({
-    type: EMAIL_JOB_TYPES.VERIFICATION,
-    email,
-    token,
-  });
-```
+1. **Post-Commit Best-Effort Publication:** All database state mutations (user records, verification/reset tokens, security audit logs) commit before enqueuing an email job. The system accepts the failure window between PostgreSQL commit and Redis enqueue to avoid the overhead of a transactional outbox table.
+2. **Dedicated Queue Helpers (`src/modules/email/email.queue.ts`):** Encapsulate publication in typed helpers (`enqueueVerificationEmail`, `enqueuePasswordResetEmail`, `enqueueMagicLinkEmail`, `enqueueSecurityNotificationEmail`, `enqueueSocialAccountReminderEmail`) carrying minimal payloads rather than whole entity models.
+3. **Security Transit Perimeter:** Because payloads carry raw verification, reset, and magic-link tokens, Redis requires TLS in transit, authentication, and network isolation.
+4. **Supported Deployment Capability:** BullMQ powers horizontally decoupled background workers (`APP_ROLE=worker`, `QUEUE_DRIVER=bullmq`), while single-unit deployments can switch via `QUEUE_DRIVER` (`inline` or `sync` [ADR-078, ADR-079]).
 
 ### Rationale
 
@@ -2215,26 +1915,9 @@ Establish an `EmailProvider` interface contract, domain `EmailDeliveryError`, an
 2. **Normalized Error Classification:** Define a provider-agnostic domain error `EmailDeliveryError` containing `isPermanent: boolean`. Concrete providers categorize third-party responses into transient failures (429 rate limits, 5xx outages, network timeouts) versus permanent failures (4xx client validation, unverified domain, malformed recipient address) and throw `EmailDeliveryError`.
 3. **Pluggable Concrete Adapters**:
    - **Resend Adapter (`src/modules/email/resend.provider.ts`)**: Implements `resendProvider: EmailProvider` using the official Resend SDK (`resend`).
-   - **Gmail OAuth2 Adapter (`src/modules/email/gmail.provider.ts`)**: Implements `gmailOAuthProvider: EmailProvider` using Nodemailer and Google OAuth2 refresh tokens (`GMAIL_USER`, `GMAIL_REFRESH_TOKEN`).
+   - **Gmail Adapter (`src/modules/email/gmail.provider.ts`)**: Implements `gmailProvider: EmailProvider` (aliased as `gmailOAuthProvider`) using Nodemailer, supporting both dedicated Gmail SMTP with App Passwords (`GMAIL_APP_PASSWORD` [ADR-103]) and Google OAuth2 refresh tokens (`GMAIL_REFRESH_TOKEN`).
 4. **Dynamic Provider Resolution (`src/modules/email/email.factory.ts`)**: `getEmailProvider()` lazily imports and returns the configured provider based on `EMAIL_PROVIDER` or available credentials, decoupling callers from specific SDK dependencies.
 5. **Decoupled Worker Processing:** Queue workers and dispatch services depend strictly on `emailService` and `getEmailProvider()`, never importing specific provider SDKs.
-
-```typescript
-export class EmailDeliveryError extends Error {
-  readonly isPermanent: boolean;
-
-  constructor(message: string, isPermanent = false) {
-    super(message);
-    this.name = "EmailDeliveryError";
-    this.isPermanent = isPermanent;
-  }
-}
-
-export interface EmailProvider {
-  readonly name: string;
-  send(payload: EmailPayload): Promise<EmailSendResult>;
-}
-```
 
 ### Rationale
 
@@ -2261,13 +1944,6 @@ Migrate all Redis operations across the codebase to `ioredis` and uninstall `red
 3. **Dedicated Queue & Worker Connections (`src/lib/queue.ts`)**: BullMQ Workers and Queues spawn dedicated `ioredis` connections via `createBullMQConnection()`, isolating blocking queue operations (e.g. `BRPOPLPUSH`/`BLMOVE`) from general caching and rate limiting requests.
 4. **Lifecycle & Status Alignment:** Leverage native `redis.status === "ready"` directly for fail-safe connectivity checks across rate limiter middleware and cache access layers, ensuring fail-open resilience without custom wrapper properties.
 
-```typescript
-export const redis = new Redis(env.REDIS_URL, {
-  lazyConnect: true,
-  maxRetriesPerRequest: null,
-});
-```
-
 ### Rationale
 
 - **Single Dependency Footprint:** Eliminates client library divergence, redundant documentation, and dual-driver maintenance overhead.
@@ -2291,28 +1967,10 @@ The task processing subsystem requires a resilient retry policy paired with fail
 Implement an exponential backoff retry policy in BullMQ, combined with permanent-failure fast-failing and at-least-once delivery guarantees:
 
 1. **Exponential Backoff:** Configure default job options with 5 total delivery attempts (1 initial attempt + up to 4 backoff retries with delays at 2s, 4s, 8s, 16s via `delay: 2000`).
-2. **Permanent Failure Fast-Path:** In the worker processor, when `EmailDeliveryError.isPermanent` or corrupted/unsupported job types are encountered, throw BullMQ's built-in `UnrecoverableError`. This immediately transitions the job to the failed state, bypassing remaining retry attempts.
-3. **Failed-Job Retention Storage:** Configure `removeOnComplete: true` to prune successful executions and `removeOnFail: { count: 500 }` to retain the last 500 failed jobs with stack traces and payload metadata in BullMQ's internal failed-job set for operational debugging.
-4. **Graceful Worker Shutdown with Watchdog:** Register `SIGINT`, `SIGTERM`, and unhandled exception listeners that call `await worker.close()` with an unreferenced 10-second watchdog timer (`timer.unref()`), allowing active jobs to finish processing while guaranteeing shutdown completion.
-5. **At-Least-Once Delivery Reality:** Processing adheres to at-least-once delivery semantics; if a worker terminates after provider acceptance but before BullMQ marks the job complete, the job may be re-dispatched upon recovery. Downstream email recipients must tolerate occasional duplicate messages during abrupt worker crashes.
-
-```typescript
-export const emailWorker = new Worker<EmailJobData>(
-  EMAIL_QUEUE_NAME,
-  async (job: Job<EmailJobData>) => {
-    try {
-      await emailService.processJob(job.data, resendProvider);
-    } catch (err: unknown) {
-      if (err instanceof UnrecoverableError) throw err;
-      if (err instanceof EmailDeliveryError && err.isPermanent) {
-        throw new UnrecoverableError(err.message);
-      }
-      throw err; // BullMQ retries transient errors with exponential backoff
-    }
-  },
-  { connection, concurrency: 5 },
-);
-```
+2. **Permanent Failure Fast-Path:** In `src/workers/email.worker.ts` (concurrency 5), resolve the configured adapter via `await getEmailProvider()`. When `EmailDeliveryError.isPermanent` or unsupported/corrupted payloads are encountered, throw BullMQ's `UnrecoverableError` to bypass remaining retries.
+3. **Failed-Job Retention Storage:** Configure `removeOnComplete: true` and `removeOnFail: { count: 500 }` to retain recent failed jobs with stack traces and payload metadata for debugging.
+4. **Graceful Worker Shutdown with Watchdog:** Register `SIGINT`, `SIGTERM`, and unhandled exception listeners that invoke `await worker.close()` and `await connection.quit()` under an unreferenced 10-second watchdog timer (`timer.unref()`).
+5. **At-Least-Once Delivery Semantics:** If a worker terminates after provider acceptance but before BullMQ marks the job complete, the job may be re-dispatched upon recovery.
 
 ### Rationale
 
@@ -2342,52 +2000,11 @@ Implement single-statement atomic Compare-And-Swap (CAS) session rotation paired
 
 Because PostgreSQL CAS and Redis cache publication are separate operations, execution handles the concurrency gap explicitly:
 
-1. **Pre-CAS Leeway Check with Active Session Verification:** When a refresh request arrives, it checks Redis for cached tokens under the old token hash. If found, it queries PostgreSQL to confirm the session remains active (`findSessionById(payload.sid)`). If the session was explicitly revoked (via logout, password reset, or admin termination), the request is rejected with `401 Unauthorized ("Invalid session")`. If active, the cached tokens are returned immediately.
-2. **Atomic CAS Mutation:** If not cached, the request generates new tokens and executes an atomic CAS update on PostgreSQL via `prisma.session.updateMany` conditioned on both `id` and `tokenHash`.
+1. **Pre-CAS Leeway Check with Active Session Verification & Dead Key Purge:** When a refresh request arrives, check Redis for cached tokens under the old token hash. If found, query PostgreSQL (`findSessionById(payload.sid)`) to confirm the session remains active and owned by `payload.sub`. If explicitly revoked (logout, password reset, or admin termination), immediately purge the dead leeway key (`redis.del(leewayKey)`) and reject with `401 Unauthorized ("Invalid session")`. Explicit termination (`logout`, `logoutAll`) also proactively clears any active leeway key. If active, return the cached tokens immediately.
+2. **Atomic CAS Mutation:** If not cached, generate new tokens and execute an atomic CAS update on PostgreSQL via `prisma.session.updateMany` conditioned on both `id` and `tokenHash`.
 3. **Winner Publication:** The winning caller (`rotated.count > 0`) stores the newly generated token pair in Redis with a 30-second TTL and returns the tokens.
-4. **Loser Bounded Cache-Retry:** If the CAS returns 0 (a concurrent request won the database update), the loser does not immediately revoke the session. It checks the leeway cache; if not yet populated (winner is mid-publication), it waits 150ms and polls Redis once more. If populated, it returns the winner's cached tokens.
-5. **Replay Revocation & Redis Degraded Behavior:** If the leeway cache remains unpopulated after the bounded retry, the request is treated as a token replay outside the leeway window, triggering session revocation (either local session or global account revocation governed by `AUTH_REUSE_DELETION_MODE` [ADR-092]). If Redis is unavailable or unpopulated, concurrent requests cannot be collapsed; under this degraded scenario, strict replay security takes precedence over concurrency tolerance, resulting in session revocation.
-
-```typescript
-const cached = await getLeewayCache(leewayKey);
-if (cached) {
-  const activeSession = await authRepository.findSessionById(payload.sid);
-  if (!activeSession || activeSession.userId !== payload.sub) {
-    throw new UnauthorizedError("Invalid session");
-  }
-  return JSON.parse(cached) as AuthTokens;
-}
-
-// Atomic CAS update on PostgreSQL
-const rotated = await authRepository.rotateSession(session.id, oldTokenHash, { ... });
-if (rotated) {
-  await setLeewayCache(
-    leewayKey,
-    JSON.stringify(tokens),
-    env.AUTH_REFRESH_TOKEN_LEEWAY_SECONDS,
-  );
-  return tokens;
-}
-
-// CAS failed: check if a concurrent winner populated leeway cache (with 150ms retry)
-let concurrentTokens = await getLeewayCache(leewayKey);
-if (!concurrentTokens) {
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  concurrentTokens = await getLeewayCache(leewayKey);
-}
-if (concurrentTokens) {
-  return JSON.parse(concurrentTokens) as AuthTokens;
-}
-
-// Replay detected outside leeway or during cache unavailability: revoke session
-await revokeCompromisedSession(session);
-if (env.AUTH_REUSE_DELETION_MODE === "GLOBAL") {
-  await authRepository.deleteAllSessionsByUserId(session.userId);
-} else {
-  await authRepository.deleteSessionById(session.id);
-}
-throw new UnauthorizedError("Compromised session detected");
-```
+4. **Loser Bounded Cache-Retry:** If the CAS returns 0 (a concurrent request won the database update), check the leeway cache; if not yet populated (winner is mid-publication), wait 150ms and poll Redis once more. If populated, return the winner's cached tokens.
+5. **Replay Revocation & Redis Degraded Behavior:** If the leeway cache remains unpopulated after the bounded retry, treat the request as a token replay outside the leeway window, triggering session revocation (scoped via `AUTH_REUSE_DELETION_MODE` [ADR-092]). When Redis is unavailable, concurrent requests cannot be collapsed and strict replay security takes precedence.
 
 ### Rationale
 
@@ -2406,33 +2023,23 @@ throw new UnauthorizedError("Compromised session detected");
 
 ### Context
 
-AuthSphere compiles a single unified container image (`ghcr.io/utkarshj014/authsphere:v1`) that powers two distinct runtime workloads: an internet-facing Express REST API and an asynchronous BullMQ background email worker. Each process role requires a fundamentally different subset of credentials. The public HTTP API requires database connection strings, JWT signing keys, and OAuth provider secrets, but never initiates outbound email dispatches. Conversely, the private background worker requires email provider API keys and sender addresses, but never interacts with the primary PostgreSQL database or token signing keys.
-
-Jamming all environment variables into a single monolithic schema or forcing them across both processes creates a severe breach of the Principle of Least Privilege. Exposing email dispatch keys inside public-facing HTTP containers increases threat surface unnecessarily, while requiring database credentials inside background workers prevents isolated worker deployment. The configuration subsystem requires role-aware schema partitioning that enforces strict credential boundaries at process boot without requiring separate Docker images or runtime fallback hacks.
+AuthSphere compiles a unified container image (`ghcr.io/<owner>/<repo>/backend`) powering two distinct runtime workloads: an internet-facing Express REST API (`APP_ROLE=api`) and an asynchronous BullMQ background email worker (`APP_ROLE=worker`). Each role requires a different subset of secrets—the worker never interacts with PostgreSQL or JWT signing keys, and under decoupled `QUEUE_DRIVER=bullmq`, the API container never dispatches outbound emails directly.
 
 ### Decision
 
-Partition environment configuration in `apps/api/src/config/env.ts` into three discrete Zod schemas: `sharedConfig` (infrastructure common to both: `NODE_ENV`, `APP_ROLE`, `FRONTEND_URL`, `REDIS_URL`), `apiConfig` (database, JWT, OAuth, MFA), and `workerConfig` (`RESEND_API_KEY`, `EMAIL_FROM`).
+Partition environment configuration in `apps/api/src/config/env.ts` into three Zod schemas:
 
-At startup, the runtime inspects `process.env.APP_ROLE` to construct a dedicated active schema. The API server strictly validates `sharedConfig + apiConfig`, while the background worker strictly validates `sharedConfig + workerConfig`. Zod's default undeclared key-stripping automatically purges any extraneous variables passed to a container, ensuring neither workload leaks or accesses credentials belonging to the other.
+- `sharedConfig`: Infrastructure common to both (`NODE_ENV`, `APP_ROLE`, `QUEUE_DRIVER`, `FRONTEND_URL`, `REDIS_URL`).
+- `workerConfig`: Email provider credentials (`EMAIL_PROVIDER`, `RESEND_API_KEY`, `EMAIL_FROM`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `GMAIL_REFRESH_TOKEN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`).
+- `apiConfig`: Database (`DATABASE_URL`, `DATABASE_POOL_MAX`), JWT, MFA, OAuth, and optional email variables conditionally enforced via `.refine()` only when `QUEUE_DRIVER` is `inline` or `sync` ([ADR-078](#adr-078--dual-driver-background-job-architecture-and-cloud-migration-path), [ADR-079](#adr-079--serverless-lambda-runtime-synchronous-execution-guard-and-reverse-proxy-cookie-bridge)).
 
-```typescript
-const apiSchema = sharedConfig.extend(apiConfig.shape).transform((c) => ({
-  ...c,
-  JWT_ACCESS_EXPIRES_IN_MS: parseDurationToMs(c.JWT_ACCESS_EXPIRES_IN),
-  JWT_REFRESH_EXPIRES_IN_MS: parseDurationToMs(c.JWT_REFRESH_EXPIRES_IN),
-}));
-const workerSchema = sharedConfig.extend(workerConfig.shape);
-const activeSchema = isWorker ? workerSchema : apiSchema;
-const parsed = activeSchema.safeParse(process.env);
-```
+At startup, `env.ts` inspects `process.env.APP_ROLE === "worker"` and validates strictly against `workerSchema` (`sharedConfig + workerConfig`) or `apiSchema` (`sharedConfig + apiConfig`). Zod's undeclared-key stripping discards extraneous cross-role variables.
 
 ### Rationale
 
-- **Principle of Least Privilege:** Public API containers never hold or require third-party email dispatch keys (`RESEND_API_KEY`), and background workers never hold database credentials (`DATABASE_URL`).
-- **Unified Container Portability:** A single immutable container image runs either role simply by declaring `APP_ROLE`, eliminating multi-image build complexity in CI/CD.
-- **Natural Secret Stripping:** Leverages Zod's native undeclared key stripping to discard cross-role environment pollution without fragile `.partial()` extensions or defensive runtime fallback hacks.
-- **Fail-Fast Process Boot:** Each process role immediately validates its exact mandatory credentials at boot (`process.exit(1)`), preventing silent runtime failures during user requests or background job processing.
+- **Principle of Least Privilege:** Background workers never receive `DATABASE_URL` or JWT/MFA secrets, and decoupled `bullmq` API containers never require outbound email provider keys.
+- **Unified Container Portability:** A single immutable image runs either role via `APP_ROLE`.
+- **Fail-Fast Process Boot:** Invalid or missing role-required variables fail at boot (`process.exit(1)`).
 
 ---
 
@@ -2453,15 +2060,6 @@ Implement a configurable background job architecture governed by `QUEUE_DRIVER`:
 3. **Synchronous Fallback (`QUEUE_DRIVER=sync`):** Awaits job processing directly within the request handler, required in serverless environments to prevent runtime freezes [ADR-079].
 4. **Accepted In-Process Failure Window:** The inline driver accepts an in-process failure window: if the container terminates abruptly between HTTP response and event-loop execution, the email is not retried.
 5. **Cloud Evolution:** AWS SQS and Lambda provide the target cloud architecture when horizontal elasticity is needed.
-
-```typescript
-export const enqueueEmailJob = async (data: EmailJobData): Promise<void> => {
-  if (env.QUEUE_DRIVER === "sync") return processDirectly(data);
-  if (env.QUEUE_DRIVER === "inline")
-    return void setImmediate(() => processDirectly(data));
-  await emailQueue.add(data.type, data);
-};
-```
 
 ### Rationale
 
@@ -2492,22 +2090,6 @@ Implement a serverless runtime adapter and reverse-proxy architecture:
 3. **Edge Reverse Proxy (`apps/web/vercel.ts` via `@vercel/config/v1` [ADR-085]):** Configure edge rewrites (`/api/:path*` -> backend endpoint). Browsers interact strictly same-origin (`/api/*`), preserving `SameSite=Lax` cookies and eliminating CORS preflights.
 4. **Root Cookie Scoping (`path: "/"`):** Because reverse-proxy rewrites map public `/api/auth/*` to Express `/auth/*`, authentication cookies are scoped to root `path: "/"` to ensure consistent delivery across edge proxies [superseding ADR-042].
 
-```typescript
-// apps/api/src/lambda.ts
-export const handler = async (event: unknown, context: any) => {
-  if (!serverlessHandler) {
-    if (redis.status === "wait") await redis.connect().catch(() => {});
-    serverlessHandler = configureServerless({ app });
-  } else if (redis.status !== "ready") {
-    if (redis.status === "end") redis.connect().catch(() => {});
-    await once(redis, "ready", { signal: AbortSignal.timeout(100) }).catch(
-      () => {},
-    );
-  }
-  return serverlessHandler(event, context);
-};
-```
-
 ### Rationale
 
 - **Deterministic Execution:** Awaiting email dispatch within the Lambda lifecycle guarantees completion before the runtime environment freezes.
@@ -2534,7 +2116,7 @@ Mandate PKCE across all confidential OAuth 2.0 providers (Google and GitHub) and
    - Generate a cryptographically secure 32-byte `codeVerifier` and compute its SHA-256 base64url challenge (`codeChallenge = s256(codeVerifier)`).
    - Pass `code_challenge` and `code_challenge_method=S256` to the provider's authorization endpoint.
    - Issue an ephemeral, HttpOnly cookie named uniquely per transaction: `oauth_verifier_${state}` via `setOAuthVerifierCookie(res, state, verifier)`.
-   - Scope the cookie strictly to `Path=/api/auth/oauth`, `SameSite=Lax`, `maxAge=600000` (10 minutes), with `Secure` enabled in production (`env.NODE_ENV === "production"`).
+   - Scope the cookie to `SameSite=Lax`, `maxAge=600000` (10 minutes), `Secure` in production (`env.NODE_ENV === "production"`), and a path dynamically resolved by `getOAuthVerifierCookiePath()` (resolving to `/api/auth/oauth` behind the edge proxy or `/auth/oauth` in direct dev).
 
 2. **Callback Consumption (`handleOAuthCallback` / `oauthCallbackHandler`):**
    - Extract the verifier from `req.cookies[getOAuthVerifierCookieName(state)]`.
@@ -2546,7 +2128,7 @@ Mandate PKCE across all confidential OAuth 2.0 providers (Google and GitHub) and
 
 - **Cryptographic User-Agent Binding:** Enforces that only the exact browser instance that initiated the OAuth transaction can redeem the resulting authorization code, neutralizing authorization code injection and Login-CSRF attacks (aligning with RFC 9700 §2.1.1 recommendations).
 - **Concurrency Isolation:** Keying cookie names by state (`oauth_verifier_${state}`) guarantees that simultaneous OAuth flows in distinct tabs do not overwrite each other's verifiers.
-- **Symmetric Cookie Disposal:** Centralized helpers (`setOAuthVerifierCookie`, `clearOAuthVerifierCookie` in `cookie.ts`) enforce identical cookie attributes (`Path=/api/auth/oauth`, `HttpOnly`, `SameSite=Lax`), preventing orphaned cookies on client devices.
+- **Symmetric Cookie Disposal:** Centralized helpers (`setOAuthVerifierCookie`, `clearOAuthVerifierCookie` in `cookie.ts`) enforce identical cookie attributes (`getOAuthVerifierCookiePath()`, `HttpOnly`, `SameSite=Lax`), preventing orphaned cookies on client devices.
 - **Zero External Framework Overhead:** Implements full PKCE security without requiring external session middleware or client-side storage frameworks.
 - **Operational Flow & Testing:** End-to-end sequence diagrams, cookie lifecycle specs, and provider-specific tests are detailed in [OAUTH.md](OAUTH.md).
 
@@ -2569,25 +2151,8 @@ Enforce a single, cumulative 7-second abort deadline across all external HTTP in
 1. **Unified Abort Controller:** Instantiate a single `AbortController` with a bounded timer (`setTimeout(() => controller.abort(), 7000)`) at the start of callback resolution.
 2. **Pervasive Signal Propagation:** Pass `signal: AbortSignal` into every external `fetch` request, including token exchange, user profile fetching, and email queries.
 3. **Stream Consumption Budgeting:** Await all response body parsing (`response.json()`) under the same deadline, ensuring slow upstream chunked transfers cannot stall execution.
-4. **Explicit 504 Gateway Timeout Mapping:** In the callback handler or service layer, catch `AbortError` or timeout exceptions from upstream fetches and throw an `AppError("OAuth provider request timed out. Please try again.", 504)`.
+4. **Explicit 504 Gateway Timeout Mapping:** In `oauth.service.ts` (`handleOAuthCallback`), catch `AbortError` or `TimeoutError` from upstream fetches and throw `AppError("OAuth provider request timed out. Please try again.", 504)`.
 5. **Deterministic Cleanup:** Clear the timeout in a `finally` block to prevent lingering timers on warm serverless execution threads.
-
-```typescript
-const controller = new AbortController();
-const timeoutId = setTimeout(() => controller.abort(), 7000);
-
-try {
-  const profile = await strategy.getUserProfile(code, verifier, controller.signal);
-  return await resolveIdentity(profile, ...);
-} catch (err: unknown) {
-  if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
-    throw new AppError("OAuth provider request timed out. Please try again.", 504);
-  }
-  throw err;
-} finally {
-  clearTimeout(timeoutId);
-}
-```
 
 ### Rationale
 
@@ -2612,13 +2177,7 @@ However, a race condition exists: if an authenticated user initiates account lin
 Enforce a **Pre-Resolution Session Gate** in `oauth.service.ts` that executes before evaluating any identity resolution branch whenever state metadata indicates an authenticated initiation intent (`stateData.userId` or `stateData.sessionId` present):
 
 1. **Mandatory Session Validation:** Prior to querying `OAuthAccount` or evaluating user identity, query PostgreSQL (`sessionRepository.findSessionById`) for `stateData.sessionId`.
-2. **Strict Invalidation Check:** If the session does not exist, has expired (`expiresAt <= NOW()`), or belongs to a different `userId`, immediately terminate the flow with `401 Unauthorized`:
-   ```typescript
-   throw new AppError(
-     "Session has expired or was revoked. Please log in again to link your account.",
-     401,
-   );
-   ```
+2. **Strict Invalidation Check:** If the session does not exist, has expired (`expiresAt <= NOW()`), or belongs to a different `userId`, immediately terminate the flow with `AppError("Session has expired or was revoked. Please log in again to link your account.", 401)`.
 3. **No Unauthenticated Downgrades:** The transaction is never permitted to downgrade to a standard unauthenticated social login. A revoked linking attempt must fail completely.
 4. **Verified Access Token Clarification:** In `optionalAuth` middleware, the presence of a valid access token in `req.auth` signals authenticated intent for initiation; the Pre-Resolution Session Gate in the callback establishes whether the underlying database session remains active.
 
@@ -2688,8 +2247,8 @@ Generating responsive, cross-client HTML emails (for email verification, passwor
 Implement pure TypeScript transactional email template functions in `apps/api/src/modules/email/email.templates.ts` using tagged template literals and strict character entity escaping:
 
 1. **Strict HTML Entity Escaping:** All dynamic inputs pass through `escapeHtml()` mapping `&`, `<`, `>`, `'`, and `"` to HTML character entities, preventing XSS and injection.
-2. **Base Layout Isolation:** Encapsulate structural styling within `baseTemplate(title, bodyContent)`: enforces centered, table-based layouts (max-width 580px, system sans-serif font stack, `#0f172a` header, `#f8fafc` security footer) compatible with Outlook, Apple Mail, and Gmail.
-3. **Strongly-Typed Template API:** Export pure functions (`verification`, `passwordReset`, `magicLink`, `securityNotification`) that validate required arguments at compile time and return `{ subject: string, html: string }`.
+2. **Base Layout Isolation:** Encapsulate structural styling within `baseTemplate(title, bodyContent)` using centered table-based layouts and inline CSS compatible with major desktop, web, and mobile email clients.
+3. **Strongly-Typed Template API:** Export pure functions (`verification`, `passwordReset`, `magicLink`, `securityNotification`, `socialAccountReminder`) that validate arguments at compile time and return `{ subject: string, html: string }`.
 
 ### Rationale
 
@@ -2709,27 +2268,7 @@ Deploying AuthSphere to Vercel requires routing client requests (`/api/*`) to ex
 
 ### Decision
 
-Author Vercel edge reverse proxy routing using code-first TypeScript via `@vercel/config/v1` in `apps/web/vercel.ts`:
-
-```typescript
-import { deploymentEnv, routes, type VercelConfig } from "@vercel/config/v1";
-
-const backendUrl = deploymentEnv("BACKEND_URL");
-
-export const config: VercelConfig = {
-  redirects: [
-    {
-      source: "/api/docs",
-      destination: "/api/docs/",
-      permanent: true,
-    },
-  ],
-  rewrites: [
-    routes.rewrite("/api/(.*)", `${backendUrl}/$1`),
-    routes.rewrite("/(.*)", "/index.html"),
-  ],
-};
-```
+Author Vercel edge reverse proxy routing in `apps/web/vercel.ts` via `@vercel/config/v1` (`deploymentEnv("BACKEND_URL")` and `routes.rewrite`): permanently redirect `/api/docs` -> `/api/docs/` (for Swagger UI relative assets), rewrite `/api/(.*)` -> `${backendUrl}/$1`, and rewrite `/(.*)` -> `/index.html` for SPA routing. See [DEPLOYMENT.md](DEPLOYMENT.md) for the full edge proxy specification.
 
 ### Rationale
 
@@ -2749,22 +2288,7 @@ In production, client code routes API requests through relative `/api/*` paths, 
 
 ### Decision
 
-Configure Vite's development server in `apps/web/vite.config.ts` to mirror production edge proxying by forwarding `/api/*` requests to the local backend:
-
-```typescript
-// apps/web/vite.config.ts
-server: {
-  proxy: {
-    "/api": {
-      target: process.env.VITE_API_URL || "http://localhost:3000",
-      changeOrigin: true,
-      rewrite: (path) => path.replace(/^\/api/, ""),
-    },
-  },
-}
-```
-
-The frontend API client (`apps/web/src/api/client.ts`) targets `baseURL: "/api"` universally with `withCredentials: true`.
+Configure Vite's development server in `apps/web/vite.config.ts` to proxy `/api/*` requests to `process.env.VITE_API_URL || "http://localhost:3000"` (`changeOrigin: true`, stripping the `/api` prefix). The frontend API client (`apps/web/src/api/client.ts`) targets `baseURL: "/api"` universally with `withCredentials: true`.
 
 ### Rationale
 
@@ -2794,7 +2318,7 @@ Adopt `jose` (standard Web Cryptography API) and enforce dual-secret cryptograph
 
 ### Rationale
 
-- **Bounded Blast Radius via Key Separation:** Isolating access and refresh signing keys confines the impact of a compromised `JWT_ACCESS_SECRET`. While an exposed access secret permits an attacker to continuously mint forged access tokens embedding arbitrary `role` claims (each with a 15-minute TTL) for as long as the secret remains unrotated, permissions are resolved downstream through the authorization layer. The compromise does not automatically expire after 15 minutes; active minting persists until `JWT_ACCESS_SECRET` is rotated in deployment configuration, after which any previously minted tokens expire within at most 15 minutes. Crucially, access secret compromise cannot forge refresh tokens or hijack persistent database sessions. Revoking or rotating `JWT_ACCESS_SECRET` instantly invalidates all forged access tokens upon rotation without corrupting legitimate database sessions. Conversely, compromise of `JWT_REFRESH_SECRET` alone does not permit direct forging of valid access tokens.
+- **Bounded Blast Radius via Key Separation:** Isolating access and refresh signing keys confines the impact of a compromised `JWT_ACCESS_SECRET` to short-lived access token forgery (15-minute TTL) until rotated, without allowing forged refresh tokens or hijacked database sessions. Conversely, compromise of `JWT_REFRESH_SECRET` alone cannot directly forge valid access tokens.
 - **Algorithm Confusion Immunity:** Explicit header algorithm enforcement (`alg: "HS256"`) eliminates signature downgrade and key confusion attack vectors.
 - **Universal Runtime Execution:** `jose` relies exclusively on the standard Web Cryptography API (`crypto.subtle`), executing natively across Node.js 24, AWS Lambda, and edge runtimes without native compilation dependencies.
 
@@ -2802,7 +2326,7 @@ Adopt `jose` (standard Web Cryptography API) and enforce dual-secret cryptograph
 
 ## ADR-088 — Runtime Egress Data Sanitization Firewall via Zod Response Schemas
 
-**Status:** Accepted _(Extends ADR-004, ADR-026, ADR-038)_
+**Status:** Accepted _(Extends ADR-004, ADR-026, ADR-038; Extended by ADR-099, ADR-101)_
 
 ### Context
 
@@ -2810,26 +2334,7 @@ When database entities (such as `User`) are retrieved via Prisma, records contai
 
 ### Decision
 
-Enforce mandatory runtime egress data sanitization at the service layer boundary using explicit Zod response schemas (`src/modules/users/users.validation.ts`, `src/modules/auth/auth.validation.ts`):
-
-```typescript
-// apps/api/src/modules/users/users.service.ts
-const getUser = async (userId: string): Promise<UserProfileResponse> => {
-  const user = await usersRepository.findUserById(userId);
-  if (!user) throw new AppError("User not found", 404);
-
-  // Runtime egress sanitization firewall on sensitive user profile record
-  return usersResponseSchema.userProfile.parse({
-    id: user.id,
-    email: user.email,
-    firstName: user.firstName,
-    lastName: user.lastName,
-    role: user.role.name,
-    isEmailVerified: user.isEmailVerified,
-    createdAt: user.createdAt,
-  });
-};
-```
+Enforce mandatory runtime egress data sanitization at the service layer boundary using explicit Zod response schemas (`src/modules/users/users.validation.ts`, `src/modules/auth/auth.validation.ts`). Service methods parse outgoing records through `usersResponseSchema.userProfile.parse(...)`, `usersResponseSchema.paginatedUsers.parse(...)` (for `GET /users` [ADR-099]), and `authResponseSchema.currentUserProfile.parse(...)` (for `GET /auth/me` [ADR-101]), stripping internal columns (`passwordHash`, `mfaSecret`, `mfaLastUsedWindow`) while preserving only explicit contract attributes.
 
 ### Rationale
 
@@ -2854,13 +2359,7 @@ Implement an event notification pipeline triggered automatically inside `apps/ap
 - On `changePassword`: dispatches `enqueueSecurityNotificationEmail(email, "PASSWORD_CHANGED")`.
 - On `mfaDisable`: dispatches `enqueueSecurityNotificationEmail(email, "MFA_DISABLED")`.
 
-Dispatch routing and delivery guarantees are governed by `QUEUE_DRIVER` `[ADR-078]`:
-
-- `bullmq`: Asynchronous durable delivery via Redis queue. Incurs minimal latency overhead (~1–2ms job enqueue); failed jobs are retried with exponential backoff and persist across process restarts.
-- `inline`: Deferred in-process execution via `setImmediate`. Incurs zero client latency penalty, but execution is ephemeral and jobs can be lost if the process crashes or terminates before delivery.
-- `sync`: Synchronous in-band execution. Directly blocks the client HTTP request until SMTP/API email transport completes (introducing network latency penalty); intended for local development and deterministic integration testing.
-
-In all modes, email delivery failures are isolated and do not abort or roll back already-committed PostgreSQL credential mutations.
+Dispatch routing, latency characteristics, and durability guarantees follow the configured `QUEUE_DRIVER` (`bullmq`, `inline`, or `sync` [ADR-078]). In all modes, email delivery failures are isolated and do not abort or roll back already-committed PostgreSQL credential mutations.
 
 ### Rationale
 
@@ -2883,7 +2382,7 @@ Configure keyless AWS deployment in `.github/workflows/deploy.yml` using OpenID 
 
 1. Configure GitHub Actions workflow permissions: `id-token: write` and `contents: read`.
 2. Authenticate to AWS via `aws-actions/configure-aws-credentials@v6`, assuming an IAM role (`role-to-assume: AWS_DEPLOY_ROLE_ARN`) via GitHub's cryptographic OIDC token.
-3. Configure the IAM role trust policy subject condition to match the deployment repository and main branch reference (e.g. `repo:utkarshj014@*/authsphere@*:ref:refs/heads/main` or exact `repo:utkarshj014/authsphere:ref:refs/heads/main`).
+3. Configure the IAM role trust policy subject condition to match the deployment repository and main branch reference (e.g. `repo:<owner>/<repo>:ref:refs/heads/main`).
 4. Zero static AWS access keys are created or stored in repository secrets.
 
 ### Rationale
@@ -2901,7 +2400,7 @@ Configure keyless AWS deployment in `.github/workflows/deploy.yml` using OpenID 
 
 ### Context
 
-Multi-Factor Authentication requires supporting both standard time-based one-time passwords (TOTP 6-digit codes) and emergency 10-character alphanumeric recovery codes. Forcing clients or users to specify whether they are submitting a TOTP code vs recovery code via different endpoints or form fields complicates client UI state, leaks fallback mechanisms, and degrades recovery UX.
+Multi-Factor Authentication requires supporting both standard 6-digit TOTP codes and emergency `XXXXX-XXXXX` recovery codes (10 hex characters formatted with a hyphen [ADR-047]). Forcing clients or users to specify code type via different endpoints or form fields complicates UI state, leaks fallback mechanisms, and degrades recovery UX.
 
 ### Decision
 
@@ -2969,7 +2468,7 @@ Standardize on UUIDv7 (`@id @default(uuid(7))` in Prisma) as the ubiquitous prim
 
 ## ADR-094 — Relational Deletion Cascades and Administrative Role Immutability
 
-**Status:** Accepted _(Extends ADR-005, ADR-013, ADR-037)_
+**Status:** Accepted _(Extends ADR-005, ADR-013, ADR-037; Extended by ADR-100)_
 
 ### Context
 
@@ -2981,7 +2480,7 @@ Enforce relational integrity constraints at the PostgreSQL schema and service le
 
 1. **Atomic Deletion Cascades:** All user-dependent child models (`Session`, `OAuthAccount`, `EmailVerificationToken`, `PasswordResetToken`, `MfaChallenge`, `MfaRecoveryCode`, `MagicLinkToken`, `SecurityEvent`) specify `onDelete: Cascade` in `schema.prisma`. Deleting a `User` cascades atomically in a single database transaction. This reflects a deliberate architectural trade-off prioritizing automated orphan cleanup and complete user record removal over immutable audit log preservation.
 2. **Role Deletion Restrict:** `User.role` enforces `onDelete: Restrict`, prohibiting the deletion of any role currently assigned to one or more users.
-3. **Admin Role Permission Guard:** `roles.service.ts` explicitly guards the `ADMIN` role permissions from mutation via the API: `if (roleName === ROLES.ADMIN) throw new ForbiddenError("Cannot update permissions for the admin role.");`.
+3. **Admin Role Permission Guard:** `roles.service.ts` explicitly guards the `ADMIN` role permissions from mutation via the API: `if (roleName === ROLES.ADMIN) throw new ForbiddenError("Cannot update permissions for the admin role.");` (while read-only inspection is exposed via `GET /roles/:roleName/permissions` [ADR-100]).
 
 ### Rationale
 
@@ -3009,7 +2508,7 @@ PgBouncer in transaction mode multiplexes connections per transaction and does n
 Partition database connection strings based on execution lifecycle:
 
 - Runtime Compute (API, Worker, Lambda): Runtime environments inject the pooled connection string into `DATABASE_URL` (supplied via GitHub Secret `DATABASE_URL_POOLED`) with bounded pool sizing in `src/lib/prisma.ts`.
-- Schema Migrations (CI/CD Pipeline): The deployment workflow (`.github/workflows/deploy.yml`) explicitly overrides `DATABASE_URL: ${{ secrets.DATABASE_URL_DIRECT }}` when running `npm run db:migrate:deploy`.
+- Schema Migrations (CI/CD Pipeline): The deployment workflow (`.github/workflows/deploy.yml`) explicitly overrides `DATABASE_URL: ${{ secrets.DATABASE_URL_DIRECT }}` when running `npm run db:migrate:deploy --workspace=@authsphere/api`.
 
 ### Rationale
 
@@ -3063,15 +2562,12 @@ Configure `tsup` in `apps/api/tsup.config.ts` for AWS Lambda deployment:
 - Target `node24`, format `esm`, minified single bundle `lambda.mjs`.
 - Bundles all pure JS/TS dependencies (`noExternal: [/^(?!argon2).*$/]`).
 - Externalizes `argon2` native addon (`external: ["argon2"]`), preserving only argon2 in Lambda's local `node_modules`.
-- Injects an ESM CommonJS compatibility banner:
-  ```javascript
-  import { createRequire } from "node:module";
-  const require = createRequire(import.meta.url);
-  ```
+- Injects an ESM CommonJS compatibility banner (`import { createRequire } from "node:module"; const require = createRequire(import.meta.url);`).
+- **Deployment Archive Filtering:** While `tsup` generates sourcemaps (`sourcemap: true`) for local troubleshooting, production packaging (`npm run zip:lambda` via `bestzip`) archives only `lambda.mjs` and `node_modules/`, omitting `.map` sourcemap files from the uploaded Lambda zip artifact.
 
 ### Rationale
 
-- **Reduced Package Size:** Bundling shrinks deployment package size, reducing cold-start S3 artifact download and initialization latency.
+- **Reduced Package Size & Transfer Latency:** Bundling and stripping `.map` files yields a lean zip artifact, reducing cold-start S3 artifact download and initialization latency.
 - **Native Binary Stability:** Preserves native C++ compilation bindings for Argon2id hashing without compilation errors.
 - **ESM/CJS Compatibility:** Enables CommonJS packages (`@codegenie/serverless-express`) to execute cleanly in native Node.js 24 ESM Lambda runtimes.
 
@@ -3100,3 +2596,235 @@ Implement a unified GitHub Actions deployment pipeline (`.github/workflows/deplo
 - **Single Pipeline Source of Truth:** A declarative workflow manages both serverless and container deployments.
 - **Infrastructure Portability:** Deployment targets can be switched between AWS Lambda and AWS ECS Fargate via repository configuration without code modifications.
 - **Operations & Runbooks:** Full SAM parameters, task definitions, rollback procedures, and environment matrix are documented in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+---
+
+## ADR-099 — Paginated Administrative User Directory and Standard Offset Query Strategy
+
+**Status:** Accepted _(Extends ADR-026, ADR-036, ADR-051, ADR-088)_
+
+### Context
+
+Back-office administration consoles require global visibility across registered user accounts. Returning unpaginated datasets causes unbounded memory consumption, query latency, and payload bloat. Administrative workflows require arbitrary page jumps, bidirectional traversal, and total record counts (`totalCount`, `totalPages`) that cursor-based pagination cannot satisfy without traversing intermediate pages.
+
+### Decision
+
+Implement an administrative user directory endpoint at `GET /users` with standardized offset pagination. The endpoint accepts validated `page` (default `1`) and `limit` (default `20`, max `100`) query parameters, executes `usersRepository.findUsersPaginated` concurrently with `prisma.user.count()` via `Promise.all`, and returns a structured `{ users, pagination }` metadata envelope. Route access is restricted via `requirePermission(PERMISSIONS.USER_READ)` and throttled by user-keyed rate limiting (`USERS_LIST`). For complete route definitions, see [ARCHITECTURE.md](ARCHITECTURE.md#21-canonical-route-inventory--openapi-31-operation-registry-34-operations).
+
+### Consequences
+
+- **Positive:** Enables arbitrary page navigation, total record estimation, and standardized dashboard table controls.
+- **Negative:** Deep offset traversal (`OFFSET > 1000`) incurs increasing relational scan costs, mitigated by capping `limit` at 100 and applying strict user-keyed rate limits.
+
+### Security Invariants
+
+- **Permission Boundary:** Guarded by `requirePermission(PERMISSIONS.USER_READ)`; requests lacking the permission receive immediate `403 Forbidden`.
+- **Egress Sanitization:** Output is strictly filtered via `usersResponseSchema.paginatedUsers` [ADR-088], stripping `passwordHash`, `mfaSecret`, and internal security attributes.
+- **Anti-Scraping Defense:** Throttled via `RATE_LIMIT_POLICIES.USERS_LIST` (30 req/min, keyed by authenticated user ID) to prevent bulk account harvesting.
+
+---
+
+## ADR-100 — Dedicated Role Permission Introspection with Cached Read Path and Administrative Immutability
+
+**Status:** Accepted _(Extends ADR-035, ADR-036, ADR-037, ADR-051, ADR-094)_
+
+### Context
+
+AuthSphere uses dynamic Role-Based Access Control (RBAC) where permissions are assigned to roles. While permissions could be modified via `PUT /roles/:roleName/permissions`, the system lacked a dedicated, idempotent read-only endpoint for inspecting assigned permissions, forcing admin consoles and audit tools to infer state or query data stores directly.
+
+### Decision
+
+Implement a dedicated read-only role permission introspection endpoint at `GET /roles/:roleName/permissions` guarded by `auth`, `requireRole(ROLES.ADMIN)`, and `rateLimiter(ROLE_READ_PERMISSIONS)`. Read requests resolve permissions via `authorizationService.getPermissionsByRole`, backed by 24-hour Redis caching (`role:permissions:<roleName>`) with transparent fallback to PostgreSQL. On permission updates (`PUT /roles/:roleName/permissions`), atomic database updates immediately invalidate the cached Redis key (`redis.del`). Updates targeting the foundational `ADMIN` role are rejected at the service layer. For route specifications, see [ARCHITECTURE.md](ARCHITECTURE.md#21-canonical-route-inventory--openapi-31-operation-registry-34-operations).
+
+### Consequences
+
+- **Positive:** Completes read/write API symmetry, eliminates repeated relational joins on hot authorization read paths via Redis caching, and prevents stale privilege windows upon permission modification.
+- **Negative:** Couples permission mutation workflows directly to Redis cache key eviction logic.
+
+### Security Invariants
+
+- **Administrative Immutability:** Server enforces rejection (`403 Forbidden`) of any modification attempt against the `ADMIN` role's permissions, preserving system integrity and preventing lockout.
+- **Synchronous Cache Invalidation:** Updating role permissions invalidates the cache synchronously, ensuring all active sessions evaluate updated privileges on their subsequent request.
+- **Fail-Open Resilience:** Redis connectivity failures degrade transparently to direct PostgreSQL queries without rejecting administrative inspection requests.
+
+---
+
+## ADR-101 — Zero-Side-Effect Client MFA State Introspection via Current User Profile Contract
+
+**Status:** Accepted _(Extends ADR-040, ADR-045, ADR-057, ADR-088, ADR-091)_
+
+### Context
+
+Frontend applications need to ascertain the user's Multi-Factor Authentication (MFA) posture to render dynamic security settings, post-login reminders, and step-up authentication prompts. Previously, clients had to infer enrollment by invoking setup endpoints (`POST /auth/mfa/setup`) or tracking fragile client-side flags. Calling mutation endpoints to probe status generates ephemeral secrets, polluting database state and introducing cryptographic overhead.
+
+### Decision
+
+Expose `mfaEnabled: boolean` as a first-class attribute in the authenticated user profile returned by `GET /auth/me`. The field is read directly from the `User` database record and validated via `authResponseSchema.currentUserProfile` [ADR-088]. Parity is maintained across administrative user endpoints (`GET /users/:id` and `GET /users` [ADR-099]). For the complete API route map, see [ARCHITECTURE.md](ARCHITECTURE.md#21-canonical-route-inventory--openapi-31-operation-registry-34-operations).
+
+### Consequences
+
+- **Positive:** Provides idempotent, zero-side-effect posture introspection on application bootstrap and navigation without creating challenge records or generating ephemeral secrets.
+- **Negative:** Expands the user profile response schema contract, requiring synchronized types across frontend clients.
+
+### Security Invariants
+
+- **Cryptographic Secret Sealing:** Only the boolean enrollment flag is exposed; internal encrypted secrets (`mfaSecret`), IVs, auth tags, monotonic counter windows, and recovery codes remain sealed within the database boundary.
+- **Runtime Egress Sanitization:** All profile responses pass through strict Zod output validation schemas (`currentUserProfile`, `userProfile`, `paginatedUsers`), preventing accidental column leakage.
+- **Zero Mutation Side-Effects:** Read-only inspection generates no challenge tokens, modifies no database rows, and cannot interfere with ongoing MFA enrollment lifecycles.
+
+---
+
+## ADR-102 — Client-Device Session Supersession on Authentication
+
+**Status:** Accepted _(Extends ADR-012, ADR-013, ADR-029, ADR-039, ADR-068)_
+
+### Context
+
+Re-authenticating on a client device that already possesses an active session overwrites the client's single HttpOnly refresh token cookie, stranding the previous session record in PostgreSQL as an un-rotatable orphan and generating duplicate client device listings during active session introspection (`GET /sessions` [ADR-068]).
+
+### Decision
+
+Enforce atomic client-device session supersession in `authRepository.createSession` within a Prisma interactive transaction:
+
+1. **Atomic Pruning:** Before inserting a new session record, delete all active sessions matching the caller's device tuple: `(userId, userAgent, ipAddress)`.
+2. **Encapsulated Lifecycle:** Centralizing pruning inside `createSession` automatically covers all entry points (`login`, `mfaVerifyLogin`, `oauthCallback`, `verifyMagicLink` [ADR-039]) without controller-level branching.
+3. **SSOT Read Path:** `sessionsService.getActiveSessions` queries the database directly without ad-hoc in-memory deduplication filters.
+
+### Rationale & Invariants
+
+- **Accurate Telemetry:** Eliminates ghost sessions and preserves an exact 1:1 mapping between physical devices and active session records.
+- **Transactional Hard Deletion:** Orphaned refresh token hashes are hard-deleted in the same transaction [ADR-013, ADR-029], instantly revoking replay vectors.
+- **Scoped Invalidation:** Deletion is strictly bounded to the matching `(userId, userAgent, ipAddress)` tuple; remote sessions on other devices or networks remain unaffected.
+
+---
+
+## ADR-103 — Decoupled Transactional Email via Dedicated Gmail App Password with Preserved OAuth2 Fallback
+
+**Status:** Accepted _(Extends ADR-073)_
+
+### Context
+
+Transactional email in AuthSphere supported Resend API and Gmail OAuth2 [ADR-073]. While Gmail OAuth2 enabled delivery to arbitrary recipients without a custom domain, coupling email to OAuth2 required sensitive `gmail.send` scopes, triggering Google OAuth consent verification or 7-day token expirations in testing mode. Conversely, requesting basic identity scopes (`openid, email, profile`) for user sign-in incurs no token expiry or verification hurdles under Google's basic identity exception.
+
+### Decision
+
+Decouple transactional email delivery from OAuth social sign-in:
+
+1. **Dedicated Gmail SMTP with App Password (Primary):** Configure Nodemailer in `gmail.provider.ts` using standard Gmail SMTP authenticated via `GMAIL_USER` and a 16-character Google App Password (`GMAIL_APP_PASSWORD`), bypassing all OAuth consent reviews and scope restrictions.
+2. **Independent OAuth Sign-In:** Keep Google OAuth social authentication in Testing mode, strictly limited to basic identity scopes (`openid, email, profile`).
+3. **Pluggable Fallback Chain:** Retain existing `gmailOAuthProvider` (refresh token exchange) and `resendProvider` [ADR-073] as pluggable adapters. If `GMAIL_APP_PASSWORD` is absent, the provider falls back to `GMAIL_REFRESH_TOKEN` or Resend.
+4. **Environment Schema:** Integrate `GMAIL_APP_PASSWORD` as an optional secret in `src/config/env.ts` across API and worker environments.
+
+### Rationale & Trade-offs
+
+- **Zero-Verification Delivery:** Delivers transactional emails to arbitrary recipients immediately without custom domain acquisition or Google OAuth verification hurdles.
+- **Clear Security Boundary:** Isolates backend system email credentials from client-facing identity federation.
+- **Accepted Trade-off:** Personal Gmail SMTP enforces a 500-recipient daily limit and rewrites the `From` address. Suitable for development, demonstration, and staging environments, while enterprise production switches to Resend (`EMAIL_PROVIDER=resend`).
+
+---
+
+## ADR-104 — Zero-Orphan Disconnect Protection and OAuth Account Disconnection Governance
+
+**Status:** Accepted _(Extends ADR-032, ADR-059, ADR-061, ADR-082, ADR-101)_
+
+### Context
+
+Users with linked social identities (Google, GitHub) require the ability to disconnect providers. However, unrestricted unlinking allows users without a local password (`passwordHash === null` [ADR-032]) or users with only one linked provider to disconnect their sole authentication factor, permanently orphaning the user record with zero recovery paths.
+
+### Decision
+
+Implement an authenticated OAuth account disconnection endpoint at `DELETE /auth/oauth/:provider` guarded by `auth` middleware, user-keyed rate limiting (`OAUTH_UNLINK`, 10 req / 15m), parameter validation, and the Zero-Orphan Security Invariant:
+
+1. **Zero-Orphan Security Invariant:** In `oauthService.unlinkOAuthAccount`, reject disconnection with `400 Bad Request` if the user has no password hash and only one linked OAuth account:
+   `if (!user.passwordHash && user.oauthAccounts.length <= 1) throw new AppError("Cannot disconnect your only sign-in method...", 400);`
+2. **Target Validation:** Attempting to disconnect a provider not currently linked returns `404 Not Found`.
+3. **Atomic Relational Deletion:** On validation, delete the provider row via `authRepository.deleteOAuthAccount(userId, provider)`.
+4. **Introspection Symmetry:** The updated connection state is immediately reflected in `GET /auth/me` (`hasPassword`, `oauthProviders` [ADR-101]), enabling client-side UI buttons to disable dynamically.
+
+### Rationale & Invariants
+
+- **Lockout Prevention:** Guarantees that an account retains at least one viable login credential at all times.
+- **Ownership Scoping:** Authentication is enforced via JWT access cookie; disconnection is strictly restricted to the caller's authenticated `req.auth.userId`.
+- **Accepted Trade-off:** Users with a single OAuth identity and no password must set a password or link another provider before unlinking.
+
+---
+
+## ADR-105 — Redis-Backed Dual-Tier Session Revocation Engine with Multi-Key Pipelining (`redis.mget`)
+
+**Status:** Accepted _(Extends ADR-012, ADR-013, ADR-027, ADR-035, ADR-068, ADR-074, ADR-087)_
+
+### Context
+
+Stateless JWT access tokens (`accessToken`, 15-minute validity) provide low-latency authorization without querying PostgreSQL on every HTTP request. However, purely stateless tokens cannot detect immediate session revocations (e.g. single session logout, global session termination, password resets, or administrative role modifications) before token expiration, leaving a 15-minute window of vulnerability. Conversely, querying PostgreSQL on every protected request re-introduces database contention and eliminates the performance benefits of stateless tokens.
+
+### Decision
+
+Implement a high-performance, Redis-backed dual-tier token revocation engine in `auth` and `optionalAuth` middleware (`src/middlewares/auth.ts`) utilizing an atomic multi-key pipeline (`redis.mget`):
+
+1. **Dual-Tier Invalidation Keys:**
+   - **Session-Level Revocation:** `auth:revoked-session:<sessionId>` is written with a TTL equal to the access token lifespan (`JWT_ACCESS_EXPIRES_IN_MS`) upon single-session logout or revocation (`sessionsService.revokeSession`).
+   - **User-Level Global Revocation:** `auth:user-revoked-at:<userId>` stores an epoch-second timestamp (`Math.floor(Date.now() / 1000)`) written on `logoutAll`, password reset, password change, `mfaDisable`, or administrative role changes (`usersService.changeRole`). Tokens with `iat <= userRevokedAt` are rejected.
+2. **Pipelined Multi-Key Read (`redis.mget`):** The middleware executes a single Redis roundtrip querying `auth:revoked-session:${payload.sid}`, `auth:user-revoked-at:${payload.sub}`, and `role:permissions:${payload.role}` concurrently.
+3. **Fail-Open Resilience:** If Redis is down or unreachable, token validation falls back to standard cryptographic JWT signature verification and PostgreSQL permission lookups without rejecting legitimate user traffic.
+4. **Cookie Purge:** When a revoked session or token is detected, auth cookies (`accessToken`, `refreshToken`) are immediately cleared from the client response.
+
+### Rationale & Trade-offs
+
+- **Instant Revocation with Zero DB I/O:** Closes the 15-minute token revocation vulnerability window while avoiding PostgreSQL queries on valid cached requests.
+- **Network Pipeline Efficiency:** Bundling revocation checks and role permission retrieval into a single `mget` command halves Redis network roundtrips on protected routes.
+- **Fail-Open Graceful Degradation:** Redis outages do not cascade into complete API downtime.
+
+---
+
+## ADR-106 — Global Non-Cacheable HTTP Baseline (`Cache-Control: no-store`) with Targeted Documentation Revalidation (`no-cache`)
+
+**Status:** Accepted _(Extends ADR-056, ADR-071, ADR-085)_
+
+### Context
+
+Browsers and shared HTTP intermediaries (Vercel edge proxies, CDN edge servers, corporate proxy caches) cache HTTP GET responses by default if caching directives are absent. In an authentication platform, allowing responses containing user profiles (`GET /auth/me`), active sessions (`GET /sessions`), or administrative directories (`GET /users`) to be cached creates critical confidentiality and security risks (e.g. cache poisoning, sensitive data exposure across shared terminals, back-button credential inspection).
+
+### Decision
+
+Enforce a strict non-cacheable baseline across all HTTP responses with targeted revalidation exceptions:
+
+1. **Global Immutable Baseline:** Register early Express middleware in `apps/api/src/app.ts` preceding routes and security guards:
+   ```typescript
+   app.use((_req, res, next) => {
+     res.setHeader("Cache-Control", "no-store");
+     next();
+   });
+   ```
+   This guarantees that every API response, error payload, and authenticated endpoint defaults to `Cache-Control: no-store`, forbidding storage in any private or shared cache.
+2. **Targeted Documentation Revalidation:** In `apps/api/src/common/openapi/index.ts`, selectively override the header to `Cache-Control: no-cache` for developer documentation endpoints (`GET /openapi.json` and `/docs` Swagger UI):
+   - Allows clients to cache documentation assets while enforcing mandatory conditional revalidation (`ETag` / 304 Not Modified) on subsequent requests.
+
+### Rationale & Trade-offs
+
+- **Defense-in-Depth:** Eliminates reliance on individual route controllers to set cache headers, preventing accidental data leaks by design.
+- **Edge Proxy Safety:** Prevents reverse proxies from caching private user data or session cookies under any routing circumstance.
+- **Granular Ergonomics:** Preserves fast browser revalidation for heavy static documentation schemas without compromising API security boundaries.
+
+---
+
+## ADR-107 — Deferred MFA Security Event Attribution via Polymorphic Challenge State
+
+**Status:** Accepted _(Extends ADR-045, ADR-057, ADR-069)_
+
+### Context
+
+In multi-step authentication flows (password login, federated OAuth, or passwordless magic link with MFA enabled), the initial authentication step does not issue session tokens; instead, it issues an ephemeral `MfaChallenge` token. Previously, when the user successfully submitted their second factor (`POST /auth/mfa/verify`), the system unconditionally recorded `LOGIN_SUCCESS` in the audit ledger. This obliterated the initiating authentication vector: OAuth social logins and magic-link logins requiring MFA were misattributed as password logins (`LOGIN_SUCCESS` instead of `OAUTH_LOGIN` or `MAGIC_LINK_LOGIN`), corrupting telemetry accuracy in the Security Activity Ledger.
+
+### Decision
+
+Persist the initiating authentication event type inside the ephemeral `MfaChallenge` relational model:
+
+1. **Relational Attribution Column:** Add `type SecurityEventType @default(LOGIN_SUCCESS)` to the `MfaChallenge` Prisma schema.
+2. **Event Type Propagation:** During challenge generation, assign `type: SECURITY_EVENT_TYPES.OAUTH_LOGIN` for social logins, `MAGIC_LINK_LOGIN` for magic-link logins, or `LOGIN_SUCCESS` for password logins.
+3. **Deferred Recording:** In `authService.mfaVerifyLogin`, read `challenge.type` and record the exact corresponding security event (`recordSecurityEvent(user.id, challenge.type, ipAddress, userAgent, metadata)`).
+
+### Rationale & Trade-offs
+
+- **Accurate Security Telemetry:** Preserves 100% fidelity in security audit logs and user activity ledgers regardless of whether MFA was challenged.
+- **Zero Ephemeral Secret Exposure:** Propagates only the typed enum without leaking sensitive payload data or OAuth state across challenges.
+- **Relational Simplicity:** Extends the existing ephemeral challenge lifecycle without introducing auxiliary audit tables or Redis queues.

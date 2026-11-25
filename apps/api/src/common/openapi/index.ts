@@ -1,4 +1,9 @@
-import { Router } from "express";
+import {
+  Router,
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
 import helmet from "helmet";
 import swaggerUi from "swagger-ui-express";
 import { OpenApiGeneratorV31 } from "@asteasolutions/zod-to-openapi";
@@ -37,7 +42,12 @@ export function getOpenApiDocument(): OpenAPIObject {
     info: {
       title: "AuthSphere API",
       description:
-        "Authentication, authorization, and identity management API. Note: AuthSphere uses HttpOnly cookies (accessToken, refreshToken) for session transport rather than Bearer tokens in Authorization headers. In Swagger UI, authenticate via the /auth/login endpoint; browser cookies are automatically attached to same-origin requests.",
+        "Authentication, authorization, and identity management API.\n\n" +
+        "### How to Test in Swagger UI\n" +
+        "- **Session Cookies**: AuthSphere uses HttpOnly cookies (`accessToken`, `refreshToken`) for session transport. Authenticating via `/auth/login` (or MFA) sets browser cookies automatically for subsequent requests.\n" +
+        "- **MFA Flow**: If a login responds with `mfaRequired: true`, copy the `mfaToken` into `POST /auth/mfa/verify` along with your 6-digit TOTP or recovery code to complete login.\n" +
+        "- **Email Tokens**: Verification, magic links, and password resets send one-time tokens out-of-band via email (or worker logs in dev mode). Retrieve the token to submit to the respective `/verify` or `/reset-password` endpoint.\n" +
+        "- **OAuth 2.0**: OAuth endpoints issue 302 redirects to identity providers (Google/GitHub). Due to browser CORS policies on AJAX redirects, do not test OAuth via Swagger's 'Execute' button; open the initiation URL directly in a browser tab.",
       version: "1.0.0",
       license: { name: "ISC" },
     },
@@ -51,8 +61,12 @@ export function getOpenApiDocument(): OpenAPIObject {
           ]
         : [
             {
+              url: "/api",
+              description: "Frontend Proxy (localhost:5173 - Default)",
+            },
+            {
               url: "/",
-              description: "Direct API Host (Local Development)",
+              description: "Direct Backend Host (localhost:3000)",
             },
           ],
     tags: [
@@ -81,8 +95,9 @@ export function getOpenApiDocument(): OpenAPIObject {
 
 const router = Router();
 
-// Serve raw OpenAPI JSON document
+// Serve raw OpenAPI JSON document with conditional revalidation
 router.get("/openapi.json", (_req, res) => {
+  res.setHeader("Cache-Control", "no-cache");
   return res.json(getOpenApiDocument());
 });
 
@@ -97,10 +112,26 @@ const swaggerCsp = helmet.contentSecurityPolicy({
   },
 });
 
-// Serve Swagger UI
+// Ensure /docs without trailing slash redirects to /docs/ so relative assets resolve properly
+router.get("/docs", (req, res, next) => {
+  if (!req.path.endsWith("/")) {
+    const [pathname, search] = req.originalUrl.split("?");
+    return res.redirect(
+      301,
+      search ? `${pathname}/?${search}` : `${pathname}/`,
+    );
+  }
+  next();
+});
+
+// Serve Swagger UI with conditional revalidation
 router.use(
   "/docs",
   swaggerCsp,
+  (_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader("Cache-Control", "no-cache");
+    next();
+  },
   swaggerUi.serve,
   swaggerUi.setup(getOpenApiDocument()),
 );

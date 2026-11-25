@@ -67,7 +67,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Register a new user account",
   description:
-    "Creates a new user with email and password. Sends a verification email.",
+    "Creates a new user with email and password and dispatches a verification email out-of-band. In local development, retrieve the token from your email inbox or worker console logs, then submit it to `POST /auth/verify-email`.",
   request: {
     body: jsonBody(authRequestSchema.signup),
   },
@@ -85,7 +85,8 @@ registry.registerPath({
   path: "/auth/verify-email",
   tags: ["Auth"],
   summary: "Verify email address",
-  description: "Confirms the user's email using a verification token.",
+  description:
+    "Confirms the user's email using the one-time token received via email (or worker logs in dev mode).",
   request: {
     body: jsonBody(authRequestSchema.verifyEmail),
   },
@@ -121,7 +122,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Login with email and password",
   description:
-    "Authenticates a user. Sets HttpOnly auth cookies on success, or returns an MFA challenge if MFA is enabled.",
+    "Authenticates a user with email and password. Sets HttpOnly session cookies on success. If MFA is enabled, returns `{ mfaRequired: true, mfaToken }` — copy `mfaToken` into `POST /auth/mfa/verify` to complete authentication.",
   request: {
     body: jsonBody(authRequestSchema.login),
   },
@@ -206,7 +207,8 @@ registry.registerPath({
   path: "/auth/forgot-password",
   tags: ["Auth"],
   summary: "Request password reset email",
-  description: "Sends a password reset email if the account exists.",
+  description:
+    "Sends a password reset email if the account exists. Retrieve the `token` parameter from the email link (or worker logs in dev mode) and pass it to `POST /auth/reset-password`.",
   request: {
     body: jsonBody(authRequestSchema.forgotPassword),
   },
@@ -224,7 +226,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Reset password with token",
   description:
-    "Resets the user's password using a token from the password reset email. May require MFA verification.",
+    "Resets the user's password using the one-time token received via email. Sets auth cookies on success (or returns an MFA challenge if MFA is enabled).",
   request: {
     body: jsonBody(authRequestSchema.resetPassword),
   },
@@ -309,7 +311,7 @@ registry.registerPath({
   tags: ["MFA"],
   summary: "Verify MFA code during login",
   description:
-    "Completes login by verifying a TOTP code or recovery code. Sets auth cookies on success.",
+    "Completes MFA login challenge using the `mfaToken` received from `POST /auth/login` (or social login/password reset) and a 6-digit TOTP code or emergency recovery code. Sets HttpOnly session cookies upon success.",
   request: {
     body: jsonBody(authRequestSchema.mfaVerifyLogin),
   },
@@ -369,7 +371,8 @@ registry.registerPath({
   path: "/auth/magic-link",
   tags: ["Auth"],
   summary: "Send magic link email",
-  description: "Sends a passwordless login link if the account exists.",
+  description:
+    "Sends a passwordless login link via email if the account exists. Retrieve the `token` parameter from the email link (or worker logs in dev mode) and pass it to `POST /auth/magic-link/verify`.",
   request: {
     body: jsonBody(authRequestSchema.sendMagicLink),
   },
@@ -387,7 +390,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Verify magic link token",
   description:
-    "Authenticates a user via magic link token. Sets auth cookies on success, or returns MFA challenge.",
+    "Consumes a magic link token to authenticate the user. Sets HttpOnly session cookies on success (or returns an MFA challenge if MFA is enabled).",
   request: {
     body: jsonBody(authRequestSchema.verifyMagicLink),
   },
@@ -427,7 +430,8 @@ registry.registerPath({
   tags: ["OAuth"],
   summary: "Initiate Google OAuth",
   description:
-    "Redirects the user to Google's OAuth consent screen. Optionally links a Google account to an existing session.",
+    "Redirects the browser to Google's OAuth consent screen. Optionally links a Google account to an existing session.\n\n" +
+    "> **Testing in Swagger**: OAuth requires top-level browser navigation and will fail via Swagger's AJAX 'Execute' button due to Google CORS policies. Open directly in a new tab: [Initiate Google OAuth](/api/auth/oauth/google).",
   responses: {
     302: { description: "Redirect to Google OAuth consent screen" },
     429: standardErrors[429],
@@ -446,11 +450,15 @@ registry.registerPath({
     query: authRequestSchema.oauthCallbackQuery,
   },
   responses: {
-    200: loginOrMfaResponse(
-      "Authenticated via Google (or MFA challenge returned)",
-    ),
+    302: {
+      description:
+        "Redirect to frontend application (/app, /app/security?linked=google, or /login?mfa=true...)",
+    },
     400: errorResponse(
       "OAuth callback failed, invalid or expired state parameter",
+    ),
+    409: errorResponse(
+      "Account email conflict or already linked to another user",
     ),
     429: standardErrors[429],
     500: standardErrors[500],
@@ -463,7 +471,8 @@ registry.registerPath({
   tags: ["OAuth"],
   summary: "Initiate GitHub OAuth",
   description:
-    "Redirects the user to GitHub's OAuth consent screen. Optionally links a GitHub account to an existing session.",
+    "Redirects the browser to GitHub's OAuth consent screen. Optionally links a GitHub account to an existing session.\n\n" +
+    "> **Testing in Swagger**: OAuth requires top-level browser navigation and will fail via Swagger's AJAX 'Execute' button due to GitHub CORS policies. Open directly in a new tab: [Initiate GitHub OAuth](/api/auth/oauth/github).",
   responses: {
     302: { description: "Redirect to GitHub OAuth consent screen" },
     429: standardErrors[429],
@@ -482,13 +491,37 @@ registry.registerPath({
     query: authRequestSchema.oauthCallbackQuery,
   },
   responses: {
-    200: loginOrMfaResponse(
-      "Authenticated via GitHub (or MFA challenge returned)",
-    ),
+    302: {
+      description:
+        "Redirect to frontend application (/app, /app/security?linked=github, or /login?mfa=true...)",
+    },
     400: errorResponse(
       "OAuth callback failed, invalid or expired state parameter",
     ),
+    409: errorResponse(
+      "Account email conflict or already linked to another user",
+    ),
     429: standardErrors[429],
     500: standardErrors[500],
+  },
+});
+
+// ─── DELETE /auth/oauth/{provider} ─────────────────────────────────
+
+registry.registerPath({
+  method: "delete",
+  path: "/auth/oauth/{provider}",
+  tags: ["OAuth"],
+  summary: "Disconnect an OAuth social provider",
+  description:
+    "Disconnects a linked OAuth provider from the authenticated user. Fails if this is the user's only sign-in method (no password set and no other OAuth providers).",
+  security: cookieSecurity,
+  request: {
+    params: authRequestSchema.oauthProviderParam,
+  },
+  responses: {
+    200: messageResponse("OAuth account disconnected successfully"),
+    404: errorResponse("No linked account found for the specified provider"),
+    ...authedErrors,
   },
 });

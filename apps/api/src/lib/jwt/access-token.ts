@@ -24,6 +24,7 @@ export async function verifyAccessToken(token: string) {
       sub: payload.sub,
       sid: payload.sid,
       role: payload.role,
+      iat: payload.iat,
     };
   } catch (error) {
     throw new UnauthorizedError("Invalid or expired access token");

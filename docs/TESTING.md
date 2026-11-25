@@ -1,68 +1,47 @@
-# AuthSphere Testing — Architecture, Strategy & Execution Reference
+# AuthSphere Testing — Strategy, Isolation & Verification Matrix
 
-> **Single Source of Truth (SSOT)** for AuthSphere's automated testing architecture, hermetic test environment, test pyramid, security invariant verification, and developer test workflows.
+> **Single Source of Truth (SSOT)** for AuthSphere's hermetic testing pyramid, mock/DB/Redis test isolation, flattened test suite layout & commands, and security invariant verification.
 >
-> **Related Documentation:**
+> **Companion Documentation Suite:**
 >
-> - System Architecture & Ingress Pipeline: [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md)
-> - Architectural Decision Records: [`docs/Engineering-Decisions.md`](./Engineering-Decisions.md)
-> - OAuth 2.0 Protocol Specifications: [`docs/OAUTH.md`](./OAUTH.md)
-> - Deployment & CI/CD Smoke Probes: [`docs/DEPLOYMENT.md`](./DEPLOYMENT.md)
+> - System Design & Component Architecture: [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md)
+> - Frontend Architecture & Control Plane: [`docs/FRONTEND_ARCHITECTURE.md`](./FRONTEND_ARCHITECTURE.md)
+> - Formal Decisions (107 Formal ADRs): [`docs/Engineering-Decisions.md`](./Engineering-Decisions.md)
+> - OAuth 2.0 PKCE & Integration Guide: [`docs/OAUTH.md`](./OAUTH.md)
+> - Cloud Deployment & DevOps Guide: [`docs/DEPLOYMENT.md`](./DEPLOYMENT.md)
 
 ---
 
-## Table of Contents
+## 1. Testing Philosophy & Core Invariants
 
-1. [Testing Philosophy & Monorepo Strategy](#1-testing-philosophy--monorepo-strategy)
-2. [Test Pyramid Architecture & Verification Scopes](#2-test-pyramid-architecture--verification-scopes)
-3. [Hermetic Test Infrastructure & Isolation](#3-hermetic-test-infrastructure--isolation)
-4. [Modular Helpers, Spies & Entity Factories](#4-modular-helpers-spies--entity-factories)
-5. [Security Invariant & Resilience Verification Matrix](#5-security-invariant--resilience-verification-matrix)
-6. [Test Coverage Metrics & Quality Gates](#6-test-coverage-metrics--quality-gates)
-7. [Developer Workflow & CLI Reference](#7-developer-workflow--cli-reference)
-8. [Directory & File Reference Map](#8-directory--file-reference-map)
-9. [Troubleshooting & Testing Invariants](#9-troubleshooting--testing-invariants)
+AuthSphere's test suite prioritizes **high-signal security invariant verification** over vanity coverage targets `[ADR-070]`:
 
----
-
-## 1. Testing Philosophy & Monorepo Strategy
-
-AuthSphere's testing suite is engineered around **high-signal verification, modular architecture, and DRY design patterns** rather than vanity coverage metrics. It directly proves core security invariants, authentication lifecycles, and infrastructure resilience under production-identical routing `[ADR-070]`.
-
-### Core Testing Invariants
-
-- **Zero External Network Egress:** No Internet or third-party service dependencies. All third-party dispatches (e.g. transactional emails, OAuth token exchanges) are intercepted in-memory with inspectable token accessors, with I/O strictly isolated to dedicated local/containerized PostgreSQL and Redis test instances `[ADR-070]`.
-- **Deterministic State Transitions:** Tests execute against dedicated PostgreSQL (`authsphere_test`) and Redis (DB Index 1) test instances with atomic cascade cleanups between test suites `[ADR-003, ADR-070]`.
-- **Pure In-Memory Fast-Path:** Unit tests execute 100% in-memory without initiating database or Redis connections, completing in milliseconds `[ADR-070]`.
-- **Strict Configuration Separation:** Test configuration (`.env.test`) is isolated from development (`.env`) and production environments `[ADR-003]`.
-- **Serial Execution Reliability:** Test files execute serially (`fileParallelism: false`) to eliminate state leakage, cross-test race conditions, and database deadlocks `[ADR-070]`.
+- **Zero External Network Egress:** Third-party email dispatches and OAuth provider calls (`getUserProfile`) are intercepted in-memory; external I/O in integration and E2E tests is strictly isolated to dedicated PostgreSQL (`authsphere_test`) and Redis (DB index `1`) test instances `[ADR-003, ADR-070]`.
+- **Unit Zero-I/O Fast-Path:** `tests/unit/` skips Prisma and Redis connections in [`apps/api/tests/setup.ts`](../apps/api/tests/setup.ts) via `isUnitTestSuite()`, executing purely in memory.
+- **Serial Deterministic Execution:** [`apps/api/vitest.config.ts`](../apps/api/vitest.config.ts) enforces `fileParallelism: false` (`testTimeout: 20_000`, `hookTimeout: 60_000`) and `beforeEach` cleanup via `cleanTestState()`, eliminating cross-test state leakage and database deadlocks.
+- **Framework Baseline:** Vitest `4.x` (`environment: "node"`), Supertest `7.x`, V8 Coverage (`@vitest/coverage-v8`), Node.js `>=24` (ESM).
 
 ```text
-Suite Status: 22 test files (100% passing)
-Architecture: Streamlined, DRY, Modular (10 Unit, 9 Integration, 3 E2E)
-Framework:    Vitest 4.x + Supertest 7.x + V8 Coverage
-Runtime:      Node.js >=24 (ESM)
+Suite Layout: 11 flat test files · 76 tests (4 Unit [26] · 6 Integration [45] · 1 E2E [5])
 ```
 
 ---
 
-## 2. Test Pyramid Architecture & Verification Scopes
-
-The suite is structured into three practical, consolidated layers, establishing deep confidence from pure cryptographic primitives up to stateful customer journeys:
+## 2. Test Pyramid & Verification Scopes
 
 ```mermaid
 graph TD
-    subgraph TP ["Test Pyramid"]
-        E2E["Layer 3: E2E User Journeys (3 files)"]
-        INT["Layer 2: Critical Integration Tests (9 files)"]
-        UNIT["Layer 1: Focused Unit Tests (10 files)"]
+    subgraph TP ["Test Pyramid (11 Files · 76 Tests)"]
+        E2E["Layer 3: E2E User Journeys (1 file · 5 tests)"]
+        INT["Layer 2: Critical Integration Tests (6 files · 45 tests)"]
+        UNIT["Layer 1: Focused Unit Tests (4 files · 26 tests)"]
     end
 
     subgraph HTE ["Hermetic Test Environment"]
         TestDB[("PostgreSQL: authsphere_test")]
         TestRedis[("Redis: DB Index 1")]
-        EmailSpy["In-Memory Email Spy Outbox"]
-        PureMemory["Pure In-Memory (Zero I/O)"]
+        EmailSpy["In-Memory Email Outbox Spy"]
+        PureMemory["Pure In-Memory (Zero DB/Redis I/O)"]
 
         E2E --> TestDB
         INT --> TestDB
@@ -72,349 +51,154 @@ graph TD
         INT --> EmailSpy
         UNIT -.-> PureMemory
     end
-
-    style E2E fill:#2d3748,stroke:#4a5568,stroke-width:2px,color:#fff
-    style INT fill:#1a365d,stroke:#2b6cb0,stroke-width:2px,color:#fff
-    style UNIT fill:#1c4532,stroke:#276749,stroke-width:2px,color:#fff
 ```
 
-### Layer 1: Focused Unit Tests (10 Files — Pure In-Memory)
+### Layer 1: Focused Unit Tests (4 Files · 26 Tests — Zero DB/Redis I/O)
 
-Fast, pure-function tests executing in microseconds without external I/O, database, or Redis dependencies:
+| File                                                                         | Tests | Scope & Verified Invariants                                                                                                                                                                                                                                                                                           |
+| :--------------------------------------------------------------------------- | :---- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`tests/unit/crypto.test.ts`](../apps/api/tests/unit/crypto.test.ts)         | 8     | Argon2id hashing & `DUMMY_PASSWORD_HASH`, HS256 JWT sign/verify & key separation, 32-byte tokens & timing-safe SHA-256 verification, AES-256-GCM MFA encryption (unique IVs + legacy fallback), recovery codes, and TOTP secret/URI/code validation `[ADR-013, ADR-014, ADR-031, ADR-040, ADR-047, ADR-087]`.         |
+| [`tests/unit/email.test.ts`](../apps/api/tests/unit/email.test.ts)           | 9     | Unmocks `email.queue.js` locally while mocking `lib/queue.js`, Nodemailer, and Resend to verify factory resolution (`gmail` vs `resend`), tri-driver routing (`bullmq`, `inline`, `sync`), HTML templates, and permanent vs. retryable error classification `[ADR-072, ADR-073, ADR-075, ADR-078, ADR-084, ADR-103]`. |
+| [`tests/unit/openapi.test.ts`](../apps/api/tests/unit/openapi.test.ts)       | 3     | OpenAPI 3.1 document generation, cookie security schemes, `/api` production server config, and strict 1:1 bidirectional parity across all 34 Express operations `[ADR-071]`.                                                                                                                                          |
+| [`tests/unit/validation.test.ts`](../apps/api/tests/unit/validation.test.ts) | 6     | `signup` & `resetPassword` (TOTP/recovery code) schemas, pagination coercion/bounds, role allowlists & permission deduplication, `userProfile` `mfaEnabled` defaults, and `parseDurationToMs` `[ADR-017, ADR-026, ADR-088, ADR-099, ADR-101]`.                                                                        |
 
-| Test File                               | Verification Scope                                       | Invariants Verified                                                                                                                                                         |
-| :-------------------------------------- | :------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tests/unit/crypto.test.ts`             | Cryptography, JWT, Password, MFA & Recovery Tokens       | Argon2id OWASP compliance, symmetric WebCrypto HS256 JWT sign/verify, AES-256-GCM symmetric secret encryption, 32-byte hex entropy `[ADR-013, ADR-014, ADR-031, ADR-040]`.  |
-| `tests/unit/security.test.ts`           | RFC 6238 TOTP & Request ID Middleware                    | Base32 secret generation, HMAC-SHA1 6-digit window validation, UUIDv7 request ID tracking, and header sanitization `[ADR-043, ADR-045]`.                                    |
-| `tests/unit/validation.test.ts`         | Zod Boundary Schemas & Duration Parsers                  | Email normalization, password complexity, UUIDv7 params, pagination offsets, and human-readable time conversion `[ADR-017, ADR-026, ADR-038]`.                              |
-| `tests/unit/openapi.test.ts`            | OpenAPI 3.1 Spec & Express Route Parity                  | Document generation, cookie security schemes, and 1:1 bidirectional Express router parity invariant `[ADR-071]`.                                                            |
-| `tests/unit/email-factory.test.ts`      | Email Provider Resolution Factory                        | Dynamic provider instantiation (`gmail` vs `resend`) based on configuration, error handling for unsupported providers `[ADR-073, ADR-078]`.                                 |
-| `tests/unit/email-queue.test.ts`        | Tri-Driver Queue Operations (`inline`, `bullmq`, `sync`) | Type-safe enqueue helpers, payload contract validation, and execution routing across tri-driver queue architecture `[ADR-072, ADR-078]`.                                    |
-| `tests/unit/email-worker.test.ts`       | Email Worker Job Processing & Provider Delegation        | HTML template rendering across all email types, provider delegation, error propagation, and unrecoverable failure detection `[ADR-072, ADR-073, ADR-075]`.                  |
-| `tests/unit/gmail-provider.test.ts`     | Gmail OAuth2 Provider Adapter                            | One-shot Nodemailer transport initialization, OAuth2 refresh-token auth, and dispatch error mapping `[ADR-073]`.                                                            |
-| `tests/unit/resend-provider.test.ts`    | Resend Provider Adapter & Error Normalization            | Message ID dispatch, permanent error classification (validation/domain), transient error classification (rate limits/server), and transport exception bubbling `[ADR-073]`. |
-| `tests/unit/refresh-token-race.test.ts` | Concurrency & Leeway Cache Mechanics                     | In-memory verification of CAS token rotation and ephemeral leeway cache collapse under concurrent refresh requests `[ADR-076]`.                                             |
+### Layer 2: Critical Integration Tests (6 Files · 45 Tests)
 
-### Layer 2: Critical Integration Tests (9 Files)
+Full Express HTTP pipeline tests via Supertest (and targeted service/concurrency probes) against `authsphere_test` and Redis DB `1`:
 
-End-to-end HTTP pipeline tests traversing Express routing, middleware, controllers, services, repositories, PostgreSQL, and Redis:
+| Domain                  | File                                                                                       | Tests | Verified Invariants                                                                                                                                                                                                                                                                                                                                   |
+| :---------------------- | :----------------------------------------------------------------------------------------- | :---- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Authentication**      | [`tests/integration/auth.test.ts`](../apps/api/tests/integration/auth.test.ts)             | 12    | Signup verification dispatch, duplicate email `409`, idempotent email verification, login cookies, wrong-password `401` + `LOGIN_FAILED`, unverified `403`, `logout` / `logoutAll`, single-use magic links, password reset with session revocation, and isolated descending security events `[ADR-014, ADR-024, ADR-027, ADR-064, ADR-065, ADR-069]`. |
+| **MFA**                 | [`tests/integration/mfa.test.ts`](../apps/api/tests/integration/mfa.test.ts)               | 6     | TOTP setup & invalid-code `400`, ephemeral `mfaToken` challenge fulfillment, single-use recovery code invalidation (`400` on reuse), recovery code regeneration, and MFA disablement revoking active sessions `[ADR-045, ADR-047, ADR-057]`.                                                                                                          |
+| **OAuth 2.0**           | [`tests/integration/oauth.test.ts`](../apps/api/tests/integration/oauth.test.ts)           | 6     | Ephemeral Redis state with atomic `GETDEL` anti-replay, mocked `getUserProfile` provisioning, `409` anti-account-takeover conflict guard, authenticated account linking, and Zero-Orphan disconnect protection (`400`) `[ADR-059, ADR-060, ADR-061, ADR-080, ADR-082]`.                                                                               |
+| **RBAC & Admin**        | [`tests/integration/rbac.test.ts`](../apps/api/tests/integration/rbac.test.ts)             | 9     | Real HTTP `401`/`403` enforcement (`requireRole(ADMIN)`, `requireSelfOrPermission`), admin `GET /users` listing (`mfaEnabled`), self-demotion block, and last-admin demotion block `[ADR-035, ADR-036, ADR-067, ADR-099, ADR-101]`.                                                                                                                   |
+| **Resilience & Health** | [`tests/integration/resilience.test.ts`](../apps/api/tests/integration/resilience.test.ts) | 8     | Concurrent refresh token CAS rotation & 30s leeway collapse, bounded race retry, outside-leeway replay compromise revocation, concurrent admin-demotion row-lock guard, Redis fail-open rate limiting & DB permission fallback, zero-I/O `/health/live`, and `/health/ready` (`200`/`503`) `[ADR-011, ADR-035, ADR-050, ADR-067, ADR-076, ADR-092]`.  |
+| **Active Sessions**     | [`tests/integration/sessions.test.ts`](../apps/api/tests/integration/sessions.test.ts)     | 4     | `GET /sessions` (`isCurrent` flag, `tokenHash` stripped), empty-state handling, cross-user revocation defense (`403`), and cookie clearing on self-revocation `[ADR-068]`.                                                                                                                                                                            |
 
-| Domain                  | Test File                                                | Primary Invariants Verified                                                                                                                                                                                                                                                                                                                                                                                                  |
-| :---------------------- | :------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Authentication**      | `tests/integration/auth/auth.test.ts`                    | Email verification token dispatch, unverified user blocking (403), idempotent email verification, refresh token rotation (RTR) with atomic CAS & leeway grace window, automatic reuse detection, single-use magic links, password resets with session revocation, immutable security event logging `[ADR-014, ADR-027, ADR-065, ADR-069, ADR-076, ADR-092]`.                                                                 |
-| **RBAC & Admin Guard**  | `tests/integration/authorization/rbac.test.ts`           | Role hierarchy enforcement (`ADMIN` vs `USER`), self-demotion block (403), last-admin demotion prevention, `requireSelfOrPermission` guards, and 403 Forbidden responses `[ADR-035, ADR-036, ADR-067]`.                                                                                                                                                                                                                      |
-| **MFA**                 | `tests/integration/mfa/mfa.test.ts`                      | Ephemeral challenge tokens (`mfaToken`), monotonic window tracking, recovery code single-use invalidation, re-use lockout `[ADR-045, ADR-046, ADR-047, ADR-057]`.                                                                                                                                                                                                                                                            |
-| **OAuth 2.0**           | `tests/integration/oauth/oauth-service.test.ts`          | Ephemeral state tokens in Redis (10m TTL), code exchange via UserInfo over TLS, anti-account-takeover conflict guards (`409 Conflict`), authenticated social account linking `[ADR-059, ADR-060, ADR-061, ADR-080, ADR-082]`.                                                                                                                                                                                                |
-| **Active Sessions**     | `tests/integration/sessions/sessions.test.ts`            | Metadata introspection (`GET /sessions`), sensitive token hash omission, foreign session revocation defense (403 Forbidden), cookie clearing on self-revocation `[ADR-068]`.                                                                                                                                                                                                                                                 |
-| **Roles & Permissions** | `tests/integration/roles/roles.test.ts`                  | Dynamic permission assignment (`PUT /roles/:name/permissions`), admin role immutable protection, Redis permission cache invalidation `[ADR-035, ADR-036]`.                                                                                                                                                                                                                                                                   |
-| **Security Middleware** | `tests/integration/security/security-middleware.test.ts` | Hybrid CORS & `Sec-Fetch-Site` origin protection, Redis-backed fixed-window rate limiting with IETF headers, Helmet headers (`HSTS`, `CSP`, `X-Frame-Options: DENY`), structured JSON error responses `[ADR-050, ADR-055, ADR-056]`.                                                                                                                                                                                         |
-| **Health Checks**       | `tests/integration/health/health.test.ts`                | Lightweight ALB liveness probe (`/health/live`, `/health`) with zero external I/O, PostgreSQL & Redis readiness probes (`/health/ready`) with fail-safe degradation responses `[ADR-011]`.                                                                                                                                                                                                                                   |
-| **Resilience**          | `tests/integration/resilience/resilience.test.ts`        | Fail-open rate limiter when Redis disconnects, race-condition resistance on token rotation with leeway grace window, configurable replay revocation scope (`SESSION` vs `GLOBAL`), idempotent concurrent email verification & password reset, Last-Admin demotion protection via row-locking, cleanup helper invariant verification, and Prisma P2002 duplicate translation `[ADR-041, ADR-067, ADR-070, ADR-076, ADR-092]`. |
+### Layer 3: End-to-End User Journeys (1 File · 5 Tests)
 
-### Layer 3: End-to-End User Journeys (3 Files)
+[`tests/e2e/user-journeys.test.ts`](../apps/api/tests/e2e/user-journeys.test.ts) verifies 5 multi-step stateful journeys over HTTP + outbox spies:
 
-Multi-step customer workflows verifying state preservation and invalidation across distributed subsystems:
+1. **Full Registration & Auth Lifecycle:** Signup -> outbox verification token -> verify email -> login -> `/auth/me` -> refresh rotation -> logout -> cookie clear & refresh `401`.
+2. **MFA-Enforced Lifecycle:** Enable MFA -> live TOTP setup verification -> 10 recovery codes -> logout -> login yielding `mfaRequired: true` -> TOTP challenge fulfillment -> profile access.
+3. **Password Recovery & Prior Session Invalidation:** Forgot password -> outbox token -> password reset -> DB session revocation -> prior refresh rejected.
+4. **Multi-Device Session Governance:** Dual login (Desktop + Mobile) -> `/sessions` introspection (`isCurrent`) -> remote revocation -> isolated failure (`401`) -> self-revocation clears cookies.
+5. **Administrative Role Governance:** Promote to `ADMIN` -> access `/roles/ADMIN/permissions` & `/users` -> self-demotion blocked (`403`) -> demote back to `USER` -> admin routes return `403`.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Alice as User / Browser
-    participant API as AuthSphere API
-    participant DB as PostgreSQL
-    participant Redis as Redis
-    participant Outbox as Email Mock Outbox
-
-    Note over Alice, Outbox: Journey 1: Full Registration & Auth Lifecycle
-    Alice->>API: POST /auth/signup (email, password)
-    API->>DB: Create unverified user
-    API->>Outbox: Dispatch verification token
-    Alice->>Outbox: Read verification token from outbox
-    Alice->>API: POST /auth/verify-email (token)
-    API->>DB: Mark email as verified
-    Alice->>API: POST /auth/login (email, password)
-    API-->>Alice: 200 OK + Set-Cookie (accessToken, refreshToken)
-    Alice->>API: GET /auth/me (with cookies)
-    API-->>Alice: 200 OK (Profile DTO)
-    Alice->>API: POST /auth/refresh-token (with cookies)
-    API-->>Alice: 200 OK + Rotated Set-Cookie
-    Alice->>API: POST /auth/logout (with cookies)
-    API->>DB: Delete session row
-    API-->>Alice: 200 OK + Clear-Cookie headers
-    Alice->>API: POST /auth/refresh-token (with old cookies)
-    API-->>Alice: 401 Unauthorized (Session deleted from DB)
-```
-
-- **`tests/e2e/auth-lifecycle.test.ts`**:
-  - **Journey 1**: Signup $\rightarrow$ Verification email outbox intercept $\rightarrow$ Email verification $\rightarrow$ Login $\rightarrow$ Protected profile inspection $\rightarrow$ Refresh token rotation $\rightarrow$ Logout $\rightarrow$ Assert cookie clearing and refresh rejection.
-  - **Journey 2**: Enable MFA $\rightarrow$ Live TOTP code validation $\rightarrow$ 10 recovery codes issued $\rightarrow$ Logout $\rightarrow$ Login returning `mfaRequired: true` $\rightarrow$ Fulfill TOTP challenge $\rightarrow$ Profile access.
-  - **Journey 3**: Forgot password $\rightarrow$ Token extraction $\rightarrow$ Password reset $\rightarrow$ Immediate revocation of prior sessions in PostgreSQL $\rightarrow$ Rejection of subsequent refresh requests.
-- **`tests/e2e/session-management.test.ts`**:
-  - Dual-device login (Desktop + Mobile) $\rightarrow$ Session introspection via `/sessions` (`isCurrent` flags) $\rightarrow$ Remote revocation of mobile session from desktop $\rightarrow$ Desktop remains authenticated while mobile refresh fails with 401 $\rightarrow$ Self-revocation clears cookies.
-- **`tests/e2e/admin-authorization.test.ts`**:
-  - Standard user promotes to `ADMIN` $\rightarrow$ Accesses privileged administrative endpoints (`/roles`) $\rightarrow$ Admin is demoted back to `USER` $\rightarrow$ Next request rejected with `403 Forbidden`.
+For canonical backend route tables and OAuth protocol flows exercised by these suites, see [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md#21-canonical-route-inventory--openapi-31-operation-registry-34-operations) and [`docs/OAUTH.md`](./OAUTH.md).
 
 ---
 
-## 3. Hermetic Test Infrastructure & Isolation
+## 3. Hermetic Test Isolation & Helpers
 
-### Dedicated Database & Redis Instances
+### 3.1. Environment & Lifecycle (`tests/setup.ts`, `tests/helpers/`)
 
-Testing never touches development or production state `[ADR-003]`:
-
-```text
-PostgreSQL Test DB:  postgresql://postgres:<TEST_DB_PASSWORD>@localhost:5432/authsphere_test
-Redis Test DB Index: redis://localhost:6379/1
-```
-
-`apps/api/src/config/env.ts` intercepts `NODE_ENV === "test"` and dynamically loads `.env.test`:
-
-```typescript
-if (process.env.NODE_ENV !== "production") {
-  const envFile =
-    process.env.NODE_ENV === "test" ? "../../.env.test" : "../../.env";
-  dotenv.config({ path: new URL(envFile, import.meta.url), quiet: true });
-}
-```
-
-### Deterministic Database Reset (`cleanTestState`)
-
-To ensure clean test runs without re-running expensive Prisma migrations between files, `tests/helpers/db.ts` executes an atomic PostgreSQL `TRUNCATE ... CASCADE` across all mutable user entities while preserving seeded RBAC tables, and flushes Redis test database #1 `[ADR-070]`:
-
-```typescript
-export async function cleanTestState() {
-  await cleanDatabase();
-  await flushRedis();
-}
-```
-
-### Automated Baseline Role Seeding (`ensureBaselineSeed`)
-
-`tests/helpers/db.ts` provides a self-healing baseline seeding utility that verifies `USER` and `ADMIN` roles and system permissions exist before running test suites, eliminating manual `prisma:seed` dependencies during CI/CD runs.
-
-### In-Memory Email Spy Outbox
-
-AuthSphere decouples automated testing from third-party email delivery services (e.g. Resend, Nodemailer, AWS SES). In `tests/setup.ts`, the asynchronous email queue (`email.queue.js`) is globally mocked using Vitest spies `[ADR-070, ADR-072, ADR-078]`:
-
-```typescript
-vi.mock("../src/modules/email/email.queue.js", async () => {
-  const { emailQueueMocks } = await import("./helpers/email.js");
-  return emailQueueMocks;
-});
-```
-
-Test files consume strongly typed helper accessors to inspect token payloads directly from memory:
-
-```typescript
-const verificationEmail = getLastSentVerificationEmail();
-expect(verificationEmail?.token).toBeDefined();
-
-const magicLink = getLastSentMagicLinkEmail();
-const resetToken = getLastSentForgotPasswordEmail();
-```
+- **Isolated Configuration:** `vitest.config.ts` sets `NODE_ENV: "test"`, and [`apps/api/tests/setup.ts`](../apps/api/tests/setup.ts) loads `apps/api/.env.test` (`override: true`) so tests always target `authsphere_test` and Redis DB `1` (see [`apps/api/.env.test.example`](../apps/api/.env.test.example) and `.github/workflows/ci.yml`).
+- **Auto-Seeding & Atomic Reset ([`tests/helpers/db.ts`](../apps/api/tests/helpers/db.ts)):**
+  - `ensureBaselineSeed()` runs once per non-unit worker in `beforeAll`, idempotently ensuring `USER`/`ADMIN` roles and all `PERMISSIONS` exist without requiring a manual seed step.
+  - `cleanTestState()` runs in `beforeEach` for integration and E2E suites: `cleanDatabase()` executes `TRUNCATE TABLE ... CASCADE` across mutable user tables (`security_events`, `mfa_challenges`, `mfa_recovery_codes`, `magic_link_tokens`, `password_reset_tokens`, `email_verification_tokens`, `oauth_accounts`, `sessions`, `users`) while **preserving** `roles`, `permissions`, and `role_permissions`; `flushRedis()` clears Redis DB `1`.
+- **In-Memory Email Spy ([`tests/helpers/email.ts`](../apps/api/tests/helpers/email.ts)):** `tests/setup.ts` globally mocks `src/modules/email/email.queue.js` with `emailQueueMocks`, reset before every test (`resetEmailMocks()`). Tests inspect captured tokens via `getLastSentVerificationEmail()`, `getLastSentForgotPasswordEmail()`, `getLastSentMagicLinkEmail()`, and `getLastSentSecurityNotificationEmail()`.
+- **Factories & Auth Helpers:**
+  - [`tests/helpers/factories.ts`](../apps/api/tests/helpers/factories.ts): Caches the Argon2id hash for `DEFAULT_TEST_PASSWORD` (`"Password123!"`) and role IDs; exports `createUser`, `createVerifiedUser`, `createAdmin`, `createMfaUser`, `createOAuthUser`, `createSession`, and `createExpiredSession`.
+  - [`tests/helpers/auth.ts`](../apps/api/tests/helpers/auth.ts): Exports `app`, `getTestApp`, `getAuthCookies`, `formatCookieHeader`, `login`, and `authenticate`.
+  - [`tests/helpers/index.ts`](../apps/api/tests/helpers/index.ts): Unified barrel export for all helpers.
 
 ---
 
-## 4. Modular Helpers, Spies & Entity Factories
+## 4. Security Invariant Verification Matrix
 
-All reusable testing utilities reside under `apps/api/tests/helpers/` and are re-exported via a unified barrel export (`tests/helpers/index.ts`):
-
-| Helper               | File                   | Purpose                                                                                                                                                                                                                      |
-| :------------------- | :--------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Barrel Export**    | `helpers/index.ts`     | Unified, modular export point for all test helpers, factories, singletons, and lifecycle resets.                                                                                                                             |
-| **Database & Cache** | `helpers/db.ts`        | Exports `prisma` client, `redis` client, `cleanDatabase()`, `flushRedis()`, `cleanTestState()`, and `ensureBaselineSeed()` auto-seeding guard.                                                                               |
-| **Email Outbox**     | `helpers/email.ts`     | Captures sent emails into an in-memory outbox (`emailQueueMocks`, `getLastSentVerificationEmail`, `getLastSentForgotPasswordEmail`, `getLastSentMagicLinkEmail`, `getLastSentSecurityNotificationEmail`, `resetEmailMocks`). |
-| **Entity Factories** | `helpers/factories.ts` | Generates persisted test entities with sensible defaults and cached Argon2id hashing (`createUser`, `createVerifiedUser`, `createAdmin`, `createMfaUser`, `createOAuthUser`, `createSession`, `createExpiredSession`).       |
-| **Auth & App**       | `helpers/auth.ts`      | Express test app singleton (`getTestApp`), cookie parsing (`getAuthCookies`), header formatting (`formatCookieHeader`), and automated test login (`authenticate`, `login`).                                                  |
-
-### Entity Factory Usage Example
-
-```typescript
-// Create a verified user with known password (cached Argon2id hash)
-const { user, password } = await createVerifiedUser();
-
-// Create an administrator
-const { user: admin, password: adminPassword } = await createAdmin();
-
-// Create a user with enabled MFA and known base32 secret
-const { user: mfaUser, rawSecret, recoveryCodes } = await createMfaUser();
-```
+| Security Invariant                                           | ADR Reference                                            | Verified In                                                   | Proof Mechanism                                                                                                          |
+| :----------------------------------------------------------- | :------------------------------------------------------- | :------------------------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------- |
+| **Stateless Access JWT vs. Stateful Session Revocation**     | `[ADR-013, ADR-021, ADR-068]`                            | `auth.test.ts`, `sessions.test.ts`, `user-journeys.test.ts`   | Deleting session row rejects refresh (`401`); logout and self-revocation clear auth cookies.                             |
+| **SHA-256 Token Digest & Concurrent Refresh Leeway**         | `[ADR-076]`                                              | `resilience.test.ts`, `crypto.test.ts`                        | DB stores SHA-256 `tokenHash` only; concurrent refreshes collapse via Redis leeway cache and bounded retry.              |
+| **Replay Compromise Detection Outside Leeway**               | `[ADR-014, ADR-076, ADR-092]`                            | `resilience.test.ts`                                          | Replaying a rotated token after flushing the 30s leeway window revokes sessions (`AUTH_REUSE_DELETION_MODE`).            |
+| **Redis Outage Fail-Open Rate Limiting & DB Fallback**       | `[ADR-035, ADR-050]`                                     | `resilience.test.ts`                                          | Simulated Redis errors verify `rateLimiter` fails open and `authorizationService` falls back to PostgreSQL.              |
+| **Idempotent Email Verification & Magic Links**              | `[ADR-024, ADR-064, ADR-065]`                            | `auth.test.ts`                                                | Atomic single-use token consumption, idempotent re-verify (`200`), and magic-link auto-verification.                     |
+| **Ephemeral MFA Challenge & Single-Use Recovery Codes**      | `[ADR-045, ADR-047, ADR-057]`                            | `mfa.test.ts`, `user-journeys.test.ts`                        | Login returns `mfaToken`; TOTP fulfills challenge; recovery codes are single-use (`400` on reuse).                       |
+| **Anti-Account Takeover & OAuth Zero-Orphan Guard**          | `[ADR-059, ADR-060, ADR-061, ADR-080, ADR-082]`          | `oauth.test.ts`                                               | Atomic Redis `GETDEL` state, `409` password-account conflict, authenticated linking, and `400` sole-method unlink block. |
+| **Last-Admin Demotion Guard (Row-Level Lock)**               | `[ADR-067]`                                              | `rbac.test.ts`, `resilience.test.ts`, `user-journeys.test.ts` | Exclusive `ADMIN` row lock prevents concurrent write-skew and single-admin demotion below 1 admin (`403`).               |
+| **Zero-I/O Liveness & Dependency Readiness Probes**          | `[ADR-011]`                                              | `resilience.test.ts`                                          | `/health/live` returns `200` with DB/Redis down; `/health/ready` returns `200` healthy or `503` degraded.                |
+| **Immutable Security Audit Trail**                           | `[ADR-069]`                                              | `auth.test.ts`                                                | Records `LOGIN_SUCCESS`, `LOGIN_FAILED`, `LOGOUT`, `PASSWORD_RESET` with strict tenant isolation.                        |
+| **Code-First OpenAPI 3.1 & Express Route Parity**            | `[ADR-071]`                                              | `openapi.test.ts`                                             | Asserts 1:1 bidirectional parity across all 34 operations and cookie security schemes.                                   |
+| **RBAC Directory, Role Introspection & `mfaEnabled` Egress** | `[ADR-035, ADR-036, ADR-088, ADR-099, ADR-100, ADR-101]` | `rbac.test.ts`, `validation.test.ts`, `user-journeys.test.ts` | Enforces `403` for non-admins, validates role/pagination schemas, and sanitizes `mfaEnabled` without leaking secrets.    |
 
 ---
 
-## 5. Security Invariant & Resilience Verification Matrix
+## 5. Coverage Configuration & Developer CLI
 
-The test suite explicitly verifies the architectural, cryptographic, and resilience properties specified in `docs/ARCHITECTURE.md` and `docs/Engineering-Decisions.md`:
+### 5.1. V8 Coverage Scope (`apps/api/vitest.config.ts`)
 
-| Security Invariant                                                      | ADR Reference                                   | Verified In                                                         | Proof Mechanism                                                                                                                                                                                                                                        |
-| :---------------------------------------------------------------------- | :---------------------------------------------- | :------------------------------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Stateless Access Token vs Stateful Session Invalidation**             | `[ADR-013, ADR-021, ADR-068]`                   | `auth.test.ts`, `sessions.test.ts`, `auth-lifecycle.test.ts`        | Deleting session row invalidates subsequent token rotation; unauthenticated calls return 401; logout sends `Expires=1970` cookie-clearing headers.                                                                                                     |
-| **Sensitive Plaintext Token Caching vs SHA-256 Digest Boundary**        | `[ADR-076]`                                     | `auth.test.ts`, `refresh-token-race.test.ts`, `resilience.test.ts`  | Verifies that PostgreSQL persists only SHA-256 hashes (`tokenHash`), while Redis temporarily caches the unhashed token pair (`{ accessToken, refreshToken }`) during the 30-second concurrency window to collapse parallel SPA tab requests.           |
-| **Configurable Replay Revocation Blast Radius (`SESSION` vs `GLOBAL`)** | `[ADR-014, ADR-076, ADR-092]`                   | `auth.test.ts`, `resilience.test.ts`                                | Tests assert that token replay outside the 30s leeway window invokes `AUTH_REUSE_DELETION_MODE`: `SESSION` deletes only the replayed session; `GLOBAL` deletes all sessions belonging to the user.                                                     |
-| **Redis Outage Fail-Open vs Replay Revocation Mode**                    | `[ADR-035, ADR-050, ADR-076, ADR-092]`          | `resilience.test.ts`                                                | Simulating Redis disconnect verifies that rate limiters and permission checks degrade safely to database queries; under Redis unavailability, concurrent token refreshes fall through to strict replay revocation rather than risking double-spending. |
-| **Idempotent Email Verification & Single-Use Consumption**              | `[ADR-027]`                                     | `auth.test.ts`, `resilience.test.ts`                                | Email verification returns cleanly/idempotently (`200 OK`) if user is already verified; consuming the token deletes it atomically; subsequent re-submission rejects with `400 Invalid or expired verification token`.                                  |
-| **Ephemeral MFA Challenge & Monotonic Window Replay Defense**           | `[ADR-045, ADR-046, ADR-057]`                   | `mfa.test.ts`, `auth-lifecycle.test.ts`                             | Primary login yields ephemeral `mfaToken` (5m TTL) supporting 1:Many concurrent logins; TOTP code reuse within 30s window is rejected; recovery codes are strictly single-use (`codeHash`).                                                            |
-| **Anti-Account Takeover & OAuth Identity Resolution**                   | `[ADR-059, ADR-060, ADR-061, ADR-080, ADR-082]` | `oauth-service.test.ts`                                             | Single-use state tokens verified atomically via Redis `GETDEL`; existing password accounts conflict (`409 Conflict`) instead of silently auto-linking; provider profiles resolved via UserInfo endpoint over TLS.                                      |
-| **Single-Use Magic Link Invalidation & Auto-Verification**              | `[ADR-064, ADR-065]`                            | `auth.test.ts`                                                      | Consuming magic link token deletes the record atomically, auto-marks unverified users as verified (`isEmailVerified: true`), and logs the user in.                                                                                                     |
-| **Last-Admin Demotion Guard with Row-Level Locking**                    | `[ADR-067]`                                     | `rbac.test.ts`, `resilience.test.ts`, `admin-authorization.test.ts` | Mutexes on `ADMIN` role record via Prisma interactive transaction; concurrent demotions cannot reduce active administrator count below 1 (403 Forbidden).                                                                                              |
-| **Cross-Origin Mutation & Sec-Fetch-Site Validation**                   | `[ADR-055]`                                     | `security-middleware.test.ts`                                       | Rejects explicit `cross-site` state mutations from untrusted origins (403 Forbidden) and blocks opaque `Origin: "null"` sandbox attacks.                                                                                                               |
-| **Multi-Tier Rate Limiting & IETF Header Emission**                     | `[ADR-050, ADR-051, ADR-052, ADR-066]`          | `security-middleware.test.ts`                                       | Redis-backed fixed-window Lua script rate limits global IP (100/min) and sensitive endpoints (`/auth/login`, `/auth/mfa/verify`); emits `RateLimit-*` and `Retry-After` headers.                                                                       |
-| **Immutable Security Audit Logging**                                    | `[ADR-069]`                                     | `auth.test.ts`                                                      | Records `LOGIN_SUCCESS`, `LOGIN_FAILED`, `LOGOUT`, `PASSWORD_CHANGED`, `PASSWORD_RESET`; strictly isolates user event trails with descending chronological pagination.                                                                                 |
-| **Code-First OpenAPI 3.1 & 1:1 Express Route Parity**                   | `[ADR-071]`                                     | `openapi.test.ts`                                                   | Validates OpenAPI 3.1 document compilation from runtime Zod schemas, cookie-based security schemes, and strict 1:1 bidirectional parity with Express route stacks.                                                                                     |
+Coverage runs via `@vitest/coverage-v8` (`provider: "v8"`), measuring `src/**` while excluding `src/generated/**`, `src/types/**`, `src/server.ts`, and `src/workers/**`.
 
----
-
-## 6. Test Coverage Metrics & Quality Gates
-
-Run code coverage profiling via Vitest V8 engine:
+### 5.2. Execution Commands
 
 ```bash
-npm run test:coverage
-```
-
-### Module Coverage Breakdown
-
-| Module / Layer                  | Statements | Branches   | Functions  | Lines      |
-| :------------------------------ | :--------- | :--------- | :--------- | :--------- |
-| **`src/modules/health`**        | **100%**   | **100%**   | **100%**   | **100%**   |
-| **`src/modules/sessions`**      | **100%**   | **100%**   | **100%**   | **100%**   |
-| **`src/lib/jwt`**               | **100%**   | **100%**   | **100%**   | **100%**   |
-| **`src/modules/email`**         | **98.38%** | **80.95%** | **93.33%** | **100%**   |
-| **`src/common/utils`**          | **96.66%** | **84.61%** | **100%**   | **96.66%** |
-| **`src/lib/crypto`**            | **95.74%** | **100%**   | **100%**   | **95.65%** |
-| **`src/middlewares`**           | **94.23%** | **80.70%** | **92.30%** | **94.17%** |
-| **`src/modules/users`**         | **93.75%** | **77.77%** | **100%**   | **93.75%** |
-| **`src/common/errors`**         | **93.33%** | **68.75%** | **100%**   | **92.85%** |
-| **`src/modules/authorization`** | **93.10%** | **83.33%** | **100%**   | **92.85%** |
-| **`src/modules/roles`**         | **90.32%** | **33.33%** | **100%**   | **90.32%** |
-| **`src/modules/auth`**          | **86.11%** | **72.87%** | **90.12%** | **86.05%** |
-| **`src/modules/auth/oauth`**    | **54.89%** | **38.88%** | **68.42%** | **55.49%** |
-| **Overall Suite**               | **85.50%** | **67.24%** | **91.28%** | **85.65%** |
-
----
-
-## 7. Developer Workflow & CLI Reference
-
-### Root Workspace Commands
-
-Run directly from the repository root:
-
-```bash
-# Run the complete test suite across all layers
+# Run full suite from repo root (builds @authsphere/shared first)
 npm test
 
-# Run tests in interactive watch mode for TDD
-npm run test:watch
-
-# Run tests with V8 code coverage report
+# Generate V8 coverage report
 npm run test:coverage
+
+# Interactive watch mode
+npm run test:watch -w @authsphere/api
+
+# Targeted layer or file execution
+npm test -w @authsphere/api -- tests/unit/
+npm test -w @authsphere/api -- tests/integration/
+npm test -w @authsphere/api -- tests/e2e/
+npm test -w @authsphere/api -- tests/integration/auth.test.ts
 ```
 
-### Targeted Layer Execution
-
-Target specific layers or test files via Vitest:
+### 5.3. First-Time Test Database Migration
 
 ```bash
-# Run only Layer 1 focused unit tests (instant execution, zero I/O)
-npx vitest run tests/unit/
+# Apply Prisma migrations to authsphere_test (after starting PostgreSQL + Redis)
+DATABASE_URL="postgresql://postgres:<TEST_DB_PASSWORD>@localhost:5432/authsphere_test" \
+  npm run db:migrate:deploy --workspace=@authsphere/api
 
-# Run only Layer 2 critical integration tests
-npx vitest run tests/integration/
-
-# Run only Layer 3 E2E user journeys
-npx vitest run tests/e2e/
-
-# Run a single specific test file
-npx vitest run tests/integration/auth/auth.test.ts
-npx vitest run tests/e2e/auth-lifecycle.test.ts
-```
-
-### Test Database Setup & Migration
-
-If running tests for the first time or after altering the Prisma schema:
-
-```bash
-# Apply pending database migrations to the test database
-DATABASE_URL="postgresql://postgres:<TEST_DB_PASSWORD>@localhost:5432/authsphere_test" npm run db:migrate:deploy --workspace=@authsphere/api
-
-# Optional: Seed system roles and permissions manually via Prisma CLI
-# Note: The test suite automatically self-seeds baseline roles & permissions via ensureBaselineSeed() in tests/setup.ts
-DATABASE_URL="postgresql://postgres:<TEST_DB_PASSWORD>@localhost:5432/authsphere_test" npx --workspace=@authsphere/api prisma db seed
+# Optional manual seed (tests/setup.ts auto-seeds roles & permissions via ensureBaselineSeed())
+DATABASE_URL="postgresql://postgres:<TEST_DB_PASSWORD>@localhost:5432/authsphere_test" \
+  npx --workspace=@authsphere/api prisma db seed
 ```
 
 ---
 
-## 8. Directory & File Reference Map
+## 6. Directory Layout
 
 ```text
 apps/api/
-├── .env.test                         # Active test environment variables
-├── .env.test.example                 # Committed template for testing config
-├── vitest.config.ts                  # Vitest runner, V8 coverage & serial configuration
+├── .env.test                         # Local test environment (gitignored)
+├── .env.test.example                 # Committed test env template
+├── vitest.config.ts                  # Vitest runner, V8 coverage & serial config
 └── tests/
-    ├── setup.ts                      # Global hooks, email mocks, baseline auto-seeding, and unit fast-path
+    ├── setup.ts                      # .env.test override, email mock, auto-seed, unit fast-path
     ├── helpers/
-    │   ├── index.ts                  # Unified barrel export for all test helpers
-    │   ├── auth.ts                   # Express app singleton (getTestApp), cookie helpers & authentication
+    │   ├── index.ts                  # Barrel export
+    │   ├── auth.ts                   # Express app singleton, cookie helpers & login
     │   ├── db.ts                     # cleanTestState(), cleanDatabase(), flushRedis(), ensureBaselineSeed()
     │   ├── email.ts                  # In-memory email outbox spy accessors
-    │   └── factories.ts              # Precomputed Argon2id caching & entity factories (User, Session, MFA, OAuth)
-    ├── unit/
-    │   ├── crypto.test.ts            # Consolidated JWT, Argon2id Password, Token entropy, AES-256 MFA, Recovery codes
-    │   ├── email-factory.test.ts     # Provider factory resolution (Gmail vs Resend)
-    │   ├── email-queue.test.ts       # Tri-driver queue operations & payload contract validation
-    │   ├── email-worker.test.ts      # BullMQ Worker job processing, HTML template rendering & unrecoverable errors
-    │   ├── gmail-provider.test.ts    # Gmail OAuth2 Nodemailer transport adapter verification
-    │   ├── openapi.test.ts           # OpenAPI 3.1 spec generation, tags, cookie security schemes, and Express ↔ OpenAPI route parity
-    │   ├── refresh-token-race.test.ts# Atomic CAS and ephemeral leeway cache collapse under concurrent refresh
-    │   ├── resend-provider.test.ts   # Resend provider adapter, error classification & transient retry mapping
-    │   ├── security.test.ts          # Consolidated TOTP & Request ID tracking
-    │   └── validation.test.ts        # Consolidated Schemas & Time duration parsing
-    ├── integration/
-    │   ├── auth/
-    │   │   └── auth.test.ts          # Complete Auth suite (Signup, Login, Logout, Magic Link, Passwords, Refresh, Events)
-    │   ├── authorization/
-    │   │   └── rbac.test.ts          # RBAC, Admin Guard, Self-Demotion & Last Admin Invariants
-    │   ├── health/
-    │   │   └── health.test.ts        # ALB zero-I/O liveness probe & dependency readiness probe
-    │   ├── mfa/
-    │   │   └── mfa.test.ts           # Complete MFA lifecycle suite (Setup, Verify, Disable, Regenerate)
-    │   ├── oauth/
-    │   │   └── oauth-service.test.ts # OAuth 2.0 flow, state verification & account linking
-    │   ├── resilience/
-    │   │   └── resilience.test.ts    # Concurrency, constraints, cleanup sanity, and Redis outage fail-open resilience
-    │   ├── roles/
-    │   │   └── roles.test.ts         # Role permission management & cache invalidation
-    │   ├── security/
-    │   │   └── security-middleware.test.ts # Headers, Origin validation, Rate limiting, Error handler
-    │   └── sessions/
-    │       └── sessions.test.ts      # Active session inspection, listing & revocation
-    └── e2e/
-        ├── admin-authorization.test.ts # Role promotion, escalation & demotion journey
-        ├── auth-lifecycle.test.ts      # Full signup, verification, login, MFA & password reset lifecycles
-        └── session-management.test.ts  # Multi-device session listing & remote revocation
+    │   └── factories.ts              # Cached Argon2id hashing & entity factories
+    ├── unit/                         # 4 files · 26 tests (zero DB/Redis I/O)
+    │   ├── crypto.test.ts
+    │   ├── email.test.ts
+    │   ├── openapi.test.ts
+    │   └── validation.test.ts
+    ├── integration/                  # 6 files · 45 tests
+    │   ├── auth.test.ts
+    │   ├── mfa.test.ts
+    │   ├── oauth.test.ts
+    │   ├── rbac.test.ts
+    │   ├── resilience.test.ts
+    │   └── sessions.test.ts
+    └── e2e/                          # 1 file · 5 tests
+        └── user-journeys.test.ts
 ```
 
 ---
 
-## 9. Troubleshooting & Testing Invariants
+## 7. Troubleshooting Invariants
 
-### 1. OTPLib v13 Secret Length Requirement
-
-- In OTPLib v13, secrets must be at least 16 bytes (32 Base32 characters).
-- **Rule:** Never use short arbitrary strings (e.g. `"testsecret"`) when generating test MFA fixtures. Always use `totp.generateSecret()` or 32-character strings `[ADR-045]`.
-- Code generation must use `generateSync({ secret })` instead of deprecated `authenticator.generate(secret)`.
-
-### 2. Rate Limiting False Positives (429 in Tests)
-
-- Integration tests simulating consecutive requests from `127.0.0.1` will exhaust IP rate limits if Redis is not cleared between tests `[ADR-050]`.
-- **Remedy:** `tests/setup.ts` automatically runs `cleanTestState()` (which flushes Redis) before each integration/E2E test. If making rapid loops within a single test, supply unique simulated IP headers (`X-Forwarded-For: 10.x.x.x`).
-
-### 3. Preserving Seeded Roles During DB Cleanup
-
-- System roles (`USER`, `ADMIN`) and permissions must exist for user factories and RBAC guards to function `[ADR-035, ADR-067]`.
-- **Rule:** Never truncate the `roles` or `permissions` tables inside `cleanDatabase()`. Only truncate dynamic user entities (`users`, `sessions`, `security_events`, etc.). `tests/setup.ts` automatically verifies and re-seeds baseline roles if missing via `ensureBaselineSeed()`.
-
-### 4. Cross-Test State Contamination
-
-- If a test passes individually (`npx vitest run <file>`) but fails during full suite execution (`npm test`), the cause is almost always leftover state in PostgreSQL or Redis.
-- Automated lifecycle hooks in `tests/setup.ts` invoke `cleanTestState()` before every non-unit test to ensure complete isolation across suites.
+1. **OTPLib v13 Secret Length:** Secrets must be at least 16 bytes (32 Base32 characters); always generate via `totp.generateSecret()` and `generateSync({ secret })` rather than short literal strings `[ADR-045]`.
+2. **Rate-Limit 429s Inside a Single Test:** `cleanTestState()` flushes Redis DB `1` before each integration/E2E test. When looping requests inside a single test, stay under the route's policy limit or call `flushRedis()` between phases (since `TRUST_PROXY=false` in `.env.test.example`, `X-Forwarded-For` headers are ignored unless `trust proxy` is enabled) `[ADR-050]`.
+3. **Seeded RBAC Tables:** Never truncate `roles`, `permissions`, or `role_permissions` in `cleanDatabase()`; only truncate user/token/session/audit tables.
+4. **Cross-Test State Contamination:** Always execute tests with `fileParallelism: false` (default in `vitest.config.ts`) and ensure Redis DB `1` is running so `cleanTestState()` resets both PostgreSQL and Redis between tests.

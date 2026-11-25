@@ -7,8 +7,9 @@ Production-grade Authentication & Authorization Platform.
 ## Documentation
 
 - [System Architecture & Design](./docs/ARCHITECTURE.md) — Topology, component boundaries, database ERD, and core sequence flows.
+- [Frontend Architecture & Control Plane](./docs/FRONTEND_ARCHITECTURE.md) — Frontend Architecture, Component Topology & Control Plane.
 - [Cloud Deployment & Serverless Guide](./docs/DEPLOYMENT.md) — AWS ECS Fargate, AWS Lambda, No-Custom-Domain Vercel Proxy, and Neon pooling.
-- [Architecture Decision Records (ADR)](./docs/Engineering-Decisions.md) — Comprehensive log of 79 architectural decisions, security trade-offs, and technical rationale.
+- [Architecture Decision Records (ADR)](./docs/Engineering-Decisions.md) — Comprehensive log of 101 architectural decisions, security trade-offs, and technical rationale.
 - [OAuth 2.0 Reference](./docs/OAUTH.md) — Identity resolution matrix, anti-replay state verification, and provider integrations.
 - [Testing Architecture & Verification Reference](./docs/TESTING.md) — Hermetic test environment, 3-layer test pyramid, security invariant matrix, and execution guide.
 

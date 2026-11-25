@@ -49,6 +49,35 @@ const updateRolePermissions = async (
   }
 };
 
+const findRolePermissions = async (
+  roleName: RoleName,
+): Promise<{ role: RoleName; permissions: PermissionName[] } | null> => {
+  const role = await prisma.role.findUnique({
+    where: { name: roleName },
+    include: {
+      rolePermissions: {
+        include: {
+          permission: {
+            select: { name: true },
+          },
+        },
+      },
+    },
+  });
+
+  if (!role) {
+    return null;
+  }
+
+  return {
+    role: role.name as RoleName,
+    permissions: role.rolePermissions.map(
+      (rp) => rp.permission.name,
+    ) as PermissionName[],
+  };
+};
+
 export const rolesRepository = {
   updateRolePermissions,
+  findRolePermissions,
 };

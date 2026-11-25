@@ -8,7 +8,6 @@ export { app };
 export function getTestApp(): Express {
   return app;
 }
-export const createTestApp = getTestApp;
 
 export interface AuthCookies {
   accessToken?: string;

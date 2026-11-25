@@ -31,29 +31,49 @@ export const setAuthCookies = (
   );
 };
 
-export const clearAuthCookies = (res: Response) => {
-  const { maxAge: _noNeed1, ...clearAccessOptions } = accessTokenCookieOptions;
-  const { maxAge: _noNeed2, ...clearRefreshOptions } =
-    refreshTokenCookieOptions;
-
+export const clearAccessTokenCookie = (res: Response) => {
+  const { maxAge: _noNeed, ...clearAccessOptions } = accessTokenCookieOptions;
   res.clearCookie("accessToken", clearAccessOptions);
+};
+
+export const clearRefreshTokenCookie = (res: Response) => {
+  const { maxAge: _noNeed, ...clearRefreshOptions } = refreshTokenCookieOptions;
   res.clearCookie("refreshToken", clearRefreshOptions);
 };
 
+export const clearAuthCookies = (res: Response) => {
+  clearAccessTokenCookie(res);
+  clearRefreshTokenCookie(res);
+};
+
 export const OAUTH_VERIFIER_COOKIE_PREFIX = "oauth_verifier_";
-export const OAUTH_VERIFIER_COOKIE_PATH = "/api/auth/oauth";
 export const OAUTH_VERIFIER_COOKIE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
 
 export const getOAuthVerifierCookieName = (state: string): string =>
   `${OAUTH_VERIFIER_COOKIE_PREFIX}${state}`;
 
-export const oauthVerifierCookieOptions: CookieOptions = {
-  path: OAUTH_VERIFIER_COOKIE_PATH,
+/**
+ * Resolves the cookie path dynamically to match the callback route path.
+ * In production via Vercel Edge Proxy, this resolves to /api/auth/oauth.
+ * In local direct development (e.g. http://localhost:3000/auth/oauth), this resolves to /auth/oauth.
+ */
+export const getOAuthVerifierCookiePath = (): string => {
+  const base =
+    env.OAUTH_CALLBACK_BASE_URL || `${env.FRONTEND_URL}/api/auth/oauth`;
+  try {
+    return new URL(base).pathname.replace(/\/$/, "") || "/";
+  } catch {
+    return "/api/auth/oauth";
+  }
+};
+
+export const getOAuthVerifierCookieOptions = (): CookieOptions => ({
+  path: getOAuthVerifierCookiePath(),
   httpOnly: true,
   secure: env.NODE_ENV === "production",
   sameSite: "lax",
   maxAge: OAUTH_VERIFIER_COOKIE_MAX_AGE_MS,
-};
+});
 
 export const setOAuthVerifierCookie = (
   res: Response,
@@ -63,7 +83,7 @@ export const setOAuthVerifierCookie = (
   res.cookie(
     getOAuthVerifierCookieName(state),
     verifier,
-    oauthVerifierCookieOptions,
+    getOAuthVerifierCookieOptions(),
   );
 };
 
@@ -71,6 +91,6 @@ export const clearOAuthVerifierCookie = (
   res: Response,
   state: string,
 ): void => {
-  const { maxAge: _noNeed, ...clearOptions } = oauthVerifierCookieOptions;
+  const { maxAge: _noNeed, ...clearOptions } = getOAuthVerifierCookieOptions();
   res.clearCookie(getOAuthVerifierCookieName(state), clearOptions);
 };

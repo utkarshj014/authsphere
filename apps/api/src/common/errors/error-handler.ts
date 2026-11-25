@@ -3,7 +3,7 @@ import { logger } from "../../lib/logger.js";
 import { AppError } from "./app-error.js";
 import { ValidationError } from "./validation-error.js";
 import { UnauthorizedError } from "./unauthorized-error.js";
-import { clearAuthCookies } from "../utils/cookie.js";
+import { clearAccessTokenCookie } from "../utils/cookie.js";
 import { env } from "../../config/env.js";
 
 const responseDto = (message: string, errors?: unknown[]) => ({
@@ -27,7 +27,7 @@ export const errorHandler = (
   }
 
   if (err instanceof UnauthorizedError) {
-    clearAuthCookies(res);
+    clearAccessTokenCookie(res);
 
     return res.status(err.statusCode).json(responseDto(err.message));
   }

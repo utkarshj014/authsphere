@@ -28,6 +28,17 @@ const updateRolePermissions = async (
   return result;
 };
 
+const getRolePermissions = async (
+  roleName: RoleName,
+): Promise<RolePermissionsResponse> => {
+  const permissions = await authorizationService.getPermissionsByRole(roleName);
+  return {
+    role: roleName,
+    permissions,
+  };
+};
+
 export const rolesService = {
   updateRolePermissions,
+  getRolePermissions,
 };

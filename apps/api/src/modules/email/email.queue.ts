@@ -8,11 +8,6 @@ import { env } from "../../config/env.js";
 
 export const enqueueEmailJob = async (data: EmailJobData): Promise<void> => {
   if (env.QUEUE_DRIVER === "sync") {
-    logger.debug(
-      { jobType: data.type, email: data.email },
-      "Dispatching email job synchronously (QUEUE_DRIVER=sync / AWS Lambda)",
-    );
-
     const { emailService } = await import("./email.service.js");
     const { getEmailProvider } = await import("./email.factory.js");
     const provider = await getEmailProvider();
@@ -21,11 +16,6 @@ export const enqueueEmailJob = async (data: EmailJobData): Promise<void> => {
   }
 
   if (env.QUEUE_DRIVER === "inline") {
-    logger.debug(
-      { jobType: data.type, email: data.email },
-      "Dispatching email job inline (QUEUE_DRIVER=inline)",
-    );
-
     setImmediate(async () => {
       try {
         const { emailService } = await import("./email.service.js");
@@ -41,11 +31,6 @@ export const enqueueEmailJob = async (data: EmailJobData): Promise<void> => {
     });
     return;
   }
-
-  logger.debug(
-    { jobType: data.type, email: data.email },
-    "Enqueuing email job to BullMQ",
-  );
 
   const { emailQueue } = await import("../../lib/queue.js");
   await emailQueue.add(data.type, data);
@@ -89,4 +74,14 @@ export const enqueueSecurityNotificationEmail = (
     type: EMAIL_JOB_TYPES.SECURITY_NOTIFICATION,
     email,
     eventType,
+  });
+
+export const enqueueSocialAccountReminderEmail = (
+  email: string,
+  providers: string[],
+): Promise<void> =>
+  enqueueEmailJob({
+    type: EMAIL_JOB_TYPES.SOCIAL_ACCOUNT_REMINDER,
+    email,
+    providers,
   });

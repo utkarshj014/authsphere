@@ -71,7 +71,9 @@ const updateUserRole = async (userId: string, roleName: RoleName) => {
       }
     }
 
-    // 4. Update the user's role
+    // 4. Update the user's role and revoke active sessions on role change
+    const isRoleChanging = targetUser.role.name !== roleName;
+
     try {
       return await tx.user.update({
         where: { id: userId },
@@ -81,6 +83,7 @@ const updateUserRole = async (userId: string, roleName: RoleName) => {
               name: roleName,
             },
           },
+          ...(isRoleChanging ? { sessions: { deleteMany: {} } } : {}),
         },
         include: {
           role: {
@@ -114,8 +117,30 @@ const countUsersByRole = (roleName: RoleName) =>
     },
   });
 
+const findUsersPaginated = async (page: number, limit: number) => {
+  const skip = (page - 1) * limit;
+  const [users, totalCount] = await Promise.all([
+    prisma.user.findMany({
+      skip,
+      take: limit,
+      orderBy: { createdAt: "desc" },
+      include: {
+        role: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    }),
+    prisma.user.count(),
+  ]);
+
+  return { users, totalCount };
+};
+
 export const usersRepository = {
   findUserById,
+  findUsersPaginated,
   updateUserRole,
   countUsersByRole,
 };

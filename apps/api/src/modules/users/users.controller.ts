@@ -2,6 +2,14 @@ import type { Request, Response } from "express";
 import { asyncHandler } from "../../common/errors/index.js";
 import { ApiResponse } from "../../common/responses/index.js";
 import { usersService } from "./users.service.js";
+import type { ListUsersQueryInput } from "./users.validation.js";
+
+const listUsers = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.query as unknown as ListUsersQueryInput;
+  const result = await usersService.listUsers(query);
+
+  return ApiResponse.success(res, result, "Users retrieved successfully", 200);
+});
 
 const getUser = asyncHandler(async (req: Request, res: Response) => {
   const user = await usersService.getUser(req.params.id as string);
@@ -21,5 +29,6 @@ const changeRole = asyncHandler(async (req: Request, res: Response) => {
 
 export const usersController = {
   getUser,
+  listUsers,
   changeRole,
 };

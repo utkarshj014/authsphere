@@ -44,6 +44,7 @@ import {
   enqueuePasswordResetEmail,
   enqueueMagicLinkEmail,
   enqueueSecurityNotificationEmail,
+  enqueueSocialAccountReminderEmail,
 } from "../email/email.queue.js";
 import { SECURITY_NOTIFICATION_EVENTS } from "../email/email.types.js";
 import {
@@ -52,34 +53,73 @@ import {
   verifyRefreshToken,
 } from "../../lib/jwt/index.js";
 import type { AuthTokens } from "./auth.types.js";
+import { authorizationService } from "../authorization/index.js";
 import { env } from "../../config/env.js";
 import { redis } from "../../lib/redis.js";
 import { logger } from "../../lib/logger.js";
 
 // ==========================================
-// Private Helpers
+// Helpers
 // ==========================================
 
-const getLeewayCache = async (key: string): Promise<string | null> => {
+const getRefreshLeewayCache = async (
+  sessionId: string,
+  tokenHash: string,
+): Promise<AuthTokens | null> => {
   if (redis.status !== "ready") return null;
+  const key = `auth:refresh-leeway:${sessionId}:${tokenHash}`;
   try {
-    return await redis.get(key);
+    const raw = await redis.get(key);
+    return raw ? (JSON.parse(raw) as AuthTokens) : null;
   } catch (err) {
-    logger.warn({ err, key }, "Failed reading leeway cache from Redis");
+    logger.warn({ err, key }, "Failed reading refresh leeway cache from Redis");
     return null;
   }
 };
 
-const setLeewayCache = async (
-  key: string,
-  value: string,
-  ttlSeconds: number,
+const setRefreshLeewayCache = async (
+  sessionId: string,
+  tokenHash: string,
+  tokens: AuthTokens,
 ): Promise<void> => {
+  const ttlSeconds = env.AUTH_REFRESH_TOKEN_LEEWAY_SECONDS;
   if (redis.status !== "ready" || ttlSeconds <= 0) return;
+  const key = `auth:refresh-leeway:${sessionId}:${tokenHash}`;
   try {
-    await redis.set(key, value, "EX", ttlSeconds);
+    await redis.set(key, JSON.stringify(tokens), "EX", ttlSeconds);
   } catch (err) {
-    logger.warn({ err, key }, "Failed writing leeway cache to Redis");
+    logger.warn({ err, key }, "Failed writing refresh leeway cache to Redis");
+  }
+};
+
+const clearRefreshLeewayCache = async (
+  sessionId: string,
+  tokenHash: string,
+): Promise<void> => {
+  if (redis.status !== "ready") return;
+  const key = `auth:refresh-leeway:${sessionId}:${tokenHash}`;
+  try {
+    await redis.del(key);
+  } catch (err) {
+    logger.warn(
+      { err, key },
+      "Failed clearing refresh leeway cache from Redis",
+    );
+  }
+};
+
+export const setUserRevokedAt = async (userId: string): Promise<void> => {
+  if (redis.status !== "ready") return;
+  const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
+  try {
+    await redis.set(
+      `auth:user-revoked-at:${userId}`,
+      Math.floor(Date.now() / 1000).toString(),
+      "EX",
+      ttlSeconds,
+    );
+  } catch (err) {
+    logger.warn({ err, userId }, "Failed recording user revocation in Redis");
   }
 };
 
@@ -272,8 +312,11 @@ const login = async (
   }
 
   if (!user.passwordHash) {
+    const providers =
+      user.oauthAccounts?.map((a) => a.provider).join(", ") || "";
+    const providerDetail = providers ? ` (${providers})` : "";
     throw new AppError(
-      "This account uses social login. Please login using your social account",
+      `This account uses social login${providerDetail}. Please continue with ${providers || "social login"}.`,
       403,
     );
   }
@@ -299,6 +342,7 @@ const login = async (
     const challenge = await authRepository.createMfaChallenge(
       user.id,
       challengeExpiresAt,
+      SECURITY_EVENT_TYPES.LOGIN_SUCCESS,
     );
 
     return {
@@ -338,17 +382,17 @@ const refreshToken = async (
 
   const payload = await verifyRefreshToken(token);
   const oldTokenHash = hashToken(token);
-  const leewayKey = `auth:refresh-leeway:${payload.sid}:${oldTokenHash}`;
 
   // 1. Leeway Window: Return cached tokens if recently rotated within grace period (SPA concurrency)
-  const cached = await getLeewayCache(leewayKey);
+  const cached = await getRefreshLeewayCache(payload.sid, oldTokenHash);
   if (cached) {
     // Validate active session in DB to prevent cached token return after explicit revocation (logout / remote termination)
     const activeSession = await authRepository.findSessionById(payload.sid);
     if (!activeSession || activeSession.userId !== payload.sub) {
+      await clearRefreshLeewayCache(payload.sid, oldTokenHash);
       throw new UnauthorizedError("Invalid session");
     }
-    return JSON.parse(cached) as AuthTokens;
+    return cached;
   }
 
   // 2. Validate active session and ownership
@@ -374,22 +418,18 @@ const refreshToken = async (
   });
 
   if (rotated) {
-    await setLeewayCache(
-      leewayKey,
-      JSON.stringify(tokens),
-      env.AUTH_REFRESH_TOKEN_LEEWAY_SECONDS,
-    );
+    await setRefreshLeewayCache(session.id, oldTokenHash, tokens);
     return tokens;
   }
 
   // 4. CAS failed: check if a concurrent request won the race and populated leeway cache
-  let concurrentTokens = await getLeewayCache(leewayKey);
+  let concurrentTokens = await getRefreshLeewayCache(payload.sid, oldTokenHash);
   if (!concurrentTokens) {
     await new Promise((resolve) => setTimeout(resolve, 150));
-    concurrentTokens = await getLeewayCache(leewayKey);
+    concurrentTokens = await getRefreshLeewayCache(payload.sid, oldTokenHash);
   }
   if (concurrentTokens) {
-    return JSON.parse(concurrentTokens) as AuthTokens;
+    return concurrentTokens;
   }
 
   // 5. Replay detected outside leeway: revoke session
@@ -415,6 +455,23 @@ const logout = async (token?: string) => {
 
   await authRepository.deleteSessionById(session.id);
 
+  if (redis.status === "ready") {
+    const tokenHash = hashToken(token);
+    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
+    try {
+      await redis
+        .pipeline()
+        .del(`auth:refresh-leeway:${session.id}:${tokenHash}`)
+        .set(`auth:revoked-session:${session.id}`, "1", "EX", ttlSeconds)
+        .exec();
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: session.id },
+        "Failed revoking session in Redis pipeline",
+      );
+    }
+  }
+
   await recordSecurityEvent(
     session.userId,
     SECURITY_EVENT_TYPES.LOGOUT,
@@ -436,6 +493,8 @@ const logoutAll = async (
 
   await authRepository.deleteAllSessionsByUserId(user.id);
 
+  await setUserRevokedAt(user.id);
+
   await recordSecurityEvent(
     user.id,
     SECURITY_EVENT_TYPES.LOGOUT,
@@ -453,6 +512,17 @@ const getCurrentUser = async (
     throw new UnauthorizedError("User not found");
   }
 
+  const permissions = await authorizationService.getPermissionsByRole(
+    user.role.name,
+  );
+
+  let remainingRecoveryCodes: number | undefined;
+  if (user.mfaEnabled) {
+    remainingRecoveryCodes = await authRepository.countUnusedRecoveryCodes(
+      user.id,
+    );
+  }
+
   // Runtime egress sanitization firewall on sensitive user profile record
   return authResponseSchema.currentUserProfile.parse({
     id: user.id,
@@ -460,14 +530,29 @@ const getCurrentUser = async (
     firstName: user.firstName,
     lastName: user.lastName,
     role: user.role.name,
+    permissions,
+    mfaEnabled: user.mfaEnabled,
     verifiedAt: user.verifiedAt,
     createdAt: user.createdAt,
+    oauthProviders: user.oauthAccounts?.map((a) => a.provider) ?? [],
+    hasPassword: user.passwordHash !== null,
+    remainingRecoveryCodes,
   });
 };
 
 const forgotPassword = async (input: ForgotPasswordInput) => {
   const user = await authRepository.findUserByEmail(input.email);
-  if (!user || !user.passwordHash) {
+  if (!user) {
+    return;
+  }
+
+  if (!user.passwordHash) {
+    const userWithOauth = await authRepository.findUserByEmailWithRole(
+      input.email,
+    );
+    const providers =
+      userWithOauth?.oauthAccounts?.map((a) => a.provider) ?? [];
+    await enqueueSocialAccountReminderEmail(user.email, providers);
     return;
   }
 
@@ -486,6 +571,8 @@ const forgotPassword = async (input: ForgotPasswordInput) => {
 
 const resetPassword = async (
   input: ResetPasswordInput,
+  ipAddress?: string,
+  userAgent?: string,
 ): Promise<{ mfaRequired: false } | { mfaRequired: true }> => {
   const tokenHash = hashToken(input.token);
 
@@ -514,7 +601,14 @@ const resetPassword = async (
 
   await authRepository.resetPasswordAndDeleteToken(user.id, newPasswordHash);
 
-  await recordSecurityEvent(user.id, SECURITY_EVENT_TYPES.PASSWORD_RESET);
+  await setUserRevokedAt(user.id);
+
+  await recordSecurityEvent(
+    user.id,
+    SECURITY_EVENT_TYPES.PASSWORD_RESET,
+    ipAddress,
+    userAgent,
+  );
 
   await enqueueSecurityNotificationEmail(
     user.email,
@@ -527,33 +621,34 @@ const resetPassword = async (
 const changePassword = async (
   userId: string,
   input: ChangePasswordInput,
+  ipAddress?: string,
+  userAgent?: string,
 ): Promise<{ mfaRequired: false } | { mfaRequired: true }> => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
     throw new AppError("User not found", 404);
   }
-  if (!user.passwordHash) {
-    throw new AppError(
-      "This account uses social login. You cannot change your password.",
-      403,
+
+  if (user.passwordHash) {
+    if (!input.oldPassword) {
+      throw new AppError("Current password is required", 400);
+    }
+    const passwordMatch = await verifyPassword(
+      user.passwordHash,
+      input.oldPassword,
     );
-  }
+    if (!passwordMatch) {
+      // Not using UnauthorizedError because the user is already authenticated, just password is wrong
+      throw new AppError("Invalid old password", 400);
+    }
 
-  const passwordMatch = await verifyPassword(
-    user.passwordHash,
-    input.oldPassword,
-  );
-  if (!passwordMatch) {
-    // Not using UnauthorizedError because the user is already authenticated, just password is wrong
-    throw new AppError("Invalid old password", 400);
-  }
-
-  const samePassword = await verifyPassword(
-    user.passwordHash,
-    input.newPassword,
-  );
-  if (samePassword) {
-    throw new AppError("New password cannot be same as old password", 400);
+    const samePassword = await verifyPassword(
+      user.passwordHash,
+      input.newPassword,
+    );
+    if (samePassword) {
+      throw new AppError("New password cannot be same as old password", 400);
+    }
   }
 
   if (user.mfaEnabled) {
@@ -573,7 +668,14 @@ const changePassword = async (
 
   await authRepository.changePassword(userId, newPasswordHash);
 
-  await recordSecurityEvent(userId, SECURITY_EVENT_TYPES.PASSWORD_CHANGED);
+  await setUserRevokedAt(userId);
+
+  await recordSecurityEvent(
+    userId,
+    SECURITY_EVENT_TYPES.PASSWORD_CHANGED,
+    ipAddress,
+    userAgent,
+  );
 
   await enqueueSecurityNotificationEmail(
     user.email,
@@ -608,6 +710,8 @@ const mfaSetup = async (userId: string): Promise<MfaSetupResponse> => {
 const mfaVerifySetup = async (
   userId: string,
   input: MfaVerifySetupInput,
+  ipAddress?: string,
+  userAgent?: string,
 ): Promise<MfaRecoveryCodesResponse> => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
@@ -637,7 +741,12 @@ const mfaVerifySetup = async (
     recoveryCodeHashes,
   );
 
-  await recordSecurityEvent(userId, SECURITY_EVENT_TYPES.MFA_ENABLED);
+  await recordSecurityEvent(
+    userId,
+    SECURITY_EVENT_TYPES.MFA_ENABLED,
+    ipAddress,
+    userAgent,
+  );
 
   return {
     recoveryCodes,
@@ -658,7 +767,7 @@ const mfaVerifyLogin = async (
     throw new AppError("Invalid or expired MFA challenge", 400);
   }
 
-  const { user } = challenge;
+  const { user, type: challengeType } = challenge;
 
   let verificationResult: { usedRecoveryCode: boolean };
   try {
@@ -677,6 +786,7 @@ const mfaVerifyLogin = async (
       {
         reason:
           error instanceof AppError ? error.message : "MFA_CHALLENGE_FAILED",
+        attemptedAction: challengeType,
       },
     );
     throw error;
@@ -698,15 +808,10 @@ const mfaVerifyLogin = async (
     userAgent,
   );
 
-  await recordSecurityEvent(
-    user.id,
-    SECURITY_EVENT_TYPES.LOGIN_SUCCESS,
-    ipAddress,
-    userAgent,
-    {
-      usedRecoveryCode: verificationResult.usedRecoveryCode,
-    },
-  );
+  await recordSecurityEvent(user.id, challengeType, ipAddress, userAgent, {
+    mfaVerified: true,
+    usedRecoveryCode: verificationResult.usedRecoveryCode,
+  });
 
   if (remainingRecoveryCodes !== undefined && remainingRecoveryCodes <= 2) {
     return {
@@ -719,7 +824,12 @@ const mfaVerifyLogin = async (
   return { tokens };
 };
 
-const mfaDisable = async (userId: string, input: MfaDisableInput) => {
+const mfaDisable = async (
+  userId: string,
+  input: MfaDisableInput,
+  ipAddress?: string,
+  userAgent?: string,
+) => {
   const user = await authRepository.findUserById(userId);
   if (!user) {
     throw new AppError("User not found", 404);
@@ -734,7 +844,14 @@ const mfaDisable = async (userId: string, input: MfaDisableInput) => {
 
   await authRepository.disableMfaAndRevokeSessions(userId);
 
-  await recordSecurityEvent(userId, SECURITY_EVENT_TYPES.MFA_DISABLED);
+  await setUserRevokedAt(userId);
+
+  await recordSecurityEvent(
+    userId,
+    SECURITY_EVENT_TYPES.MFA_DISABLED,
+    ipAddress,
+    userAgent,
+  );
 
   await enqueueSecurityNotificationEmail(
     user.email,
@@ -808,14 +925,7 @@ const verifyMagicLink = async (
     const challenge = await authRepository.createMfaChallenge(
       user.id,
       challengeExpiresAt,
-    );
-
-    await recordSecurityEvent(
-      user.id,
       SECURITY_EVENT_TYPES.MAGIC_LINK_LOGIN,
-      ipAddress,
-      userAgent,
-      { mfaRequired: true },
     );
 
     return {

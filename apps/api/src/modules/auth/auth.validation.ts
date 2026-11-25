@@ -4,6 +4,7 @@ import { ROLES, SECURITY_EVENT_TYPES } from "@authsphere/shared";
 
 const nameSchema = z.string().trim().min(1).max(50);
 const passwordSchema = z.string().min(8).max(128);
+const emailSchema = z.email().trim().toLowerCase();
 const totpCodeSchema = z
   .string()
   .trim()
@@ -24,7 +25,7 @@ const securityEventItemSchema = z.object({
 
 export const authRequestSchema = {
   signup: z.object({
-    email: z.email(),
+    email: emailSchema,
     password: passwordSchema,
     firstName: nameSchema.optional(),
     lastName: nameSchema.optional(),
@@ -35,16 +36,16 @@ export const authRequestSchema = {
   }),
 
   resendVerificationToken: z.object({
-    email: z.email(),
+    email: emailSchema,
   }),
 
   login: z.object({
-    email: z.email(),
+    email: emailSchema,
     password: passwordSchema,
   }),
 
   forgotPassword: z.object({
-    email: z.email(),
+    email: emailSchema,
   }),
 
   resetPassword: z.object({
@@ -54,7 +55,7 @@ export const authRequestSchema = {
   }),
 
   changePassword: z.object({
-    oldPassword: passwordSchema,
+    oldPassword: passwordSchema.optional(),
     newPassword: passwordSchema,
     code: z.union([totpCodeSchema, backupCodeSchema]).optional(),
   }),
@@ -77,7 +78,7 @@ export const authRequestSchema = {
   }),
 
   sendMagicLink: z.object({
-    email: z.email(),
+    email: emailSchema,
   }),
 
   verifyMagicLink: z.object({
@@ -93,6 +94,10 @@ export const authRequestSchema = {
     code: z.string().trim().min(1),
     state: z.string().trim().min(1),
   }),
+
+  oauthProviderParam: z.object({
+    provider: z.enum(["google", "github", "GOOGLE", "GITHUB"]),
+  }),
 };
 
 export const authResponseSchema = {
@@ -102,8 +107,13 @@ export const authResponseSchema = {
     firstName: z.string().nullable(),
     lastName: z.string().nullable(),
     role: z.enum(ROLES),
+    permissions: z.array(z.string()).default([]),
+    mfaEnabled: z.boolean().default(false),
     verifiedAt: z.date().or(z.string()),
     createdAt: z.date().or(z.string()),
+    oauthProviders: z.array(z.string()).default([]),
+    hasPassword: z.boolean().default(false),
+    remainingRecoveryCodes: z.number().int().nonnegative().optional(),
   }),
 
   securityEventItem: securityEventItemSchema,

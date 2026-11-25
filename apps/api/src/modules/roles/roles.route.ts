@@ -13,6 +13,18 @@ import {
 
 const router = Router();
 
+router.get(
+  "/:roleName/permissions",
+  auth,
+  rateLimiter(RATE_LIMIT_POLICIES.ROLE_READ_PERMISSIONS),
+  validate(
+    rolesRequestSchema.getRolePermissionsParams,
+    ValidationTarget.PARAMS,
+  ),
+  requireRole(ROLES.ADMIN),
+  rolesController.getRolePermissions,
+);
+
 router.put(
   "/:roleName/permissions",
   auth,

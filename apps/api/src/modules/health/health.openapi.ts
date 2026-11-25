@@ -28,9 +28,9 @@ registry.registerPath({
   method: "get",
   path: "/health",
   tags: ["Health"],
-  summary: "Service liveness check (root alias)",
+  summary: "Service health check",
   description:
-    "Lightweight process liveness check for backwards compatibility.",
+    "Lightweight process liveness check returning service status with zero external I/O.",
   responses: {
     200: successResponse("Service is live", LivenessDataSchema),
   },
@@ -42,9 +42,9 @@ registry.registerPath({
   method: "get",
   path: "/health/live",
   tags: ["Health"],
-  summary: "AWS ALB liveness probe",
+  summary: "Service liveness check",
   description:
-    "Lightweight process liveness probe for AWS ALB and container orchestrators. Returns 200 with zero external I/O.",
+    "Lightweight process liveness check returning service status with zero external I/O (same capability as /health).",
   responses: {
     200: successResponse("Process is live", LivenessDataSchema),
   },

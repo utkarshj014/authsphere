@@ -124,6 +124,12 @@ export const RATE_LIMIT_POLICIES = {
     windowMs: 15 * 60 * 1000,
     keyType: "user",
   },
+  OAUTH_UNLINK: {
+    name: "auth-oauth-unlink",
+    limit: 10,
+    windowMs: 15 * 60 * 1000,
+    keyType: "user",
+  },
 
   // OAuth 2.0 Social Logins
   OAUTH_INITIATE: {
@@ -140,6 +146,12 @@ export const RATE_LIMIT_POLICIES = {
   },
 
   // User Profile & Administration
+  USERS_LIST: {
+    name: "users-list",
+    limit: 30,
+    windowMs: 60 * 1000,
+    keyType: "user",
+  },
   USER_READ: {
     name: "users-read",
     limit: 60,
@@ -149,6 +161,12 @@ export const RATE_LIMIT_POLICIES = {
   USER_CHANGE_ROLE: {
     name: "users-change-role",
     limit: 10,
+    windowMs: 60 * 1000,
+    keyType: "user",
+  },
+  ROLE_READ_PERMISSIONS: {
+    name: "roles-read-permissions",
+    limit: 60,
     windowMs: 60 * 1000,
     keyType: "user",
   },
