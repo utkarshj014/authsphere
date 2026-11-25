@@ -121,11 +121,13 @@ async function main() {
         data: {
           email: seedAdminEmail,
           passwordHash,
-          isEmailVerified: true,
+          isEmailVerified: false,
           roleId: adminRole.id,
         },
       });
-      console.log(`✓ Created new bootstrap ADMIN user: ${seedAdminEmail}`);
+      console.log(
+        `✓ Created new bootstrap ADMIN user (unverified — verify email to claim): ${seedAdminEmail}`,
+      );
     } else {
       console.warn(
         `⚠ SEED_ADMIN_EMAIL set to "${seedAdminEmail}", but user does not exist and SEED_ADMIN_PASSWORD was not supplied. Skipping user creation.`,
