@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { asyncHandler } from "../../common/errors/index.js";
+import { asyncHandler, UnauthorizedError } from "../../common/errors/index.js";
 import { authService } from "./auth.service.js";
 import { ApiResponse } from "../../common/responses/index.js";
 import {
@@ -78,7 +78,9 @@ const refreshToken = asyncHandler(async (req: Request, res: Response) => {
 
     return ApiResponse.success(res, null, "Refresh token successful", 200);
   } catch (error) {
-    clearAuthCookies(res);
+    if (error instanceof UnauthorizedError) {
+      clearAuthCookies(res);
+    }
     throw error;
   }
 });
