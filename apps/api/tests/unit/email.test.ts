@@ -235,6 +235,22 @@ describe("Email Module Unit Tests", () => {
 
       spyProcess.mockRestore();
     });
+
+    it("catches and logs errors gracefully when sync dispatch fails", async () => {
+      const spyProcess = vi
+        .spyOn(emailService, "processJob")
+        .mockRejectedValue(new Error("SMTP Connection Refused"));
+
+      (env as any).QUEUE_DRIVER = "sync";
+
+      // Must not throw an unhandled exception to the caller
+      await expect(
+        enqueuePasswordResetEmail("fail@example.com", "fail-tok"),
+      ).resolves.toBeUndefined();
+
+      expect(spyProcess).toHaveBeenCalled();
+      spyProcess.mockRestore();
+    });
   });
 
   describe("Worker Processing & Template Rendering", () => {
