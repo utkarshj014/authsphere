@@ -5,6 +5,7 @@ import { sessionsApi, activityApi } from "../../api/index.js";
 import type { SessionItem, SecurityEventItem } from "../../types/auth.types.js";
 import { Badge, Button, Skeleton } from "../../components/ui/index.js";
 import { ROUTES } from "../../routes/routes.config.js";
+import { ROLES, PERMISSIONS } from "../../types/auth.types.js";
 import {
   formatEventType,
   formatDate,
@@ -19,6 +20,10 @@ export const OverviewPage: React.FC = () => {
   const [isLoadingTelemetry, setIsLoadingTelemetry] = useState(true);
   const [isActivityForbidden, setIsActivityForbidden] = useState(false);
 
+  const canViewActivity =
+    user?.role === ROLES.ADMIN ||
+    (user?.permissions?.includes(PERMISSIONS.DASHBOARD_VIEW) ?? false);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -26,7 +31,9 @@ export const OverviewPage: React.FC = () => {
       try {
         const [sessionsRes, eventsRes] = await Promise.allSettled([
           sessionsApi.getSessions(),
-          activityApi.getSecurityEvents(1, 5),
+          canViewActivity
+            ? activityApi.getSecurityEvents(1, 5)
+            : Promise.resolve(null),
         ]);
 
         if (!isMounted) return;
@@ -35,7 +42,13 @@ export const OverviewPage: React.FC = () => {
           setSessions(sessionsRes.value.data);
         }
 
-        if (eventsRes.status === "fulfilled" && eventsRes.value.data?.events) {
+        if (!canViewActivity) {
+          setEvents([]);
+          setIsActivityForbidden(true);
+        } else if (
+          eventsRes.status === "fulfilled" &&
+          eventsRes.value?.data?.events
+        ) {
           setEvents(eventsRes.value.data.events);
           setIsActivityForbidden(false);
         } else if (
@@ -58,7 +71,7 @@ export const OverviewPage: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [canViewActivity]);
 
   const currentSession = sessions.find((s) => s.isCurrent);
   const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ");

@@ -22,7 +22,7 @@ import {
 export const SecurityPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { user, bootstrapAuth, clearAuthUser } = useAuthStore();
+  const { user, syncSession, clearAuthUser } = useAuthStore();
 
   const errorParam = searchParams.get("error");
   const linkedParam = searchParams.get("linked");
@@ -130,7 +130,7 @@ export const SecurityPage: React.FC = () => {
     setGlobalSuccess(null);
     try {
       await authApi.unlinkOAuth(provider);
-      await bootstrapAuth();
+      await syncSession();
       const formatted =
         provider.charAt(0).toUpperCase() + provider.slice(1).toLowerCase();
       setGlobalSuccess(`${formatted} account disconnected successfully.`);
@@ -176,7 +176,7 @@ export const SecurityPage: React.FC = () => {
         setIsRecoveryModalOpen(true);
       }
 
-      await bootstrapAuth();
+      await syncSession();
       setGlobalSuccess(
         "Two-factor authentication has been successfully activated.",
       );
@@ -203,7 +203,7 @@ export const SecurityPage: React.FC = () => {
         setRecoveryCodes(res.data.recoveryCodes);
         setIsRecoveryModalOpen(true);
       }
-      await bootstrapAuth();
+      await syncSession();
       setGlobalSuccess("New emergency recovery codes have been generated.");
     } catch (err: unknown) {
       setRegenError(getApiErrorMessage(err));

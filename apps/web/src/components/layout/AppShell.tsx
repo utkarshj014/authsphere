@@ -1,6 +1,7 @@
-import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, Suspense } from "react";
 import { Outlet, NavLink, Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../../stores/auth.store.js";
+import { useFocusRevalidate } from "../../hooks/useFocusRevalidate.js";
 import {
   ROLES,
   PERMISSIONS,
@@ -131,16 +132,10 @@ export const AppShell: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const navigate = useNavigate();
 
-  // Re-synchronize user profile & dynamic role permissions on window focus
-  useEffect(() => {
-    const handleFocus = () => {
-      void useAuthStore.getState().refreshUser();
-    };
-    window.addEventListener("focus", handleFocus);
-    return () => {
-      window.removeEventListener("focus", handleFocus);
-    };
-  }, []);
+  // Re-synchronize user profile & dynamic role permissions on window focus (throttled)
+  useFocusRevalidate(() => {
+    void useAuthStore.getState().refreshUser();
+  });
 
   const isAdmin = user?.role === ROLES.ADMIN;
   const filteredNav = navItems.filter((item) => {

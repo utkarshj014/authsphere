@@ -5,7 +5,6 @@ import {
   type NextFunction,
 } from "express";
 import helmet from "helmet";
-import swaggerUi from "swagger-ui-express";
 import { OpenApiGeneratorV31 } from "@asteasolutions/zod-to-openapi";
 import { registry } from "./registry.js";
 import { env } from "../../config/env.js";
@@ -101,18 +100,58 @@ router.get("/openapi.json", (_req, res) => {
   return res.json(getOpenApiDocument());
 });
 
-// Relaxed Content Security Policy scoped specifically to Swagger UI assets
+const SWAGGER_UI_CDN_BASE =
+  "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.32.15";
+const SWAGGER_CDN_ORIGIN = new URL(SWAGGER_UI_CDN_BASE).origin;
+
+// Relaxed Content Security Policy scoped specifically to Swagger UI CDN assets
 const swaggerCsp = helmet.contentSecurityPolicy({
   directives: {
     defaultSrc: ["'self'"],
-    scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-    styleSrc: ["'self'", "'unsafe-inline'"],
-    imgSrc: ["'self'", "data:", "https:"],
+    scriptSrc: [
+      "'self'",
+      SWAGGER_CDN_ORIGIN,
+      "'unsafe-inline'",
+      "'unsafe-eval'",
+    ],
+    styleSrc: ["'self'", SWAGGER_CDN_ORIGIN, "'unsafe-inline'"],
+    imgSrc: ["'self'", SWAGGER_CDN_ORIGIN, "data:", "https:"],
     connectSrc: ["'self'", "https:", "http:"],
   },
 });
 
-// Ensure /docs without trailing slash redirects to /docs/ so relative assets resolve properly
+const renderSwaggerHtml = (specUrl: string): string => `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AuthSphere API Reference</title>
+  <link rel="stylesheet" href="${SWAGGER_UI_CDN_BASE}/swagger-ui.css" />
+  <style>
+    html { box-sizing: border-box; overflow-y: scroll; }
+    *, *:before, *:after { box-sizing: inherit; }
+    body { margin: 0; background: #fafafa; }
+  </style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="${SWAGGER_UI_CDN_BASE}/swagger-ui-bundle.js"></script>
+  <script src="${SWAGGER_UI_CDN_BASE}/swagger-ui-standalone-preset.js"></script>
+  <script>
+    window.onload = function () {
+      window.ui = SwaggerUIBundle({
+        url: ${JSON.stringify(specUrl)},
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+        layout: "StandaloneLayout",
+      });
+    };
+  </script>
+</body>
+</html>`;
+
+// Ensure /docs without trailing slash redirects to /docs/ so relative ../openapi.json resolves properly
 router.get("/docs", (req, res, next) => {
   if (!req.path.endsWith("/")) {
     const [pathname, search] = req.originalUrl.split("?");
@@ -124,16 +163,14 @@ router.get("/docs", (req, res, next) => {
   next();
 });
 
-// Serve Swagger UI with conditional revalidation
-router.use(
-  "/docs",
+// Serve CDN-backed Swagger UI (works identically in Lambda bundle and local Node)
+router.get(
+  "/docs/",
   swaggerCsp,
-  (_req: Request, res: Response, next: NextFunction) => {
+  (_req: Request, res: Response, _next: NextFunction) => {
     res.setHeader("Cache-Control", "no-cache");
-    next();
+    res.type("html").send(renderSwaggerHtml("../openapi.json"));
   },
-  swaggerUi.serve,
-  swaggerUi.setup(getOpenApiDocument()),
 );
 
 export { router as openApiRouter };

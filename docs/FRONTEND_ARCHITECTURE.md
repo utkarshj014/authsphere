@@ -206,18 +206,18 @@ stateDiagram-v2
     Authenticated --> Authenticated: refreshUser() (Focus / 403 Resync)
 
     Unavailable --> Loading: Retry Connection (bootstrapAuth)
-    Unauthenticated --> Authenticated: Login / Magic Link / OAuth -> bootstrapAuth()
+    Unauthenticated --> Authenticated: Login / Magic Link / OAuth -> syncSession()
 ```
 
 - **`UserProfile` Contract (`types/auth.types.ts`):** Holds `id`, `email`, `firstName`, `lastName`, `role`, `permissions`, `mfaEnabled`, `verifiedAt`, `createdAt`, `oauthProviders`, `hasPassword`, and `remainingRecoveryCodes` ([ADR-101](./Engineering-Decisions.md#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)).
-- **Out-of-Order Bootstrap Mitigation:** `bootstrapAuth()` increments a module-scoped `bootstrapSequence` counter before `GET /auth/me` and discards stale responses if `seq !== bootstrapSequence`.
+- **Out-of-Order & Duplicate Bootstrap Mitigation:** `bootstrapAuth()` deduplicates concurrent calls via `inflightBootstrap`, and shares `resolveSession()` with `syncSession()` / `refreshUser()` using a module-scoped `bootstrapSequence` counter so stale `GET /auth/me` responses are discarded. `syncSession()` hydrates `user` without flipping `status` to `"loading"`, avoiding mid-action guard unmounts.
 - **Inversion of Control (Zero Circular Imports):** `api/client.ts` exposes `registerAuthFailureHandler` and `registerForbiddenHandler`, which `auth.store.ts` registers at module load. On `403 Forbidden`, `onForbidden` awaits `refreshUser()` before rejecting to the caller so updated permissions apply immediately.
 
 ---
 
 ### 3.4 Network Client & Refresh Mutex
 
-All domain requests use `apiClient` (`apps/web/src/api/client.ts`) configured with `baseURL: "/api"`, `withCredentials: true`, and a `10000ms` timeout:
+All domain requests use `apiClient` (`apps/web/src/api/client.ts`) configured with `baseURL: "/api"`, `withCredentials: true`, and a `15000ms` (`API_TIMEOUT_MS`) timeout:
 
 ```mermaid
 sequenceDiagram
@@ -320,7 +320,7 @@ sequenceDiagram
     User->>Page: Enters 6-digit TOTP or recovery code
     Page->>API: POST /auth/mfa/verify { mfaToken, code }
     API-->>Page: 200 OK (Sets HttpOnly session cookies)
-    Page->>Store: bootstrapAuth() -> GET /auth/me
+    Page->>Store: syncSession() -> GET /auth/me
     Page->>User: Navigates to returnTo or /app
 ```
 
@@ -382,7 +382,7 @@ sequenceDiagram
         Sec->>User: Displays inline Alert via getApiErrorMessage()
     else Alternative Sign-In Exists
         Backend-->>Sec: 200 OK
-        Sec->>Store: bootstrapAuth() -> GET /auth/me
+        Sec->>Store: syncSession() -> GET /auth/me
         Sec->>User: Updates connected badges & shows confirmation
     end
 ```
