@@ -2,8 +2,6 @@ import type { Response, Request, NextFunction } from "express";
 import { logger } from "../../lib/logger.js";
 import { AppError } from "./app-error.js";
 import { ValidationError } from "./validation-error.js";
-import { UnauthorizedError } from "./unauthorized-error.js";
-import { clearAccessTokenCookie } from "../utils/cookie.js";
 import { env } from "../../config/env.js";
 
 const responseDto = (message: string, errors?: unknown[]) => ({
@@ -18,18 +16,16 @@ export const errorHandler = (
   res: Response,
   _next: NextFunction,
 ) => {
-  logger.error(err);
+  if (err instanceof AppError && err.statusCode < 500) {
+    logger.warn({ statusCode: err.statusCode }, err.message);
+  } else {
+    logger.error(err);
+  }
 
   if (err instanceof ValidationError) {
     return res
       .status(err.statusCode)
       .json(responseDto(err.message, err.errors));
-  }
-
-  if (err instanceof UnauthorizedError) {
-    clearAccessTokenCookie(res);
-
-    return res.status(err.statusCode).json(responseDto(err.message));
   }
 
   if (err instanceof AppError) {

@@ -25,7 +25,7 @@ const pool = new Pool(poolConfig);
 // Safeguard against unhandled errors on idle clients (e.g. remote close during compute scale-to-zero)
 // preventing uncaughtException crashes in Node.js
 pool.on("error", (err) => {
-  logger.error({ err }, "Unexpected error on idle PostgreSQL pool client");
+  logger.warn({ err }, "Idle PostgreSQL pool client disconnected");
 });
 
 const adapter = new PrismaPg(pool);

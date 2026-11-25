@@ -56,7 +56,7 @@ export const LoginPage: React.FC = () => {
   const [isVerifyingMfa, setIsVerifyingMfa] = useState(false);
   const mfaProvider = searchParams.get("provider");
 
-  const bootstrapAuth = useAuthStore((s) => s.bootstrapAuth);
+  const syncSession = useAuthStore((s) => s.syncSession);
 
   // Password form
   const {
@@ -107,8 +107,13 @@ export const LoginPage: React.FC = () => {
         return;
       }
 
-      await bootstrapAuth();
-      navigate(returnTo, { replace: true });
+      if (await syncSession()) {
+        navigate(returnTo, { replace: true });
+      } else {
+        setGlobalError(
+          "Sign-in succeeded, but your session could not be verified. Please try again.",
+        );
+      }
     } catch (err: unknown) {
       const errorMsg = getApiErrorMessage(err);
 
@@ -151,8 +156,13 @@ export const LoginPage: React.FC = () => {
 
     try {
       await mfaApi.verifyLogin(mfaToken, mfaCode.trim());
-      await bootstrapAuth();
-      navigate(returnTo, { replace: true });
+      if (await syncSession()) {
+        navigate(returnTo, { replace: true });
+      } else {
+        setGlobalError(
+          "Sign-in succeeded, but your session could not be verified. Please try again.",
+        );
+      }
     } catch (err: unknown) {
       setMfaError(getApiErrorMessage(err));
     } finally {

@@ -58,10 +58,12 @@ const processQueue = (error: unknown): void => {
   failedQueue = [];
 };
 
+const API_TIMEOUT_MS = 15_000;
+
 export const apiClient = axios.create({
   baseURL: "/api",
   withCredentials: true,
-  timeout: 10000,
+  timeout: API_TIMEOUT_MS,
   headers: {
     "Content-Type": "application/json",
   },
@@ -106,7 +108,7 @@ apiClient.interceptors.response.use(
         // Single in-flight refresh request directly via raw axios to avoid interceptor recursion
         await axios.post("/api/auth/refresh-token", null, {
           withCredentials: true,
-          timeout: 10000,
+          timeout: API_TIMEOUT_MS,
         });
 
         processQueue(null);

@@ -21,7 +21,7 @@ export const MagicLinkVerifyPage: React.FC = () => {
   const [mfaError, setMfaError] = useState<string | null>(null);
   const [isVerifyingMfa, setIsVerifyingMfa] = useState(false);
 
-  const bootstrapAuth = useAuthStore((s) => s.bootstrapAuth);
+  const syncSession = useAuthStore((s) => s.syncSession);
 
   const executedTokenRef = useRef<string | null>(null);
 
@@ -39,14 +39,20 @@ export const MagicLinkVerifyPage: React.FC = () => {
           return;
         }
 
-        await bootstrapAuth();
-        navigate(ROUTES.APP.ROOT, { replace: true });
+        if (await syncSession()) {
+          navigate(ROUTES.APP.ROOT, { replace: true });
+        } else {
+          setErrorMessage(
+            "Magic link verified, but your session could not be loaded. Please sign in.",
+          );
+          setIsLoading(false);
+        }
       })
       .catch((err: unknown) => {
         setErrorMessage(getApiErrorMessage(err));
         setIsLoading(false);
       });
-  }, [token, bootstrapAuth, navigate]);
+  }, [token, syncSession, navigate]);
 
   const handleMfaSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,8 +63,13 @@ export const MagicLinkVerifyPage: React.FC = () => {
 
     try {
       await mfaApi.verifyLogin(mfaToken, mfaCode.trim());
-      await bootstrapAuth();
-      navigate(ROUTES.APP.ROOT, { replace: true });
+      if (await syncSession()) {
+        navigate(ROUTES.APP.ROOT, { replace: true });
+      } else {
+        setMfaError(
+          "Verification succeeded, but your session could not be loaded. Please try again.",
+        );
+      }
     } catch (err: unknown) {
       setMfaError(getApiErrorMessage(err));
     } finally {

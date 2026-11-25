@@ -22,12 +22,46 @@ interface AuthState {
   clearMfaChallenge: () => void;
   setStatus: (status: AuthStatus) => void;
   bootstrapAuth: () => Promise<void>;
+  syncSession: () => Promise<boolean>;
   refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
   logoutAll: () => Promise<void>;
 }
 
 let bootstrapSequence = 0;
+let inflightBootstrap: Promise<void> | null = null;
+
+type StoreSet = (partial: Partial<AuthState>) => void;
+
+const resolveSession = async (
+  set: StoreSet,
+  options: { markUnavailableOnError: boolean },
+): Promise<boolean> => {
+  const seq = ++bootstrapSequence;
+  try {
+    const response =
+      await apiClient.get<ApiSuccessResponse<UserProfile>>("/auth/me");
+    if (seq !== bootstrapSequence) return false;
+
+    if (response.data?.data) {
+      set({ user: response.data.data, status: "authenticated" });
+      return true;
+    }
+
+    set({ user: null, status: "unauthenticated" });
+    return false;
+  } catch (err: unknown) {
+    if (seq !== bootstrapSequence) return false;
+
+    const status = (err as { response?: { status?: number } }).response?.status;
+    if (status === 401) {
+      set({ user: null, status: "unauthenticated" });
+    } else if (options.markUnavailableOnError) {
+      set({ user: null, status: "unavailable" });
+    }
+    return false;
+  }
+};
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
@@ -66,55 +100,28 @@ export const useAuthStore = create<AuthState>((set) => ({
   setStatus: (status: AuthStatus) => set({ status }),
 
   bootstrapAuth: async () => {
-    const seq = ++bootstrapSequence;
-    set({ status: "loading" });
-    try {
-      const response =
-        await apiClient.get<ApiSuccessResponse<UserProfile>>("/auth/me");
-
-      // Discard stale responses if a newer bootstrap was initiated
-      if (seq !== bootstrapSequence) return;
-
-      if (response.data?.data) {
-        set({
-          user: response.data.data,
-          status: "authenticated",
-        });
-      } else {
-        set({
-          user: null,
-          status: "unauthenticated",
-        });
-      }
-    } catch (err: unknown) {
-      if (seq !== bootstrapSequence) return;
-
-      const error = err as { response?: { status?: number } };
-      if (error.response?.status === 401) {
-        set({
-          user: null,
-          status: "unauthenticated",
-        });
-      } else {
-        // Network offline, 500 server error, DNS failure
-        set({
-          user: null,
-          status: "unavailable",
-        });
-      }
+    if (inflightBootstrap) {
+      return inflightBootstrap;
     }
+
+    set({ status: "loading" });
+    inflightBootstrap = resolveSession(set, {
+      markUnavailableOnError: true,
+    })
+      .then(() => undefined)
+      .finally(() => {
+        inflightBootstrap = null;
+      });
+
+    return inflightBootstrap;
   },
 
+  // Non-disruptive session sync: updates user & auth status without flipping status to "loading"
+  // so active routes under GuestGuard/AuthGuard are not unmounted mid-action.
+  syncSession: () => resolveSession(set, { markUnavailableOnError: false }),
+
   refreshUser: async () => {
-    try {
-      const response =
-        await apiClient.get<ApiSuccessResponse<UserProfile>>("/auth/me");
-      if (response.data?.data) {
-        set({ user: response.data.data });
-      }
-    } catch {
-      // Ignore background refresh errors
-    }
+    await resolveSession(set, { markUnavailableOnError: false });
   },
 
   logout: async () => {

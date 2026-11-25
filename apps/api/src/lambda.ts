@@ -1,8 +1,45 @@
 import { once } from "node:events";
+import express, { type RequestHandler } from "express";
 import serverlessExpressModule from "@codegenie/serverless-express";
 import app from "./app.js";
 import { redis } from "./lib/redis.js";
 import { logger } from "./lib/logger.js";
+
+const JSON_BODY_LIMIT_BYTES = 16 * 1024;
+
+/**
+ * Fallback JSON parser for @codegenie/serverless-express + Express 5.
+ * body-parser@2 skips parsing when req.socket is absent (onFinished.isFinished === true),
+ * leaving req.body as a raw Buffer.
+ */
+const parseLambdaJsonBody: RequestHandler = (req, res, next) => {
+  if (!Buffer.isBuffer(req.body) || !req.is("application/json")) {
+    return next();
+  }
+
+  if (req.body.byteLength > JSON_BODY_LIMIT_BYTES) {
+    return res.status(413).json({
+      success: false,
+      message: "Request payload too large",
+    });
+  }
+
+  const raw = req.body.toString("utf8").trim();
+  if (!raw) {
+    req.body = {};
+    return next();
+  }
+
+  try {
+    req.body = JSON.parse(raw);
+    return next();
+  } catch {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid JSON payload",
+    });
+  }
+};
 
 // Handle CJS/ESM interop across TypeScript compilation targets
 const configureServerless = ((serverlessExpressModule as any).default ||
@@ -36,7 +73,11 @@ export const handler = async (event: unknown, context: any) => {
       }
     }
 
-    serverlessHandler = configureServerless({ app });
+    const lambdaApp = express();
+    lambdaApp.set("trust proxy", app.get("trust proxy"));
+    lambdaApp.use(parseLambdaJsonBody, app);
+
+    serverlessHandler = configureServerless({ app: lambdaApp });
   } else if (redis.status !== "ready") {
     // Warm invocation: if Redis was severed while frozen, give it up to 100ms to complete TLS
     if (redis.status === "end") {

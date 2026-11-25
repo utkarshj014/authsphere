@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { activityApi, getApiErrorMessage } from "../../api/index.js";
+import { useFocusRevalidate } from "../../hooks/useFocusRevalidate.js";
 import type {
   SecurityEventItem,
   PaginationMeta,
@@ -35,6 +36,7 @@ export const ActivityPage: React.FC = () => {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
 
   const formatActivityError = (err: unknown): string => {
     const msg = getApiErrorMessage(err);
@@ -81,16 +83,14 @@ export const ActivityPage: React.FC = () => {
 
     void fetchEvents();
 
-    const handleFocus = () => {
-      void fetchEvents();
-    };
-    window.addEventListener("focus", handleFocus);
-
     return () => {
       isMounted = false;
-      window.removeEventListener("focus", handleFocus);
     };
-  }, [currentPage]);
+  }, [currentPage, refreshTick]);
+
+  useFocusRevalidate(() => {
+    setRefreshTick((t) => t + 1);
+  });
 
   const handleRefresh = async () => {
     setIsLoading(true);

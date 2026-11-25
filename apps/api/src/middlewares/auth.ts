@@ -3,7 +3,10 @@ import { asyncHandler, UnauthorizedError } from "../common/errors/index.js";
 import { verifyAccessToken } from "../lib/jwt/index.js";
 import { authorizationService } from "../modules/authorization/index.js";
 import { redis } from "../lib/redis.js";
-import { clearAuthCookies } from "../common/utils/index.js";
+import {
+  clearAccessTokenCookie,
+  clearAuthCookies,
+} from "../common/utils/index.js";
 import { logger } from "../lib/logger.js";
 
 export const auth = asyncHandler(
@@ -13,7 +16,13 @@ export const auth = asyncHandler(
       throw new UnauthorizedError("No access token provided");
     }
 
-    const payload = await verifyAccessToken(accessToken);
+    let payload;
+    try {
+      payload = await verifyAccessToken(accessToken);
+    } catch (err) {
+      clearAccessTokenCookie(res);
+      throw err;
+    }
 
     let cachedPerms: string | null | undefined = undefined;
 
@@ -75,7 +84,13 @@ export const optionalAuth = asyncHandler(
     }
 
     try {
-      const payload = await verifyAccessToken(accessToken);
+      let payload;
+      try {
+        payload = await verifyAccessToken(accessToken);
+      } catch (err) {
+        clearAccessTokenCookie(res);
+        throw err;
+      }
 
       let cachedPerms: string | null | undefined = undefined;
 
