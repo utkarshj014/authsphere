@@ -1,8 +1,5 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios";
-import type {
-  ApiErrorResponse,
-  PaginationMeta,
-} from "../types/auth.types.js";
+import type { ApiErrorResponse, PaginationMeta } from "../types/auth.types.js";
 
 export const DEFAULT_PAGE_SIZE = 20;
 

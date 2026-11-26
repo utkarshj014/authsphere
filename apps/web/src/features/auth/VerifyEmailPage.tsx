@@ -121,9 +121,7 @@ export const VerifyEmailPage: React.FC = () => {
           <div className="pt-2">
             <Link
               to={
-                authStatus === "authenticated"
-                  ? ROUTES.APP.ROOT
-                  : ROUTES.LOGIN
+                authStatus === "authenticated" ? ROUTES.APP.ROOT : ROUTES.LOGIN
               }
               className="w-full block"
             >
