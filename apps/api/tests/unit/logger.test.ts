@@ -1,19 +1,29 @@
+import type { IncomingMessage } from "node:http";
 import { describe, it, expect } from "vitest";
 import pino from "pino";
-import { loggerRedactionConfig } from "../../src/lib/logger.js";
+import { loggerRedactionConfig, reqSerializer } from "../../src/lib/logger.js";
+
+function createCaptureLogger() {
+  const chunks: string[] = [];
+  const logger = pino(
+    {
+      redact: loggerRedactionConfig,
+      serializers: { req: reqSerializer },
+    },
+    { write: (chunk: string) => chunks.push(chunk) },
+  );
+
+  return {
+    logger,
+    readOutput: () => chunks.join(""),
+  };
+}
 
 describe("Logger Security & Redaction", () => {
   it("redacts sensitive authentication headers and credentials across requests and responses", () => {
-    let output = "";
-    const stream = {
-      write: (chunk: string) => {
-        output += chunk;
-      },
-    };
+    const { logger, readOutput } = createCaptureLogger();
 
-    const testLogger = pino({ redact: loggerRedactionConfig }, stream);
-
-    testLogger.info({
+    logger.info({
       req: {
         id: "req-trace-1",
         headers: {
@@ -36,20 +46,15 @@ describe("Logger Security & Redaction", () => {
       },
     });
 
+    const output = readOutput();
     const parsed = JSON.parse(output.trim());
 
-    // 1. Inbound credentials: authorization and cookie are completely redacted
     expect(parsed.req.headers.cookie).toBe("[REDACTED]");
     expect(parsed.req.headers.authorization).toBe("[REDACTED]");
-
-    // 2. Outbound credentials: set-cookie and location redirect query are completely redacted
     expect(parsed.res.headers["set-cookie"]).toBe("[REDACTED]");
     expect(parsed.res.headers.location).toBe("[REDACTED]");
-
-    // 3. Non-sensitive headers remain intact
     expect(parsed.req.headers.host).toBe("api.authsphere.dev");
 
-    // 4. Invariant: Absolute zero leakage of raw secrets in serialized log output
     expect(output).not.toContain("raw_access_jwt_secret");
     expect(output).not.toContain("raw_refresh_jwt_secret");
     expect(output).not.toContain("raw_bearer_token_secret");
@@ -57,5 +62,35 @@ describe("Logger Security & Redaction", () => {
     expect(output).not.toContain("new_refresh_jwt_secret");
     expect(output).not.toContain("oauth_state_secret");
     expect(output).not.toContain("challenge_secret");
+  });
+
+  it("omits sensitive OAuth query parameters and sanitizes request URLs to paths", () => {
+    const { logger, readOutput } = createCaptureLogger();
+
+    const callbackRequest = {
+      id: "req-oauth-callback-1",
+      method: "GET",
+      // Simulate Express sub-router mutation where req.url/path drop the /auth/oauth mount prefix
+      originalUrl:
+        "/auth/oauth/github/callback?code=sensitive_oauth_code_xyz&state=sensitive_oauth_state_abc",
+      url: "/github/callback?code=sensitive_oauth_code_xyz&state=sensitive_oauth_state_abc",
+      query: {
+        code: "sensitive_oauth_code_xyz",
+        state: "sensitive_oauth_state_abc",
+      },
+      headers: {
+        host: "api.authsphere.dev",
+      },
+    } as unknown as IncomingMessage;
+
+    logger.info({ req: callbackRequest });
+
+    const output = readOutput();
+    const parsed = JSON.parse(output.trim());
+
+    expect(parsed.req.url).toBe("/auth/oauth/github/callback");
+    expect(parsed.req.query).toBeUndefined();
+    expect(output).not.toContain("sensitive_oauth_code_xyz");
+    expect(output).not.toContain("sensitive_oauth_state_abc");
   });
 });

@@ -218,7 +218,7 @@ export const rateLimiter = (policy: RateLimitPolicy) => {
     // 1. Fail-open resilience check: bypass rate limiter if Redis is offline
     if (redis.status !== "ready") {
       logger.warn(
-        { policy: policy.name, url: req.originalUrl },
+        { policy: policy.name, url: req.path },
         "Redis client offline; bypassing rate limiter",
       );
       return next();
@@ -283,7 +283,7 @@ export const rateLimiter = (policy: RateLimitPolicy) => {
     } catch (err) {
       // 7. Fail-open fallback: log operational errors without blocking app availability
       logger.error(
-        { err, policy: policy.name, url: req.originalUrl },
+        { err, policy: policy.name, url: req.path },
         "Rate limiter error - failing open",
       );
       return next();

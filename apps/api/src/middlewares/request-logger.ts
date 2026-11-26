@@ -1,5 +1,5 @@
 import { pinoHttp } from "pino-http";
-import { logger } from "../lib/logger.js";
+import { logger, reqSerializer } from "../lib/logger.js";
 
 export const requestLogger = pinoHttp({
   logger,
@@ -9,4 +9,7 @@ export const requestLogger = pinoHttp({
     res.writableEnded || res.headersSent
       ? "request completed"
       : "request aborted",
+  serializers: {
+    req: reqSerializer,
+  },
 });
