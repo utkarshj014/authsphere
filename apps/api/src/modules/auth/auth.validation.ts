@@ -11,6 +11,7 @@ const totpCodeSchema = z
   .trim()
   .regex(TOTP_CODE_REGEX, "MFA code must be exactly 6 digits");
 const idSchema = z.uuidv7();
+export const mfaTokenSchema = idSchema;
 const backupCodeSchema = z
   .string()
   .trim()
@@ -66,7 +67,7 @@ export const authRequestSchema = {
   }),
 
   mfaVerifyLogin: z.object({
-    mfaToken: idSchema,
+    mfaToken: mfaTokenSchema.optional(),
     code: z.union([totpCodeSchema, backupCodeSchema]),
   }),
 
@@ -171,9 +172,12 @@ export type ChangePasswordInput = z.infer<
 export type MfaVerifySetupInput = z.infer<
   typeof authRequestSchema.mfaVerifySetup
 >;
-export type MfaVerifyLoginInput = z.infer<
-  typeof authRequestSchema.mfaVerifyLogin
->;
+export type MfaVerifyLoginInput = Omit<
+  z.infer<typeof authRequestSchema.mfaVerifyLogin>,
+  "mfaToken"
+> & {
+  mfaToken: string;
+};
 export type MfaDisableInput = z.infer<typeof authRequestSchema.mfaDisable>;
 export type MfaRegenerateRecoveryCodesInput = z.infer<
   typeof authRequestSchema.mfaRegenerateRecoveryCodes

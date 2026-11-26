@@ -23,10 +23,10 @@ export const mfaApi = {
     return res.data;
   },
 
-  verifyLogin: async (mfaToken: string, code: string) => {
+  verifyLogin: async (mfaToken: string | null | undefined, code: string) => {
     const res = await apiClient.post<ApiSuccessResponse<MfaLoginResponse>>(
       "/auth/mfa/verify",
-      { mfaToken, code },
+      { code, ...(mfaToken ? { mfaToken } : {}) },
     );
     return res.data;
   },

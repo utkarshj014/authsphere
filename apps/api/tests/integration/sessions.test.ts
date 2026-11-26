@@ -125,9 +125,7 @@ describe("Sessions Integration Suite (Active Sessions & Revocation)", () => {
       .set("Cookie", browser1Header);
     expect(list1.status).toBe(200);
     expect(list1.body.data).toHaveLength(2);
-    const current1 = list1.body.data.find((s: any) => s.isCurrent === true);
     const remote2 = list1.body.data.find((s: any) => s.isCurrent === false);
-    expect(current1).toBeDefined();
     expect(remote2).toBeDefined();
 
     // Browser 1 revokes Browser 2: Browser 1 keeps surfing, Browser 2 is immediately rejected

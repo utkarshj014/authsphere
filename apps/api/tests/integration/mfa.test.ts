@@ -89,6 +89,15 @@ describe("MFA Integration Suite (Setup, Login Challenge, Recovery, Disablement)"
       expect(challenge).toBeNull();
     });
 
+    it("rejects /auth/mfa/verify with 400 when neither body mfaToken nor oauth_mfa_token cookie is present", async () => {
+      const res = await request(app)
+        .post("/auth/mfa/verify")
+        .send({ code: "123456" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
+
     it("fulfills login challenge with valid recovery code and invalidates it, rejecting reuse with 400", async () => {
       const { user, password, recoveryCodes } = await createMfaUser();
       const codeToUse = recoveryCodes[0];

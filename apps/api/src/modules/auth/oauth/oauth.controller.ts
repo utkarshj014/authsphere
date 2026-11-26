@@ -16,6 +16,8 @@ import {
 import type { OAuthStateData } from "./oauth.types.js";
 import {
   setAuthCookies,
+  setOAuthMfaCookie,
+  clearOAuthMfaCookie,
   getClientIp,
   getOAuthVerifierCookieName,
   setOAuthVerifierCookie,
@@ -160,11 +162,13 @@ export const oauthCallbackHandler = (provider: OAuthProviderName) =>
     }
 
     if (result.mfaRequired) {
+      setOAuthMfaCookie(res, result.mfaToken);
       return res.redirect(
-        `${env.FRONTEND_URL}/login?mfa=true&mfaToken=${encodeURIComponent(result.mfaToken)}&provider=${encodeURIComponent(provider.toLowerCase())}`,
+        `${env.FRONTEND_URL}/login?mfa=true&provider=${encodeURIComponent(provider.toLowerCase())}`,
       );
     }
 
+    clearOAuthMfaCookie(res);
     setAuthCookies(res, result.tokens);
 
     if (result.isLinked) {
