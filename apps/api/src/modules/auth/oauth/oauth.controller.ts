@@ -113,6 +113,7 @@ export const oauthCallbackHandler = (provider: OAuthProviderName) =>
     const code = req.query.code as string;
     const ipAddress = getClientIp(req);
     const userAgent = req.header("user-agent");
+    const existingRefreshToken = req.cookies?.refreshToken;
 
     // Atomically consume state parameter from Redis to verify and determine return targets
     let stateData: OAuthStateData;
@@ -145,6 +146,7 @@ export const oauthCallbackHandler = (provider: OAuthProviderName) =>
         ipAddress,
         userAgent,
         codeVerifier,
+        existingRefreshToken,
       );
     } catch (err: unknown) {
       if (err instanceof AppError && err.statusCode === 400) {

@@ -42,8 +42,14 @@ const resendVerificationToken = asyncHandler(
 const login = asyncHandler(async (req: Request, res: Response) => {
   const ipAddress = getClientIp(req);
   const userAgent = req.header("user-agent");
+  const existingRefreshToken = req.cookies?.refreshToken;
 
-  const result = await authService.login(req.body, ipAddress, userAgent);
+  const result = await authService.login(
+    req.body,
+    ipAddress,
+    userAgent,
+    existingRefreshToken,
+  );
 
   if (result.mfaRequired) {
     return ApiResponse.success(
@@ -210,11 +216,13 @@ const mfaVerifySetup = asyncHandler(async (req: Request, res: Response) => {
 const mfaVerifyLogin = asyncHandler(async (req: Request, res: Response) => {
   const ipAddress = getClientIp(req);
   const userAgent = req.header("user-agent");
+  const existingRefreshToken = req.cookies?.refreshToken;
 
   const result = await authService.mfaVerifyLogin(
     req.body,
     ipAddress,
     userAgent,
+    existingRefreshToken,
   );
 
   setAuthCookies(res, result.tokens);
@@ -279,11 +287,13 @@ const sendMagicLink = asyncHandler(async (req: Request, res: Response) => {
 const verifyMagicLink = asyncHandler(async (req: Request, res: Response) => {
   const ipAddress = getClientIp(req);
   const userAgent = req.header("user-agent");
+  const existingRefreshToken = req.cookies?.refreshToken;
 
   const result = await authService.verifyMagicLink(
     req.body,
     ipAddress,
     userAgent,
+    existingRefreshToken,
   );
 
   if (result.mfaRequired) {

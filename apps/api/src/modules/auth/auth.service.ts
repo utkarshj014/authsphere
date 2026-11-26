@@ -108,6 +108,8 @@ const clearRefreshLeewayCache = async (
   }
 };
 
+export const MAX_ACTIVE_SESSIONS_PER_USER = 10;
+
 export const setUserRevokedAt = async (userId: string): Promise<void> => {
   if (redis.status !== "ready") return;
   const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
@@ -120,6 +122,42 @@ export const setUserRevokedAt = async (userId: string): Promise<void> => {
     );
   } catch (err) {
     logger.warn({ err, userId }, "Failed recording user revocation in Redis");
+  }
+};
+
+export const revokeSessionsInRedis = async (
+  sessionIds: readonly string[],
+): Promise<void> => {
+  if (redis.status !== "ready") return;
+  const uniqueIds = [...new Set(sessionIds)];
+  if (uniqueIds.length === 0) return;
+
+  const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
+  if (ttlSeconds <= 0) return;
+
+  try {
+    const pipeline = redis.pipeline();
+    for (const sid of uniqueIds) {
+      pipeline.set(`auth:revoked-session:${sid}`, "1", "EX", ttlSeconds);
+    }
+    await pipeline.exec();
+  } catch (err) {
+    logger.warn(
+      { err, sessionIds: uniqueIds },
+      "Failed recording session revocation in Redis",
+    );
+  }
+};
+
+const resolveSupersededSessionId = async (
+  refreshToken?: string,
+): Promise<string | undefined> => {
+  if (!refreshToken) return undefined;
+  try {
+    const payload = await verifyRefreshToken(refreshToken);
+    return payload.sid;
+  } catch {
+    return undefined;
   }
 };
 
@@ -139,14 +177,19 @@ export const recordSecurityEvent = async (
   });
 };
 
+interface SessionGenerationOptions {
+  existingSessionId?: string | undefined;
+  existingRefreshToken?: string | undefined;
+}
+
 export const generateAuthTokensAndSession = async (
   userId: string,
   roleName: RoleName,
   ipAddress: string,
   userAgent?: string,
-  existingSessionId?: string,
+  options?: SessionGenerationOptions,
 ): Promise<AuthTokens> => {
-  const sessionId = existingSessionId ?? uuidv7();
+  const sessionId = options?.existingSessionId ?? uuidv7();
   const sessionExpiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_IN_MS);
 
   const accessToken = await signAccessToken({
@@ -167,11 +210,22 @@ export const generateAuthTokensAndSession = async (
     ...(userAgent ? { userAgent } : {}),
   };
 
-  if (!existingSessionId) {
-    await authRepository.createSession(userId, {
-      id: sessionId,
-      ...sessionPayload,
-    });
+  if (!options?.existingSessionId) {
+    const supersededSessionId = await resolveSupersededSessionId(
+      options?.existingRefreshToken,
+    );
+    const { revokedSessionIds } = await authRepository.createSession(
+      userId,
+      {
+        id: sessionId,
+        ...sessionPayload,
+      },
+      {
+        supersededSessionId,
+        maxActiveSessions: MAX_ACTIVE_SESSIONS_PER_USER,
+      },
+    );
+    await revokeSessionsInRedis(revokedSessionIds);
   }
 
   return { accessToken, refreshToken };
@@ -300,6 +354,7 @@ const login = async (
   input: LoginInput,
   ipAddress: string,
   userAgent?: string,
+  existingRefreshToken?: string,
 ): Promise<
   | { mfaRequired: false; tokens: AuthTokens }
   | { mfaRequired: true; mfaToken: string }
@@ -356,6 +411,7 @@ const login = async (
     user.role.name,
     ipAddress,
     userAgent,
+    { existingRefreshToken },
   );
 
   await recordSecurityEvent(
@@ -407,7 +463,7 @@ const refreshToken = async (
     session.user.role.name,
     ipAddress,
     userAgent,
-    session.id,
+    { existingSessionId: session.id },
   );
 
   const rotated = await authRepository.rotateSession(session.id, oldTokenHash, {
@@ -435,8 +491,10 @@ const refreshToken = async (
   // 5. Replay detected outside leeway: revoke session
   if (env.AUTH_REUSE_DELETION_MODE === "GLOBAL") {
     await authRepository.deleteAllSessionsByUserId(session.userId);
+    await setUserRevokedAt(session.userId);
   } else {
     await authRepository.deleteSessionById(session.id);
+    await revokeSessionsInRedis([session.id]);
   }
   throw new UnauthorizedError("Compromised session detected");
 };
@@ -455,22 +513,10 @@ const logout = async (token?: string) => {
 
   await authRepository.deleteSessionById(session.id);
 
-  if (redis.status === "ready") {
-    const tokenHash = hashToken(token);
-    const ttlSeconds = Math.ceil(env.JWT_ACCESS_EXPIRES_IN_MS / 1000);
-    try {
-      await redis
-        .pipeline()
-        .del(`auth:refresh-leeway:${session.id}:${tokenHash}`)
-        .set(`auth:revoked-session:${session.id}`, "1", "EX", ttlSeconds)
-        .exec();
-    } catch (err) {
-      logger.warn(
-        { err, sessionId: session.id },
-        "Failed revoking session in Redis pipeline",
-      );
-    }
-  }
+  await Promise.all([
+    clearRefreshLeewayCache(session.id, hashToken(token)),
+    revokeSessionsInRedis([session.id]),
+  ]);
 
   await recordSecurityEvent(
     session.userId,
@@ -757,6 +803,7 @@ const mfaVerifyLogin = async (
   input: MfaVerifyLoginInput,
   ipAddress: string,
   userAgent?: string,
+  existingRefreshToken?: string,
 ): Promise<{
   tokens: AuthTokens;
   lowRecoveryCodesWarning?: boolean;
@@ -806,6 +853,7 @@ const mfaVerifyLogin = async (
     user.role.name,
     ipAddress,
     userAgent,
+    { existingRefreshToken },
   );
 
   await recordSecurityEvent(user.id, challengeType, ipAddress, userAgent, {
@@ -903,6 +951,7 @@ const verifyMagicLink = async (
   input: VerifyMagicLinkInput,
   ipAddress: string,
   userAgent?: string,
+  existingRefreshToken?: string,
 ): Promise<
   | { mfaRequired: false; tokens: AuthTokens }
   | { mfaRequired: true; mfaToken: string }
@@ -939,6 +988,7 @@ const verifyMagicLink = async (
     user.role.name,
     ipAddress,
     userAgent,
+    { existingRefreshToken },
   );
 
   await recordSecurityEvent(
