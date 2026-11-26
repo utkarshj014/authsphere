@@ -23,6 +23,8 @@ import { rolesRouter } from "./modules/roles/index.js";
 import { notFoundHandler } from "./middlewares/not-found.js";
 import { errorHandler } from "./common/errors/index.js";
 
+export const JSON_BODY_LIMIT_BYTES = 16 * 1024;
+
 const app = express();
 
 // Configure proxy trust
@@ -70,7 +72,7 @@ app.use(rateLimiter(RATE_LIMIT_POLICIES.GLOBAL));
 
 // Body & Cookie Parsers
 // Deferred until after rate-limiting & origin validation to save CPU & memory
-app.use(express.json({ limit: "16kb" }));
+app.use(express.json({ limit: JSON_BODY_LIMIT_BYTES }));
 app.use(cookieParser());
 
 // Application Routes
