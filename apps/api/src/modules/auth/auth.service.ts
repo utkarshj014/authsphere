@@ -587,17 +587,13 @@ const getCurrentUser = async (
 };
 
 const forgotPassword = async (input: ForgotPasswordInput) => {
-  const user = await authRepository.findUserByEmail(input.email);
+  const user = await authRepository.findUserByEmailWithRole(input.email);
   if (!user) {
     return;
   }
 
   if (!user.passwordHash) {
-    const userWithOauth = await authRepository.findUserByEmailWithRole(
-      input.email,
-    );
-    const providers =
-      userWithOauth?.oauthAccounts?.map((a) => a.provider) ?? [];
+    const providers = user.oauthAccounts?.map((a) => a.provider) ?? [];
     await enqueueSocialAccountReminderEmail(user.email, providers);
     return;
   }

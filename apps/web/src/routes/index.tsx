@@ -109,24 +109,20 @@ const router = createBrowserRouter([
           </Suspense>
         ),
       },
-      // Guest-Only Auth Forms (Redirect to Console if already authenticated)
+      // Authentication & Token Verification Shell (Single persistent AuthLayout)
       {
-        element: <GuestGuard />,
+        element: <AuthLayout />,
         children: [
+          // Guest-Only Auth Forms (Redirect to Console if already authenticated)
           {
-            element: <AuthLayout />,
+            element: <GuestGuard />,
             children: [
               { path: "login", element: <LoginPage /> },
               { path: "register", element: <RegisterPage /> },
               { path: "forgot-password", element: <ForgotPasswordPage /> },
             ],
           },
-        ],
-      },
-      // Action / Token Verification Routes (Accessible regardless of current session state)
-      {
-        element: <AuthLayout />,
-        children: [
+          // Action / Token Verification Routes (Accessible regardless of current session state)
           { path: "reset-password", element: <ResetPasswordPage /> },
           { path: "verify-email", element: <VerifyEmailPage /> },
           { path: "magic-link/verify", element: <MagicLinkVerifyPage /> },
