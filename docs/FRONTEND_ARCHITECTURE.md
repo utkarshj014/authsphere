@@ -6,7 +6,7 @@ This document is the single source of truth (SSOT) for **AuthSphere's** frontend
 >
 > - [ARCHITECTURE.md](./ARCHITECTURE.md) — System Design, Component Topology & Core Data Models
 > - [FRONTEND_ARCHITECTURE.md](./FRONTEND_ARCHITECTURE.md) — Frontend Architecture, Component Topology & Control Plane
-> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 109 Formal ADRs, Security Invariants & Technical Trade-offs
+> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 111 Formal ADRs, Security Invariants & Technical Trade-offs
 > - [OAUTH.md](./OAUTH.md) — OAuth 2.0 PKCE Social Authentication & Integration Protocols
 > - [DEPLOYMENT.md](./DEPLOYMENT.md) — Cloud Infrastructure, Dual-Compute (Lambda/ECS) & Runbooks
 > - [TESTING.md](./TESTING.md) — Hermetic Test Pyramid, Invariant Verification & CI Strategies
@@ -57,7 +57,7 @@ flowchart TD
     subgraph Backend ["Backend Tier (apps/api)"]
         API["Express.js API (ARCHITECTURE.md)"]
         EdgeProxy -->|"Rewrite /api/(.*) to /$1"| API
-        DevProxy -->|"Rewrite /api to /"| API
+        DevProxy -->|"Strip /api prefix"| API
     end
 ```
 
@@ -78,7 +78,7 @@ flowchart TD
 
 ### Ingress & Cookie Boundary
 
-- **Same-Origin Proxy (`vercel.ts` / `vite.config.ts`):** Both production (Vercel rewrites via `BACKEND_URL`) and local development (Vite proxy via `VITE_API_URL`, defaulting to `http://localhost:3000`) rewrite `/api/*` to the backend origin and redirect `/docs`, `/docs/`, `/api/docs`, and `/openapi.json` to `/api/docs/` or `/api/openapi.json`. See [DEPLOYMENT.md](./DEPLOYMENT.md) for edge topology, TLS termination, and proxy hop configuration.
+- **Same-Origin Proxy (`vercel.ts` / `vite.config.ts`):** Both production (Vercel rewrites via `BACKEND_URL`) and local development (Vite proxy via `VITE_API_URL`, defaulting to `http://localhost:3000`; `apps/web/.env.example` leaves `VITE_API_URL` empty because `apiClient` hardcodes `baseURL: "/api"`) strip the `/api` prefix when forwarding `/api/*` to the backend origin, and permanently redirect `/docs`, `/docs/`, and `/api/docs` to `/api/docs/`. For `/openapi.json`, `vercel.ts` permanently redirects to `/api/openapi.json` (and rewrites `/(.*)` to `/index.html` for SPA routing), while `vite.config.ts` proxies `/openapi.json` directly to the backend target. See [DEPLOYMENT.md](./DEPLOYMENT.md) for edge topology, TLS termination, and proxy hop configuration.
 - **Zero Web-Storage Token Rule:** `accessToken` and `refreshToken` are never stored in `localStorage` or `sessionStorage`; they are managed solely via backend `HttpOnly`, `SameSite=Lax` cookies (`Secure` in production).
 
 ---
@@ -105,7 +105,7 @@ apps/web/src/
 ### 3.1 Presentation & Shell Layer
 
 1. **`AuthLayout` (`components/layout/AuthLayout.tsx`):**
-   - Shell for both guest-only flows (`/login`, `/register`, `/forgot-password`) and session-agnostic token/action flows (`/reset-password`, `/verify-email`, `/magic-link/verify`).
+   - Single persistent layout route wrapping both guest-only flows (`/login`, `/register`, `/forgot-password`) and session-agnostic token/action flows (`/reset-password`, `/verify-email`, `/magic-link/verify`).
    - Centers a `max-w-md` card (`bg-paper-2 border border-rule rounded-card`) with header branding, version tag (`v1.0.0`), layout-level `<Suspense>` skeleton fallback, and footer links (`/privacy`, `/api/docs/`, `/api/openapi.json`, `/`).
 
 2. **`AppShell` (`components/layout/AppShell.tsx`):**
@@ -117,7 +117,7 @@ apps/web/src/
 
 3. **Custom UI Primitives (`components/ui/`):**
    - Seven zero-dependency primitives (`Alert`, `Badge`, `Button`, `Input`, `Modal`, `Pagination`, `Skeleton`) styled with Tailwind CSS v4 and Hallmark OKLCH variables.
-   - Enforces `:focus-visible` outlines, accessible ARIA attributes (`aria-modal`, `aria-busy`, `aria-hidden`), and `44px` minimum touch targets on `md` (mobile) and `lg` buttons.
+   - Enforces `:focus-visible` outlines, accessible ARIA attributes (`aria-modal`, `aria-busy`, `aria-hidden`), and `44px` minimum height on mobile (`< 768px`) for `Input` controls and `md` buttons, and at all viewports for `lg` buttons.
 
 ---
 
@@ -133,7 +133,7 @@ flowchart TD
 
     RouteBranch -->|"Guest-Only Auth Forms"| GuestCheck{"useAuthStore.status<br/>(/login, /register, /forgot-password)"}
     GuestCheck -->|"authenticated"| GuestRedirect["GuestGuard: Redirect via resolvePostAuthRedirect"]
-    GuestCheck -->|"idle, loading, unauthenticated, or unavailable"| GuestRender["GuestGuard: Render AuthLayout + View"]
+    GuestCheck -->|"idle, loading, unauthenticated, or unavailable"| GuestRender["GuestGuard: Render Guest View (inside AuthLayout)"]
 
     RouteBranch -->|"Protected (/app/*)"| AuthCheck{"useAuthStore.status"}
     AuthCheck -->|"idle or loading"| Skeleton["AuthGuard: Render Guard Skeleton"]
@@ -180,14 +180,14 @@ flowchart TD
 
 ### 3.3 State Management & Data Ownership
 
-| State Domain                 | Owner / Mechanism                                 | Scope & Boundary                                                                                                |
-| :--------------------------- | :------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------- |
-| **Authentication Posture**   | Zustand Store (`useAuthStore`)                    | Volatile in-memory `user`, `status: AuthStatus`, and `sessionExpired: boolean`. Never persisted to Web Storage. |
-| **Transient MFA Challenges** | Local Component State (`useState`)                | `mfaToken` is held in page state (`LoginPage`, `MagicLinkVerifyPage`) or read from OAuth redirect `?mfaToken=`. |
-| **Form Inputs & Validation** | React Hook Form + Zod (`schemas/auth.schemas.ts`) | Isolated per form to prevent parent re-renders.                                                                 |
-| **Pagination**               | URL Search Params (`useSearchParams`)             | Keeps `?page=` bookmarkable across reloads (`ActivityPage`, `AdminUsersPage`).                                  |
-| **Server Domain Data**       | Local View State + `useAbortableQuery`            | Fetched via `api/` with `AbortController` cancellation on key transitions/unmount and `useFocusRevalidate`.     |
-| **Ephemeral UI State**       | Local Component State (`useState`)                | Modals, mobile drawer state, password visibility toggles, and alert banners.                                    |
+| State Domain                 | Owner / Mechanism                                 | Scope & Boundary                                                                                                                                                                                                                |
+| :--------------------------- | :------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Authentication Posture**   | Zustand Store (`useAuthStore`)                    | Volatile in-memory `user`, `status: AuthStatus`, and `sessionExpired: boolean`. Never persisted to Web Storage.                                                                                                                 |
+| **Transient MFA Challenges** | Local Component State + `HttpOnly` Cookie         | Password and magic-link challenges hold `mfaToken` in `useState` (`LoginPage`, `MagicLinkVerifyPage`); OAuth MFA redirects to `/login?mfa=true&provider=...` with the token carried in the `oauth_mfa_token` `HttpOnly` cookie. |
+| **Form Inputs & Validation** | React Hook Form + Zod (`schemas/auth.schemas.ts`) | Isolated per form to prevent parent re-renders.                                                                                                                                                                                 |
+| **Pagination**               | URL Search Params (`useSearchParams`)             | Keeps `?page=` bookmarkable across reloads (`ActivityPage`, `AdminUsersPage`).                                                                                                                                                  |
+| **Server Domain Data**       | Local View State + `useAbortableQuery`            | Fetched via `api/` with `AbortController` cancellation on key transitions/unmount and `useFocusRevalidate`.                                                                                                                     |
+| **Ephemeral UI State**       | Local Component State (`useState`)                | Modals, mobile drawer state, password visibility toggles, and alert banners.                                                                                                                                                    |
 
 #### Auth Store State Machine (`stores/auth.store.ts`)
 
@@ -199,11 +199,11 @@ stateDiagram-v2
     Loading --> Unauthenticated: GET /auth/me 401 (or empty data)
     Loading --> Unavailable: Network / 5xx Error
 
-    Authenticated --> Unauthenticated: logout(), logoutAll(), clearAuthUser(), or session_expired
+    Authenticated --> Unauthenticated: logout(), logoutAll(), clearAuthUser(), 401, or session_expired
     Authenticated --> Authenticated: refreshUser() / syncSession() (Focus / 403 / Verification)
 
     Unavailable --> Loading: Retry Connection (bootstrapAuth)
-    Unauthenticated --> Authenticated: Login / Magic Link / OAuth -> syncSession()
+    Unauthenticated --> Authenticated: Login / Magic Link / OAuth -> syncSession() or bootstrapAuth()
     Unauthenticated --> Unavailable: Non-authenticated Refresh Network / 5xx Outage
 ```
 
@@ -263,6 +263,7 @@ sequenceDiagram
 - **Cancellation & Recursion Guards:** Aborted requests (`axios.isCancel`) reject immediately without triggering refresh or `onForbidden`. Retried requests set `_retry = true`, and `refreshAuthSession()` invokes raw `axios.post("/api/auth/refresh-token", ...)` rather than `apiClient`.
 - **Error Sanitization & Permission Formatting:** `getApiErrorMessage` maps `5xx` responses to a generic safe notice, joins safe `400` Zod field validation errors, strips database/driver error strings (e.g., `prisma`, `foreign key`, `unique constraint`, `econnrefused`), and provides clear messages for `429`, `403`, `401`, and `404`. `formatPermissionError` inspects `axios.isAxiosError(error) && error.response?.status === 403` to format missing RBAC permission messages deterministically.
 - **Shared Pagination Defaults:** `client.ts` exports `DEFAULT_PAGE_SIZE = 20` and `EMPTY_PAGINATION` as the shared baseline for paginated views (`ActivityPage`, `AdminUsersPage`).
+- **Domain API Modules (`apps/web/src/api/`):** `auth.api.ts` (`/auth/*` credentials, verification, magic link, password, `/auth/me`, logout, OAuth unlink), `mfa.api.ts` (`/auth/mfa/*`), `sessions.api.ts` (`/sessions`, `/sessions/:id`), `activity.api.ts` (`/auth/security-events`), and `admin.api.ts` (`/users`, `/users/:id/role`, `/roles/:roleName/permissions`). See [ARCHITECTURE.md](./ARCHITECTURE.md) for full backend endpoint contracts.
 
 ---
 
@@ -302,7 +303,7 @@ sequenceDiagram
 
 ### 4.2 Multi-Factor Authentication (MFA)
 
-Password login (`LoginPage`), magic link verification (`MagicLinkVerifyPage`), and MFA-gated social OAuth callbacks (`/login?mfaToken=...&provider=...`) share an inline two-step verification flow:
+Password login (`LoginPage`), magic link verification (`MagicLinkVerifyPage`), and MFA-gated social OAuth callbacks (`/login?mfa=true&provider=...`, backed by the `oauth_mfa_token` `HttpOnly` cookie — [ADR-111](./Engineering-Decisions.md#adr-111--httponly-cookie-handoff-for-oauth-mfa-challenges-zero-url-token-exposure)) share an inline two-step verification flow:
 
 ```mermaid
 sequenceDiagram
@@ -312,15 +313,22 @@ sequenceDiagram
     participant API as Backend (/api)
     participant Store as useAuthStore
 
-    User->>Page: Submits credentials or verifies magic link
-    API-->>Page: 200 OK { mfaRequired: true, mfaToken }
-    Note over Page: Holds mfaToken in component state and switches to inline verification form
+    alt Password or Magic Link Challenge
+        User->>Page: Submits credentials or verifies magic link
+        API-->>Page: 200 OK { mfaRequired: true, mfaToken }
+        Note over Page: Holds mfaToken in component state and renders inline 2FA form
+        User->>Page: Enters 6-digit TOTP or recovery code
+        Page->>API: POST /auth/mfa/verify { mfaToken, code }
+    else OAuth Callback Challenge
+        API-->>User: 302 /login?mfa=true&provider=... + Set-Cookie: oauth_mfa_token (HttpOnly)
+        Note over Page: LoginPage detects ?mfa=true and displays provider context
+        User->>Page: Enters 6-digit TOTP or recovery code
+        Page->>API: POST /auth/mfa/verify { code } (oauth_mfa_token cookie sent automatically)
+    end
 
-    User->>Page: Enters 6-digit TOTP or recovery code
-    Page->>API: POST /auth/mfa/verify { mfaToken, code }
     API-->>Page: 200 OK (Sets HttpOnly session cookies)
     Page->>Store: syncSession() -> GET /auth/me
-    Page->>User: Navigates to returnTo or /app
+    Page->>User: Navigates to returnTo (LoginPage) or /app (MagicLinkVerifyPage)
 ```
 
 ### 4.3 Session Management & Revocation (`SessionsPage`)
@@ -353,7 +361,7 @@ sequenceDiagram
 
 - **Guard & Navigation Filtering:** `AppShell` hides admin items unless the user holds `ADMIN` or `user.read`, while `RoleGuard` enforces route access on `/app/users` (`ADMIN` or `user.read`) and `/app/admin/roles` (`ADMIN` only).
 - **Anti-Self-Demotion UI:** In `AdminUsersPage`, opening the role modal for the current operator (`targetUser.id === currentAuthUser.id`) displays a warning and disables the `USER` role option; backend middleware additionally enforces Last-Admin protection ([ARCHITECTURE.md](./ARCHITECTURE.md)).
-- **Role Governance:** `AdminRolesPage` allows `ADMIN` operators to inspect immutable `ADMIN` capabilities and toggle configurable `USER` permissions (`dashboard.view`, `user.read`, while keeping `profile.read` locked and marking roadmap capabilities read-only).
+- **Role Governance:** `AdminRolesPage` allows `ADMIN` operators to inspect immutable `ADMIN` capabilities (including `Roadmap` entries) and configure `USER` permissions (`dashboard.view`, `user.read`, and `profile.update` badged `Roadmap`), while keeping `profile.read` locked (`isImmutable: true`).
 
 ### 4.5 Federated OAuth 2.0 & Account Linking Lifecycle
 
@@ -423,7 +431,7 @@ flowchart LR
 ### 5.2 Typography & Tabular Figures
 
 - **Prose & Controls:** `Host Grotesk` (`--font-display`, `--font-body`) loaded via `apps/web/index.html`, with tight display tracking (`--tracking-display: -0.03em`).
-- **Telemetry & Identifiers:** `Atkinson Hyperlegible Mono` (`--font-outlier`) with `font-variant-numeric: tabular-nums` (`.num`, `.figure`, `td.num`) for IP addresses, timestamps, UUIDs, and recovery codes.
+- **Monospace & Telemetry:** `Atkinson Hyperlegible Mono` is loaded via `apps/web/index.html` and defined as `--font-outlier` in `tokens.css`; components apply Tailwind's `font-mono` for IP addresses, timestamps, UUIDs, and recovery codes, while `base.css` applies `font-variant-numeric: tabular-nums` to `.num`, `.figure`, and `td.num`.
 
 ### 5.3 Responsive Layout & Containment
 
@@ -468,4 +476,4 @@ AuthSphere enforces strict cache separation across dynamic API payloads, OpenAPI
 - **Type Checking:** `npm run typecheck` (or `npm run typecheck -w @authsphere/web`, running `tsc -b --noEmit`).
 - **Linting:** `npm run lint` (or `npm run lint -w @authsphere/web`, running `eslint .`).
 - **Production Build:** `npm run build:web` (or `npm run build -w @authsphere/web` orchestrated after `npm run build:shared`).
-- **Accessibility:** `:focus-visible` outlines (`--color-focus`), semantic dialog/alert ARIA attributes, `44px` mobile touch targets on standard controls, and `prefers-reduced-motion` support.
+- **Accessibility:** `:focus-visible` outlines (`--color-focus`), semantic dialog/alert ARIA attributes, `44px` minimum mobile height on `Input` and `md`/`lg` `Button` controls, and `prefers-reduced-motion` support.
