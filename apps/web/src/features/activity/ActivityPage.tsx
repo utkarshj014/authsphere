@@ -1,11 +1,14 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { activityApi, getApiErrorMessage } from "../../api/index.js";
+import {
+  activityApi,
+  DEFAULT_PAGE_SIZE,
+  EMPTY_PAGINATION,
+  formatPermissionError,
+  type SecurityEventsResponseData,
+} from "../../api/index.js";
 import { useFocusRevalidate } from "../../hooks/useFocusRevalidate.js";
-import type {
-  SecurityEventItem,
-  PaginationMeta,
-} from "../../types/auth.types.js";
+import { useAbortableQuery } from "../../hooks/useAbortableQuery.js";
 import {
   Button,
   Alert,
@@ -25,99 +28,50 @@ export const ActivityPage: React.FC = () => {
   const rawPage = parseInt(searchParams.get("page") || "1", 10);
   const currentPage = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
 
-  const [events, setEvents] = useState<SecurityEventItem[]>([]);
-  const [pagination, setPagination] = useState<PaginationMeta>({
-    page: 1,
-    limit: 20,
-    totalCount: 0,
-    totalPages: 1,
-    hasNextPage: false,
-    hasPreviousPage: false,
-  });
-  const [isLoading, setIsLoading] = useState(true);
-  const [globalError, setGlobalError] = useState<string | null>(null);
-  const [refreshTick, setRefreshTick] = useState(0);
+  const fetchEvents = useCallback(
+    async (signal: AbortSignal) =>
+      (
+        await activityApi.getSecurityEvents(
+          currentPage,
+          DEFAULT_PAGE_SIZE,
+          signal,
+        )
+      ).data,
+    [currentPage],
+  );
 
-  const formatActivityError = (err: unknown): string => {
-    const msg = getApiErrorMessage(err);
-    if (
-      msg.toLowerCase().includes("permission") ||
-      msg.toLowerCase().includes("access denied") ||
-      msg.toLowerCase().includes("forbidden")
-    ) {
-      return "Access Denied · Your role does not have permission to view security activity audit logs (dashboard.view). An administrator can configure role permissions in Role Governance.";
-    }
-    return msg;
-  };
+  const formatActivityError = useCallback(
+    (err: unknown) =>
+      formatPermissionError(
+        err,
+        "dashboard.view",
+        "view security activity audit logs",
+      ),
+    [],
+  );
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchEvents = async () => {
-      try {
-        const res = await activityApi.getSecurityEvents(currentPage, 20);
-        if (isMounted && res.data) {
-          setEvents(res.data.events);
-          setPagination(res.data.pagination);
-          setGlobalError(null);
-        }
-      } catch (err: unknown) {
-        if (isMounted) {
-          setEvents([]);
-          setPagination({
-            page: 1,
-            limit: 20,
-            totalCount: 0,
-            totalPages: 1,
-            hasNextPage: false,
-            hasPreviousPage: false,
-          });
-          setGlobalError(formatActivityError(err));
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    void fetchEvents();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [currentPage, refreshTick]);
-
-  useFocusRevalidate(() => {
-    setRefreshTick((t) => t + 1);
+  const {
+    data,
+    error: globalError,
+    setError: setGlobalError,
+    isLoading,
+    isRefreshing,
+    refresh: handleRefresh,
+    startKeyTransition,
+  } = useAbortableQuery<SecurityEventsResponseData>({
+    queryKey: currentPage,
+    fetcher: fetchEvents,
+    formatError: formatActivityError,
+    preserveDataOnRefreshError: true,
   });
 
-  const handleRefresh = async () => {
-    setIsLoading(true);
-    setGlobalError(null);
-    try {
-      const res = await activityApi.getSecurityEvents(currentPage, 20);
-      if (res.data) {
-        setEvents(res.data.events);
-        setPagination(res.data.pagination);
-      }
-    } catch (err: unknown) {
-      setEvents([]);
-      setPagination({
-        page: 1,
-        limit: 20,
-        totalCount: 0,
-        totalPages: 1,
-        hasNextPage: false,
-        hasPreviousPage: false,
-      });
-      setGlobalError(formatActivityError(err));
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  useFocusRevalidate(handleRefresh);
+
+  const events = data?.events ?? [];
+  const pagination = data?.pagination ?? EMPTY_PAGINATION;
 
   const handlePageChange = (newPage: number) => {
+    startKeyTransition();
     setSearchParams({ page: newPage.toString() });
   };
 
@@ -139,7 +93,7 @@ export const ActivityPage: React.FC = () => {
           variant="secondary"
           size="sm"
           onClick={handleRefresh}
-          disabled={isLoading}
+          disabled={isLoading || isRefreshing}
           aria-label="Refresh events"
         >
           <svg
@@ -153,7 +107,7 @@ export const ActivityPage: React.FC = () => {
             strokeLinecap="round"
             strokeLinejoin="round"
             aria-hidden="true"
-            className={isLoading ? "animate-spin" : ""}
+            className={isLoading || isRefreshing ? "animate-spin" : ""}
           >
             <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
             <path d="M3 3v5h5" />

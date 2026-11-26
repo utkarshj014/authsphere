@@ -2,11 +2,13 @@ import React, { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Button, Alert, Skeleton, Input } from "../../components/ui/index.js";
 import { authApi, getApiErrorMessage } from "../../api/index.js";
+import { useAuthStore } from "../../stores/auth.store.js";
 import { ROUTES } from "../../routes/routes.config.js";
 
 type VerificationStatus = "verifying" | "success" | "error" | "missing_token";
 
 export const VerifyEmailPage: React.FC = () => {
+  const authStatus = useAuthStore((s) => s.status);
   const [searchParams] = useSearchParams();
   const token = searchParams.get("token");
   const emailParam = searchParams.get("email") || "";
@@ -33,6 +35,9 @@ export const VerifyEmailPage: React.FC = () => {
       .verifyEmail(token)
       .then(() => {
         setStatus("success");
+        if (useAuthStore.getState().status === "authenticated") {
+          void useAuthStore.getState().refreshUser();
+        }
       })
       .catch((err: unknown) => {
         setErrorMessage(getApiErrorMessage(err));
@@ -114,9 +119,16 @@ export const VerifyEmailPage: React.FC = () => {
           </Alert>
 
           <div className="pt-2">
-            <Link to={ROUTES.LOGIN} className="w-full block">
+            <Link
+              to={
+                authStatus === "authenticated" ? ROUTES.APP.ROOT : ROUTES.LOGIN
+              }
+              className="w-full block"
+            >
               <Button variant="primary" className="w-full">
-                Proceed to Sign In
+                {authStatus === "authenticated"
+                  ? "Return to Console"
+                  : "Proceed to Sign In"}
               </Button>
             </Link>
           </div>

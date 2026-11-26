@@ -4,7 +4,7 @@ import { useAuthStore } from "../../stores/auth.store.js";
 import { ROUTES } from "../routes.config.js";
 
 export const AuthGuard: React.FC = () => {
-  const { status, bootstrapAuth } = useAuthStore();
+  const { status, sessionExpired, bootstrapAuth } = useAuthStore();
   const location = useLocation();
 
   if (status === "idle" || status === "loading") {
@@ -65,8 +65,12 @@ export const AuthGuard: React.FC = () => {
   }
 
   if (status === "unauthenticated") {
-    const returnTo = encodeURIComponent(location.pathname + location.search);
-    return <Navigate to={`${ROUTES.LOGIN}?returnTo=${returnTo}`} replace />;
+    const params = new URLSearchParams();
+    if (sessionExpired) {
+      params.set("session_expired", "true");
+    }
+    params.set("returnTo", location.pathname + location.search);
+    return <Navigate to={`${ROUTES.LOGIN}?${params.toString()}`} replace />;
   }
 
   return <Outlet />;

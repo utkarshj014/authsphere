@@ -27,8 +27,11 @@ export const Pagination: React.FC<PaginationProps> = ({
       className="flex items-center justify-between py-3 border-t border-[var(--color-rule)] mt-4"
     >
       <div className="text-xs text-[var(--color-muted)] font-mono">
-        Page <span className="text-[var(--color-ink)] font-semibold">{page}</span> of{" "}
-        <span className="text-[var(--color-ink)] font-semibold">{totalPages}</span>
+        Page{" "}
+        <span className="text-[var(--color-ink)] font-semibold">{page}</span> of{" "}
+        <span className="text-[var(--color-ink)] font-semibold">
+          {totalPages}
+        </span>
       </div>
 
       <div className="flex items-center gap-2">

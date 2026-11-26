@@ -2,9 +2,10 @@ import { z } from "zod";
 import { TOTP_CODE_REGEX } from "../../lib/totp/index.js";
 import { ROLES, SECURITY_EVENT_TYPES } from "@authsphere/shared";
 
+export const passwordSchema = z.string().min(8).max(128);
+export const emailSchema = z.email().trim().toLowerCase();
+
 const nameSchema = z.string().trim().min(1).max(50);
-const passwordSchema = z.string().min(8).max(128);
-const emailSchema = z.email().trim().toLowerCase();
 const totpCodeSchema = z
   .string()
   .trim()

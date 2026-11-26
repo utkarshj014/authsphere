@@ -1,11 +1,11 @@
 # Architecture Decision Records (ADR) — AuthSphere
 
-This document records the **107 formal architectural and engineering decisions** (`ADR-001` through `ADR-107`) made during the design and evolution of **AuthSphere** — an authentication, authorization, and session-management platform.
+This document records the **109 formal architectural and engineering decisions** (`ADR-001` through `ADR-109`) made during the design and evolution of **AuthSphere** — an authentication, authorization, and session-management platform.
 
 > **AuthSphere Architecture & Engineering Documentation Suite:**
 >
 > - [ARCHITECTURE.md](ARCHITECTURE.md) — System Design, Layered Topology, Prisma ER Model & Canonical Route Inventory
-> - [FRONTEND_ARCHITECTURE.md](FRONTEND_ARCHITECTURE.md) — SPA Presentation Shells, Routing Guards, Token Refresh Mutex & Visual Tokens
+> - [FRONTEND_ARCHITECTURE.md](FRONTEND_ARCHITECTURE.md) — SPA Presentation Shells, Routing Guards, Single-Flight Token Refresh & Visual Tokens
 > - [OAUTH.md](OAUTH.md) — OAuth 2.0 PKCE Protocol, Identity Resolution Matrix & Threat Mitigation
 > - [DEPLOYMENT.md](DEPLOYMENT.md) — Dual-Target Compute (Lambda / ECS Fargate), Neon/Upstash Topologies & CI/CD
 > - [TESTING.md](TESTING.md) — Hermetic Test Pyramid, Isolation Guarantees & Security Invariant Verification
@@ -60,6 +60,7 @@ This document records the **107 formal architectural and engineering decisions**
 - [ADR-089: Asynchronous Security Event Notification Pipeline for High-Risk Credential Mutations](#adr-089--asynchronous-security-event-notification-pipeline-for-high-risk-credential-mutations)
 - [ADR-090: Keyless Cloud Deployment via AWS IAM OpenID Connect (OIDC) Federation](#adr-090--keyless-cloud-deployment-via-aws-iam-openid-connect-oidc-federation)
 - [ADR-106: Global Non-Cacheable HTTP Baseline (`Cache-Control: no-store`) with Targeted Documentation Revalidation (`no-cache`)](#adr-106--global-non-cacheable-http-baseline-cache-control-no-store-with-targeted-documentation-revalidation-no-cache)
+- [ADR-108: Pino HTTP Log Redaction for Session Credentials and OAuth Redirects](#adr-108--pino-http-log-redaction-for-session-credentials-and-oauth-redirects)
 
 </details>
 
@@ -70,7 +71,7 @@ This document records the **107 formal architectural and engineering decisions**
 - [ADR-013: Hard Deletion Strategy for Session Revocation](#adr-013--hard-deletion-strategy-for-session-revocation)
 - [ADR-014: Refresh Token Rotation with Automatic Reuse Detection](#adr-014--refresh-token-rotation-with-automatic-reuse-detection)
 - [ADR-015: Pre-Persistence UUIDv7 Session Identifiers](#adr-015--pre-persistence-uuidv7-session-identifiers)
-- [ADR-016: Centralized Auth Cookie Sanitization in Error Middleware](#adr-016--centralized-auth-cookie-sanitization-in-error-middleware)
+- [ADR-016: Auth Boundary Cookie Sanitization for Silent Token Rotation](#adr-016--auth-boundary-cookie-sanitization-for-silent-token-rotation)
 - [ADR-027: Session Revocation on Password Change and Reset](#adr-027--session-revocation-on-password-change-and-reset)
 - [ADR-028: Password Change Distinctness Enforcement](#adr-028--password-change-distinctness-enforcement)
 - [ADR-029: `deleteMany` for Idempotent Session Deletion](#adr-029--deletemany-for-idempotent-session-deletion)
@@ -141,6 +142,7 @@ This document records the **107 formal architectural and engineering decisions**
 - [ADR-093: Universal UUIDv7 Primary Key Strategy Across Relational Entities](#adr-093--universal-uuidv7-primary-key-strategy-across-relational-entities)
 - [ADR-094: Relational Deletion Cascades and Administrative Role Immutability](#adr-094--relational-deletion-cascades-and-administrative-role-immutability)
 - [ADR-095: Dual Database Connection Strategy (Neon Direct Migrations vs Pooled Runtime)](#adr-095--dual-database-connection-strategy-neon-direct-migrations-vs-pooled-runtime)
+- [ADR-109: Least-Privilege Bootstrap Administrator Seeding](#adr-109--least-privilege-bootstrap-administrator-seeding)
 
 </details>
 
@@ -176,7 +178,7 @@ This document records the **107 formal architectural and engineering decisions**
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-107)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-109)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -193,7 +195,7 @@ This document records the **107 formal architectural and engineering decisions**
 - [ADR-013: Hard Deletion Strategy for Session Revocation](#adr-013--hard-deletion-strategy-for-session-revocation)
 - [ADR-014: Refresh Token Rotation with Automatic Reuse Detection](#adr-014--refresh-token-rotation-with-automatic-reuse-detection)
 - [ADR-015: Pre-Persistence UUIDv7 Session Identifiers](#adr-015--pre-persistence-uuidv7-session-identifiers)
-- [ADR-016: Centralized Auth Cookie Sanitization in Error Middleware](#adr-016--centralized-auth-cookie-sanitization-in-error-middleware)
+- [ADR-016: Auth Boundary Cookie Sanitization for Silent Token Rotation](#adr-016--auth-boundary-cookie-sanitization-for-silent-token-rotation)
 - [ADR-017: Human-Readable Duration Synchronization](#adr-017--human-readable-duration-synchronization)
 - [ADR-018: Repository-Level Filtering of Expired Sessions](#adr-018--repository-level-filtering-of-expired-sessions)
 - [ADR-019: Standalone Function Export Pattern](#adr-019--standalone-function-export-pattern)
@@ -285,6 +287,8 @@ This document records the **107 formal architectural and engineering decisions**
 - [ADR-105: Redis-Backed Dual-Tier Session Revocation Engine with Multi-Key Pipelining (`redis.mget`)](#adr-105--redis-backed-dual-tier-session-revocation-engine-with-multi-key-pipelining-redismget)
 - [ADR-106: Global Non-Cacheable HTTP Baseline (`Cache-Control: no-store`) with Targeted Documentation Revalidation (`no-cache`)](#adr-106--global-non-cacheable-http-baseline-cache-control-no-store-with-targeted-documentation-revalidation-no-cache)
 - [ADR-107: Deferred MFA Security Event Attribution via Polymorphic Challenge State](#adr-107--deferred-mfa-security-event-attribution-via-polymorphic-challenge-state)
+- [ADR-108: Pino HTTP Log Redaction for Session Credentials and OAuth Redirects](#adr-108--pino-http-log-redaction-for-session-credentials-and-oauth-redirects)
+- [ADR-109: Least-Privilege Bootstrap Administrator Seeding](#adr-109--least-privilege-bootstrap-administrator-seeding)
 
 </details>
 
@@ -443,7 +447,7 @@ Custom error hierarchy extending `AppError`, coupled with `asyncHandler` HOF and
 ```
 AppError (base — carries statusCode)
 ├── ValidationError (400 — carries errors[] array)
-├── UnauthorizedError (401 — triggers cookie cleanup)
+├── UnauthorizedError (401 — auth boundary clears stale cookies [ADR-016])
 ├── ForbiddenError (403)
 └── TooManyRequestsError (429)
 ```
@@ -1218,7 +1222,7 @@ The default `express.json()` body parser accepts payloads up to 100 KB, which is
 
 ### Decision
 
-Set an explicit body size limit of `16kb` via `express.json({ limit: "16kb" })` in `app.ts`.
+Set an explicit body size limit of 16 KB via shared `JSON_BODY_LIMIT_BYTES` (`16 * 1024`) exported from `app.ts` and enforced in both `express.json({ limit: JSON_BODY_LIMIT_BYTES })` and the Lambda JSON buffer fallback parser (`lambda.ts`).
 
 ### Rationale
 
@@ -1940,7 +1944,7 @@ The application initially utilized `redis` (node-redis v6) for fixed-window rate
 
 Migrate all Redis operations across the codebase to `ioredis` and uninstall `redis` (node-redis):
 
-1. **Unified Client Instance (`src/lib/redis.ts`)**: A single lightweight `ioredis` instance manages application-level operations, configured with `lazyConnect: true` and `maxRetriesPerRequest: null`, completely decoupled from specific middleware scripts.
+1. **Unified Client Instance (`src/lib/redis.ts`)**: A single lightweight `ioredis` instance manages application-level operations, configured with `lazyConnect: true`, `maxRetriesPerRequest: 1`, `enableOfflineQueue: false`, bounded timeouts (`connectTimeout: 2000`, `commandTimeout: 1000`), and a `redis.on("error", ...)` listener so idle socket disconnects cannot crash the process. (`maxRetriesPerRequest: null` is reserved exclusively for BullMQ worker connections in `src/lib/queue.ts`.)
 2. **Atomic Middleware Rate Limiting:** Counter increments and window expirations execute via atomic Lua scripting (`redis.eval`) directly within middleware [ADR-050], eliminating multi-command transaction overhead while maintaining atomic execution.
 3. **Dedicated Queue & Worker Connections (`src/lib/queue.ts`)**: BullMQ Workers and Queues spawn dedicated `ioredis` connections via `createBullMQConnection()`, isolating blocking queue operations (e.g. `BRPOPLPUSH`/`BLMOVE`) from general caching and rate limiting requests.
 4. **Lifecycle & Status Alignment:** Leverage native `redis.status === "ready"` directly for fail-safe connectivity checks across rate limiter middleware and cache access layers, ensuring fail-open resilience without custom wrapper properties.
@@ -2086,7 +2090,7 @@ Deploying Express applications to serverless AWS Lambda introduces two constrain
 
 Implement a serverless runtime adapter and reverse-proxy architecture:
 
-1. **Serverless Express Adapter (`apps/api/src/lambda.ts`):** Adapt Express (`app.ts`) to AWS Lambda via `@codegenie/serverless-express`. Cold starts initialize Redis eagerly with fallback to degraded mode; warm invocations use a 100ms timeout guard to recover disconnected sockets.
+1. **Serverless Express Adapter (`apps/api/src/lambda.ts`):** Construct `lambdaApp` and `@codegenie/serverless-express` once during Lambda INIT, and run a unified `ensureRedisReady()` gate (`500ms` bounded settlement wait with a `5000ms` failure cooldown) before dispatching requests so Redis outages fall back to degraded mode cleanly.
 2. **Synchronous Execution Guard (`QUEUE_DRIVER=sync`):** In AWS Lambda (`isLambdaRuntime` detected via environment), `enqueueEmailJob()` awaits email dispatch directly within the handler before response completion, preventing tasks from freezing mid-flight.
 3. **Edge Reverse Proxy (`apps/web/vercel.ts` via `@vercel/config/v1` [ADR-085]):** Configure edge rewrites (`/api/:path*` -> backend endpoint). Browsers interact strictly same-origin (`/api/*`), preserving `SameSite=Lax` cookies and eliminating CORS preflights.
 4. **Root Cookie Scoping (`path: "/"`):** Because reverse-proxy rewrites map public `/api/auth/*` to Express `/auth/*`, authentication cookies are scoped to root `path: "/"` to ensure consistent delivery across edge proxies [superseding ADR-042].
@@ -2683,19 +2687,22 @@ Expose `mfaEnabled: boolean` as a first-class attribute in the authenticated use
 
 Re-authenticating on a client device that already possesses an active session overwrites the client's single HttpOnly refresh token cookie, stranding the previous session record in PostgreSQL as an un-rotatable orphan and generating duplicate client device listings during active session introspection (`GET /sessions` [ADR-068]).
 
+Previously, attempting to deduplicate via a `(userId, userAgent, ipAddress)` tuple broke in production: dynamic ISP DHCP leases, cellular handovers (CGNAT), and cloud proxy routing constantly rotated client IPs, causing the tuple match to fail and spawning duplicate ghost sessions on the same physical browser.
+
 ### Decision
 
 Enforce atomic client-device session supersession in `authRepository.createSession` within a Prisma interactive transaction:
 
-1. **Atomic Pruning:** Before inserting a new session record, delete all active sessions matching the caller's device tuple: `(userId, userAgent, ipAddress)`.
-2. **Encapsulated Lifecycle:** Centralizing pruning inside `createSession` automatically covers all entry points (`login`, `mfaVerifyLogin`, `oauthCallback`, `verifyMagicLink` [ADR-039]) without controller-level branching.
-3. **SSOT Read Path:** `sessionsService.getActiveSessions` queries the database directly without ad-hoc in-memory deduplication filters.
+1. **Atomic Pruning:** Before inserting a new session record, delete prior sessions matching the caller's device context: `(userId, userAgent)`. Volatile IP addresses are excluded from session identity and stored strictly as audit telemetry.
+2. **Encapsulated Lifecycle:** Centralizing pruning inside `createSession` automatically covers all entry points (`login`, `mfaVerifyLogin`, `oauthCallback`, `verifyMagicLink` [ADR-039]) without controller-level branching or leaky cookie abstractions.
+3. **SSOT Read Path:** `sessionsService.getActiveSessions` queries the database directly without ad-hoc in-memory deduplication filters, sorting the active caller session first (`isCurrent`).
 
 ### Rationale & Invariants
 
-- **Accurate Telemetry:** Eliminates ghost sessions and preserves an exact 1:1 mapping between physical devices and active session records.
+- **Dynamic IP Resilience:** Eliminates volatile IP address checks from session identification; IP changes never prevent supersession.
+- **Accurate Telemetry:** Eliminates ghost duplicate sessions and preserves an exact 1:1 mapping between distinct devices and active session records.
 - **Transactional Hard Deletion:** Orphaned refresh token hashes are hard-deleted in the same transaction [ADR-013, ADR-029], instantly revoking replay vectors.
-- **Scoped Invalidation:** Deletion is strictly bounded to the matching `(userId, userAgent, ipAddress)` tuple; remote sessions on other devices or networks remain unaffected.
+- **Zero Controller Overhead:** Keeps controllers and services pure, serverless-agnostic, and clean.
 
 ---
 
@@ -2829,3 +2836,49 @@ Persist the initiating authentication event type inside the ephemeral `MfaChalle
 - **Accurate Security Telemetry:** Preserves 100% fidelity in security audit logs and user activity ledgers regardless of whether MFA was challenged.
 - **Zero Ephemeral Secret Exposure:** Propagates only the typed enum without leaking sensitive payload data or OAuth state across challenges.
 - **Relational Simplicity:** Extends the existing ephemeral challenge lifecycle without introducing auxiliary audit tables or Redis queues.
+
+---
+
+## ADR-108 — Pino HTTP Log Redaction for Session Credentials and OAuth Redirects
+
+**Status:** Accepted _(Extends ADR-009, ADR-033, ADR-080)_
+
+### Context
+
+`pino-http` logs incoming request metadata and outgoing response headers for operational tracing. Without header redaction, `Authorization` bearer headers, session `Cookie` / `Set-Cookie` headers containing raw JWTs, and `302` OAuth `Location` redirect URLs carrying ephemeral `state`, `code_challenge`, or `mfaToken` values can persist in plaintext across stdout and CloudWatch logs.
+
+### Decision
+
+Configure centralized `loggerRedactionConfig` in `apps/api/src/lib/logger.ts` with `censor: "[REDACTED]"` on the shared Pino instance:
+
+- `req.headers.authorization`
+- `req.headers.cookie`
+- `res.headers["set-cookie"]`
+- `res.headers.location`
+
+### Rationale
+
+- **Defense-in-Depth Secret Protection:** Prevents session tokens, API credentials, and OAuth redirect state from appearing in structured request/response logs while preserving request IDs (`X-Request-Id`), routes, status codes, and latency metrics.
+- **Single Source of Truth:** Applying redaction on the base `logger` protects both `pino-http` HTTP traces (`middlewares/request-logger.ts`) and any structured domain logs passing `req`/`res` objects.
+
+---
+
+## ADR-109 — Least-Privilege Bootstrap Administrator Seeding
+
+**Status:** Accepted _(Extends ADR-026, ADR-032)_
+
+### Context
+
+Automated database seeding (`apps/api/prisma/seed.ts`) bootstraps system roles, permissions, and an optional initial administrator from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`. Pre-verifying new seeded accounts or overwriting existing users' passwords during re-runs risks unverified ownership claims or silently mutating existing OAuth-only or MFA-enrolled accounts when promoting an account to `ADMIN`.
+
+### Decision
+
+Separate role promotion from initial account creation in `apps/api/prisma/seed.ts`:
+
+1. **Existing Account Preservation:** When `SEED_ADMIN_EMAIL` matches an existing user, update only `roleId` to `ADMIN` (if not already `ADMIN`) without altering `passwordHash`, verification status, OAuth links, or MFA settings.
+2. **Unverified Bootstrap Creation:** When creating a new bootstrap administrator, validate `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` against shared `emailSchema` and `passwordSchema` from `auth.validation.ts` and initialize `isEmailVerified: false`.
+
+### Rationale
+
+- **Explicit Ownership Claim:** New seeded administrators must complete standard email verification before signing in or managing security settings.
+- **Idempotent Safe Re-Runs:** Re-executing the seed script in production safely promotes an existing operator account without disturbing active credentials or OAuth sign-in methods.

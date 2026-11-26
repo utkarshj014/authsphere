@@ -1,12 +1,12 @@
 # Frontend Architecture & System Design — AuthSphere
 
-This document is the single source of truth (SSOT) for **AuthSphere's** frontend web architecture (`apps/web`), covering presentation shells, declarative routing and guards, client state management, the HTTP refresh mutex, Hallmark OKLCH visual tokens, and client-side execution flows.
+This document is the single source of truth (SSOT) for **AuthSphere's** frontend web architecture (`apps/web`), covering presentation shells, declarative routing and guards, client state management, single-flight HTTP token refresh, Hallmark OKLCH visual tokens, and client-side execution flows.
 
 > **AuthSphere Architecture & Engineering Documentation Suite:**
 >
 > - [ARCHITECTURE.md](./ARCHITECTURE.md) — System Design, Component Topology & Core Data Models
 > - [FRONTEND_ARCHITECTURE.md](./FRONTEND_ARCHITECTURE.md) — Frontend Architecture, Component Topology & Control Plane
-> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 107 Formal ADRs, Security Invariants & Technical Trade-offs
+> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 109 Formal ADRs, Security Invariants & Technical Trade-offs
 > - [OAUTH.md](./OAUTH.md) — OAuth 2.0 PKCE Social Authentication & Integration Protocols
 > - [DEPLOYMENT.md](./DEPLOYMENT.md) — Cloud Infrastructure, Dual-Compute (Lambda/ECS) & Runbooks
 > - [TESTING.md](./TESTING.md) — Hermetic Test Pyramid, Invariant Verification & CI Strategies
@@ -36,7 +36,7 @@ flowchart TD
         UI["Feature Views & Layout Shells (React 19)"]
         Router["Declarative Router & Guards (React Router 7)"]
         Store["Volatile Identity Store (Zustand 5)"]
-        Client["Centralized HTTP Client (Axios + Mutex)"]
+        Client["Centralized HTTP Client (Axios + Single-Flight Refresh)"]
 
         UI --> Router
         Router --> Store
@@ -63,18 +63,18 @@ flowchart TD
 
 ### Technology Baseline (`apps/web/package.json`)
 
-| Technology Layer       | Package & Version                                                        | Primary Role                                                                         |
-| :--------------------- | :----------------------------------------------------------------------- | :----------------------------------------------------------------------------------- |
-| **Build & Tooling**    | `vite` `8.1.1`, `@vitejs/plugin-react` `6.0.3`                           | ES module dev server, HMR, code splitting, and local `/api` dev proxy.               |
-| **UI Framework**       | `react` `19.2.7`, `react-dom` `19.2.7`                                   | Declarative component rendering, hooks, and `<Suspense>` boundaries.                 |
-| **Routing System**     | `react-router-dom` `7.18.1`                                              | Declarative routes, boundary guards, URL search param sync, and error boundaries.    |
-| **Styling & Tokens**   | `tailwindcss` `4.3.3`, `@tailwindcss/vite` `4.3.3`                       | `@theme static` integration with Hallmark dark OKLCH tokens.                         |
-| **Client State**       | `zustand` `5.0.14`                                                       | Volatile in-memory session posture and auth lifecycle state.                         |
-| **HTTP Transport**     | `axios` `1.18.1`                                                         | Request/response interceptors, error sanitization, and silent token refresh mutex.   |
-| **Forms & Validation** | `react-hook-form` `7.81.0`, `zod` `4.4.3`, `@hookform/resolvers` `5.4.0` | Isolated form state and schema-backed client validation (`schemas/auth.schemas.ts`). |
-| **TOTP QR Codes**      | `qrcode` `1.5.4`                                                         | Client-side QR data URL generation for authenticator enrollment.                     |
-| **Edge Configuration** | `@vercel/config` `0.12.0`                                                | Code-first production rewrites, SPA fallback, and docs redirects (`vercel.ts`).      |
-| **Shared Domain**      | `@authsphere/shared` (`*`)                                               | Canonical role names, permissions, OAuth providers, and security event types.        |
+| Technology Layer       | Package & Version                                                        | Primary Role                                                                               |
+| :--------------------- | :----------------------------------------------------------------------- | :----------------------------------------------------------------------------------------- |
+| **Build & Tooling**    | `vite` `8.1.1`, `@vitejs/plugin-react` `6.0.3`                           | ES module dev server, HMR, code splitting, and local `/api` dev proxy.                     |
+| **UI Framework**       | `react` `19.2.7`, `react-dom` `19.2.7`                                   | Declarative component rendering, hooks, and `<Suspense>` boundaries.                       |
+| **Routing System**     | `react-router-dom` `7.18.1`                                              | Declarative routes, boundary guards, URL search param sync, and error boundaries.          |
+| **Styling & Tokens**   | `tailwindcss` `4.3.3`, `@tailwindcss/vite` `4.3.3`                       | `@theme static` integration with Hallmark dark OKLCH tokens.                               |
+| **Client State**       | `zustand` `5.0.14`                                                       | Volatile in-memory session posture and auth lifecycle state.                               |
+| **HTTP Transport**     | `axios` `1.18.1`                                                         | Request/response interceptors, error sanitization, and single-flight silent token refresh. |
+| **Forms & Validation** | `react-hook-form` `7.81.0`, `zod` `4.4.3`, `@hookform/resolvers` `5.4.0` | Isolated form state and schema-backed client validation (`schemas/auth.schemas.ts`).       |
+| **TOTP QR Codes**      | `qrcode` `1.5.4`                                                         | Client-side QR data URL generation for authenticator enrollment.                           |
+| **Edge Configuration** | `@vercel/config` `0.12.0`                                                | Code-first production rewrites, SPA fallback, and docs redirects (`vercel.ts`).            |
+| **Shared Domain**      | `@authsphere/shared` (`*`)                                               | Canonical role names, permissions, OAuth providers, and security event types.              |
 
 ### Ingress & Cookie Boundary
 
@@ -87,12 +87,13 @@ flowchart TD
 
 ```text
 apps/web/src/
-├── api/             # Axios client, refresh mutex, error sanitizer, and domain API modules
+├── api/             # Axios client, single-flight refresh, error sanitizer, and domain API modules
 ├── components/
-│   ├── auth/        # Shared authentication controls (SocialAuthButtons)
+│   ├── auth/        # Shared OAuth provider catalog and auth buttons (oauthProviders, SocialAuthButtons)
 │   ├── layout/      # Presentation shells (AuthLayout, AppShell)
 │   └── ui/          # Zero-dependency primitives (Alert, Badge, Button, Input, Modal, Pagination, Skeleton)
 ├── features/        # Feature views (activity, admin, auth, common, overview, public, security, sessions)
+├── hooks/           # Shared query lifecycle and focus revalidation hooks (useAbortableQuery, useFocusRevalidate)
 ├── routes/          # Router definition, canonical route config, boundary guards, and error boundary
 ├── schemas/         # Centralized Zod validation schemas (auth.schemas.ts)
 ├── stores/          # Volatile Zustand auth store (auth.store.ts)
@@ -104,7 +105,7 @@ apps/web/src/
 ### 3.1 Presentation & Shell Layer
 
 1. **`AuthLayout` (`components/layout/AuthLayout.tsx`):**
-   - Shell for guest authentication flows (`/login`, `/register`, `/forgot-password`, `/reset-password`, `/verify-email`, `/magic-link/verify`).
+   - Shell for both guest-only flows (`/login`, `/register`, `/forgot-password`) and session-agnostic token/action flows (`/reset-password`, `/verify-email`, `/magic-link/verify`).
    - Centers a `max-w-md` card (`bg-paper-2 border border-rule rounded-card`) with header branding, version tag (`v1.0.0`), layout-level `<Suspense>` skeleton fallback, and footer links (`/privacy`, `/api/docs/`, `/api/openapi.json`, `/`).
 
 2. **`AppShell` (`components/layout/AppShell.tsx`):**
@@ -112,7 +113,7 @@ apps/web/src/
    - **Desktop (`>= 1024px` / `lg`):** Persistent `256px` (`w-64`) sidebar with active route highlighting, developer API links, user badge, and Sign Out action; `<main>` is constrained to `max-w-6xl`.
    - **Mobile & Tablet (`< 1024px`):** Sticky header bar with slide-over navigation drawer and backdrop overlay.
    - Filters navigation links dynamically by `ROLES.ADMIN` (`adminOnly` for `/app/admin/roles`) and `PERMISSIONS.USER_READ` (`requiredPermission` for `/app/users`).
-   - Registers a `window.focus` listener that triggers `refreshUser()` in the background.
+   - Registers `useFocusRevalidate()` to call `refreshUser()` in the background (throttled to a 30s cooldown) when the browser window regains focus.
 
 3. **Custom UI Primitives (`components/ui/`):**
    - Seven zero-dependency primitives (`Alert`, `Badge`, `Button`, `Input`, `Modal`, `Pagination`, `Skeleton`) styled with Tailwind CSS v4 and Hallmark OKLCH variables.
@@ -122,32 +123,29 @@ apps/web/src/
 
 ### 3.2 Routing & Access Control Guards
 
-Routing is declared in `apps/web/src/routes/index.tsx` using React Router 7 and partitioned across public routes, guest-only flows, and authenticated console views:
+Routing is declared in `apps/web/src/routes/index.tsx` using React Router 7 and partitioned across public views, guest-only flows, session-agnostic token verification flows, and authenticated console views:
 
 ```mermaid
 flowchart TD
-    RouteRequest["Route Navigation"] --> IngressGuard{"useAuthStore.status"}
+    RouteRequest["Route Navigation"] --> RouteBranch{"Route Group"}
 
-    subgraph StatusEvaluation ["1. Session Posture Evaluation"]
-        IngressGuard -->|"idle | loading"| Skeleton["Render Guard Skeleton"]
-        IngressGuard -->|"unavailable"| OutageScreen["Render Service Unavailable + Retry"]
-        IngressGuard -->|"authenticated"| AuthEvaluated["Authenticated Context"]
-        IngressGuard -->|"unauthenticated"| UnauthEvaluated["Unauthenticated Context"]
-    end
+    RouteBranch -->|"Public or Session-Agnostic"| RenderPublic["Render View Immediately<br/>(/, /privacy, /verify-email, /reset-password, /magic-link/verify)"]
 
-    subgraph RouteGuards ["2. Boundary Guards"]
-        UnauthEvaluated -->|"Guest route (/login, ...)"| GuestGuard["GuestGuard: Render Outlet"]
-        AuthEvaluated -->|"Guest route (/login, ...)"| GuestRedirect["GuestGuard: Redirect to returnTo or /app"]
+    RouteBranch -->|"Guest-Only Auth Forms"| GuestCheck{"useAuthStore.status<br/>(/login, /register, /forgot-password)"}
+    GuestCheck -->|"authenticated"| GuestRedirect["GuestGuard: Redirect via resolvePostAuthRedirect"]
+    GuestCheck -->|"idle, loading, unauthenticated, or unavailable"| GuestRender["GuestGuard: Render AuthLayout + View"]
 
-        UnauthEvaluated -->|"Protected (/app/*)"| AuthGuard["AuthGuard: Redirect to /login?returnTo=..."]
-        AuthEvaluated -->|"Protected (/app/*)"| AppShellMount["Mount AppShell"]
+    RouteBranch -->|"Protected (/app/*)"| AuthCheck{"useAuthStore.status"}
+    AuthCheck -->|"idle or loading"| Skeleton["AuthGuard: Render Guard Skeleton"]
+    AuthCheck -->|"unavailable"| OutageScreen["AuthGuard: Service Unavailable + Retry"]
+    AuthCheck -->|"unauthenticated"| AuthRedirect["AuthGuard: Redirect to /login?returnTo=...<br/>(+ session_expired=true if expired)"]
+    AuthCheck -->|"authenticated"| AppShellMount["Mount AppShell"]
 
-        AppShellMount --> AdminCheck{"Route requires RoleGuard?"}
-        AdminCheck -->|"No"| RenderPage["Render Feature View"]
-        AdminCheck -->|"Yes"| RoleGuard{"Role or Permission Match?"}
-        RoleGuard -->|"Yes"| RenderPage
-        RoleGuard -->|"No"| Inline403["RoleGuard: Render Inline 403 Screen"]
-    end
+    AppShellMount --> AdminCheck{"Route requires RoleGuard?"}
+    AdminCheck -->|"No"| RenderPage["Render Feature View"]
+    AdminCheck -->|"Yes"| RoleGuard{"Role or Permission Match?"}
+    RoleGuard -->|"Yes"| RenderPage
+    RoleGuard -->|"No"| Inline403["RoleGuard: Render Inline 403 Screen"]
 ```
 
 #### Canonical Route Inventory (`routes/index.tsx` & `routes/routes.config.ts`)
@@ -159,9 +157,9 @@ flowchart TD
 | `/login`             | `GuestGuard`              | `AuthLayout` | Password, magic link, OAuth entry, and inline MFA challenge (`LoginPage`).                |
 | `/register`          | `GuestGuard`              | `AuthLayout` | Account signup with Zod password complexity rules (`RegisterPage`).                       |
 | `/forgot-password`   | `GuestGuard`              | `AuthLayout` | Password reset request dispatch (`ForgotPasswordPage`).                                   |
-| `/reset-password`    | `GuestGuard`              | `AuthLayout` | Token-based password reset with inline MFA prompt when enabled (`ResetPasswordPage`).     |
-| `/verify-email`      | `GuestGuard`              | `AuthLayout` | Automated email token confirmation with resend option (`VerifyEmailPage`).                |
-| `/magic-link/verify` | `GuestGuard`              | `AuthLayout` | One-time magic link verification with inline MFA challenge (`MagicLinkVerifyPage`).       |
+| `/reset-password`    | Public (Session-agnostic) | `AuthLayout` | Token-based password reset with inline MFA prompt when enabled (`ResetPasswordPage`).     |
+| `/verify-email`      | Public (Session-agnostic) | `AuthLayout` | Automated email token confirmation with resend option (`VerifyEmailPage`).                |
+| `/magic-link/verify` | Public (Session-agnostic) | `AuthLayout` | One-time magic link verification with inline MFA challenge (`MagicLinkVerifyPage`).       |
 | `/app`               | `AuthGuard`               | `AppShell`   | Account posture summary, current session, and recent events (`OverviewPage`).             |
 | `/app/security`      | `AuthGuard`               | `AppShell`   | TOTP enrollment/disable, recovery codes, password change, OAuth linking (`SecurityPage`). |
 | `/app/sessions`      | `AuthGuard`               | `AppShell`   | Active device session registry and revocation controls (`SessionsPage`).                  |
@@ -172,11 +170,11 @@ flowchart TD
 
 #### Guard & Route Contracts
 
-- **`AuthGuard` (`routes/guards/AuthGuard.tsx`):** Permits `status === "authenticated"`; redirects `unauthenticated` users to `/login?returnTo=<encoded>`; renders a full-page Service Unavailable recovery screen with a `Retry Connection` button (`bootstrapAuth()`) on `unavailable`.
-- **`GuestGuard` (`routes/guards/GuestGuard.tsx`):** Redirects already-authenticated users away from guest auth pages to a validated local `returnTo` path (checked by `isSafeLocalPath` to reject non-`/` prefixes, `//`, `/\`, and `/app/security`) or `/app`.
+- **`AuthGuard` (`routes/guards/AuthGuard.tsx`):** Permits `status === "authenticated"`; renders a guard skeleton while `idle | loading`; renders a `"Service Unavailable"` recovery screen with `Retry Connection` (`bootstrapAuth()`) on `unavailable`; redirects `unauthenticated` users to `/login?returnTo=<encoded>` (appending `session_expired=true` when `sessionExpired` is set).
+- **`GuestGuard` (`routes/guards/GuestGuard.tsx`):** Renders `<Outlet />` without blocking during `idle | loading`, avoiding unauthenticated transition flicker. Once `status === "authenticated"`, redirects via `resolvePostAuthRedirect(returnTo)` in `routes.config.ts` (allowing only single-leading-slash local paths outside `/app/security`, defaulting to `/app`).
 - **`RoleGuard` (`routes/guards/RoleGuard.tsx`):** Grants access when `user.role === allowedRole` or `user.permissions` includes `requiredPermission`. Denied requests render an inline `403 Forbidden` panel preserving the active session.
 - **`RootErrorBoundary` (`routes/guards/RootErrorBoundary.tsx`):** Top-level router `errorElement` providing `"Reload Screen"` and `"Go to Overview"` recovery actions.
-- **`routes.config.ts` SSOT:** Centralizes `ROUTES`, `OAUTH_URLS`, `DOCS_URLS`, and `PUBLIC_AUTH_ROUTES` (used by `api/client.ts` so `401` failures on public pages do not trigger `/app/*` expiration redirects).
+- **`routes.config.ts` SSOT:** Centralizes `ROUTES`, `OAUTH_URLS`, `DOCS_URLS`, and `resolvePostAuthRedirect` so routes, proxy docs endpoints, and safe redirect validation stay consistent across guards and pages.
 
 ---
 
@@ -184,11 +182,11 @@ flowchart TD
 
 | State Domain                 | Owner / Mechanism                                 | Scope & Boundary                                                                                                |
 | :--------------------------- | :------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------- |
-| **Authentication Posture**   | Zustand Store (`useAuthStore`)                    | Volatile in-memory cache of `user: UserProfile \| null` and `status: AuthStatus`. Never persisted to storage.   |
+| **Authentication Posture**   | Zustand Store (`useAuthStore`)                    | Volatile in-memory `user`, `status: AuthStatus`, and `sessionExpired: boolean`. Never persisted to Web Storage. |
 | **Transient MFA Challenges** | Local Component State (`useState`)                | `mfaToken` is held in page state (`LoginPage`, `MagicLinkVerifyPage`) or read from OAuth redirect `?mfaToken=`. |
 | **Form Inputs & Validation** | React Hook Form + Zod (`schemas/auth.schemas.ts`) | Isolated per form to prevent parent re-renders.                                                                 |
 | **Pagination**               | URL Search Params (`useSearchParams`)             | Keeps `?page=` bookmarkable across reloads (`ActivityPage`, `AdminUsersPage`).                                  |
-| **Server Domain Data**       | Local Component State (`useState`, `useEffect`)   | Fetched via modular services in `api/` without a global query cache.                                            |
+| **Server Domain Data**       | Local View State + `useAbortableQuery`            | Fetched via `api/` with `AbortController` cancellation on key transitions/unmount and `useFocusRevalidate`.     |
 | **Ephemeral UI State**       | Local Component State (`useState`)                | Modals, mobile drawer state, password visibility toggles, and alert banners.                                    |
 
 #### Auth Store State Machine (`stores/auth.store.ts`)
@@ -201,21 +199,22 @@ stateDiagram-v2
     Loading --> Unauthenticated: GET /auth/me 401 (or empty data)
     Loading --> Unavailable: Network / 5xx Error
 
-    Authenticated --> Unauthenticated: logout(), logoutAll(), or Refresh 401
-    Authenticated --> Unavailable: Refresh Network / 5xx Outage (User Retained)
-    Authenticated --> Authenticated: refreshUser() (Focus / 403 Resync)
+    Authenticated --> Unauthenticated: logout(), logoutAll(), clearAuthUser(), or session_expired
+    Authenticated --> Authenticated: refreshUser() / syncSession() (Focus / 403 / Verification)
 
     Unavailable --> Loading: Retry Connection (bootstrapAuth)
     Unauthenticated --> Authenticated: Login / Magic Link / OAuth -> syncSession()
+    Unauthenticated --> Unavailable: Non-authenticated Refresh Network / 5xx Outage
 ```
 
 - **`UserProfile` Contract (`types/auth.types.ts`):** Holds `id`, `email`, `firstName`, `lastName`, `role`, `permissions`, `mfaEnabled`, `verifiedAt`, `createdAt`, `oauthProviders`, `hasPassword`, and `remainingRecoveryCodes` ([ADR-101](./Engineering-Decisions.md#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)).
-- **Out-of-Order & Duplicate Bootstrap Mitigation:** `bootstrapAuth()` deduplicates concurrent calls via `inflightBootstrap`, and shares `resolveSession()` with `syncSession()` / `refreshUser()` using a module-scoped `bootstrapSequence` counter so stale `GET /auth/me` responses are discarded. `syncSession()` hydrates `user` without flipping `status` to `"loading"`, avoiding mid-action guard unmounts.
-- **Inversion of Control (Zero Circular Imports):** `api/client.ts` exposes `registerAuthFailureHandler` and `registerForbiddenHandler`, which `auth.store.ts` registers at module load. On `403 Forbidden`, `onForbidden` awaits `refreshUser()` before rejecting to the caller so updated permissions apply immediately.
+- **Single-Flight Session & Epoch Guard:** `bootstrapAuth()` deduplicates startup via `inflightBootstrap`, while `resolveSession()` deduplicates concurrent `GET /auth/me` calls via `inflightSessionPromise`. A monotonic `sessionEpoch` counter increments whenever session state is cleared or expired, discarding stale in-flight `/auth/me` responses so an active sign-out or reset cannot be overwritten. `syncSession()` hydrates `user` without switching `status` to `"loading"`.
+- **Expired-Session Tracking:** When a token refresh returns `401`, `auth.store.ts` sets `sessionExpired` to `true` only if `status === "authenticated"`, then lets `AuthGuard` route `/app/*` callers to `/login?session_expired=true&returnTo=...`. `LoginPage` clears both the store flag (`clearSessionExpired()`) and URL param on dismissal or form submit.
+- **Inversion of Control (Zero Circular Imports):** `api/client.ts` exposes `registerAuthFailureHandler` and `registerForbiddenHandler`, which `auth.store.ts` registers at module load. On a protected `403 Forbidden`, `onForbidden` awaits `refreshUser()` before rejecting so updated permissions apply immediately.
 
 ---
 
-### 3.4 Network Client & Refresh Mutex
+### 3.4 Network Client & Single-Flight Refresh
 
 All domain requests use `apiClient` (`apps/web/src/api/client.ts`) configured with `baseURL: "/api"`, `withCredentials: true`, and a `15000ms` (`API_TIMEOUT_MS`) timeout:
 
@@ -224,7 +223,7 @@ sequenceDiagram
     autonumber
     actor View as Feature Component
     participant Client as apiClient (Axios)
-    participant Mutex as Refresh Mutex (failedQueue)
+    participant Refresh as refreshAuthSession (inflightRefreshPromise)
     participant API as Backend (/api)
     participant Store as useAuthStore
     participant Guard as AuthGuard
@@ -233,37 +232,37 @@ sequenceDiagram
     Client->>API: GET /sessions (HttpOnly accessToken)
     API-->>Client: 401 Unauthorized
 
-    Client->>Mutex: isRefreshing = true (_retry = true)
-    Client->>API: POST /api/auth/refresh-token (raw axios)
+    Client->>Refresh: Create single-flight inflightRefreshPromise (_retry = true)
+    Refresh->>API: POST /api/auth/refresh-token (raw axios)
 
     par Concurrent Request during Refresh
         View->>Client: GET /auth/security-events
-        Client->>Mutex: isRefreshing === true -> Enqueue in failedQueue (_retry = true)
+        Client->>Refresh: Reuse inflightRefreshPromise (_retry = true)
     end
 
     alt Refresh Succeeded (200 OK)
-        API-->>Client: 200 OK (Rotated HttpOnly cookies)
-        Client->>Mutex: processQueue(null) -> Resolve queued requests
-        Client->>API: Retry original & queued requests
+        API-->>Refresh: 200 OK (Rotated HttpOnly cookies)
+        Refresh-->>Client: Resolve all awaiting callers
+        Client->>API: Retry failed requests via apiClient
         API-->>View: 200 OK
     else Definitive 401 Rejection
-        API-->>Client: 401 Unauthorized
-        Client->>Mutex: processQueue(refreshError)
-        Client->>Store: onAuthFailure("unauthenticated") -> clearAuthUser()
-        Note over Client: If on /app/* (non-public), redirect to<br/>/login?session_expired=true&returnTo=...
+        API-->>Refresh: 401 Unauthorized
+        Refresh->>Store: onAuthFailure("session_expired")
+        Store-->>Guard: status: "unauthenticated", sessionExpired: wasAuthenticated
+        Note over Guard: Protected /app/* navigates declaratively to /login?session_expired=true&returnTo=...
     else Network / 5xx Outage
-        API-->>Client: Network / 5xx Error
-        Client->>Mutex: processQueue(refreshError)
-        Client->>Store: onAuthFailure("unavailable") -> setStatus("unavailable")
-        Store-->>Guard: status === "unavailable" -> Render Retry Screen
+        API-->>Refresh: Network / 5xx Error
+        Refresh->>Store: onAuthFailure("unavailable")
+        Note over Store: Sets status to "unavailable" only when store.status !== "authenticated"
     end
 ```
 
-#### Refresh Mutex & Error Sanitization Invariants
+#### Refresh, Bypass & Error Sanitization Invariants
 
-- **Auth Endpoint Bypass (`AUTH_BYPASS_URLS`):** Eight auth endpoints (`/auth/login`, `/auth/signup`, `/auth/refresh-token`, `/auth/magic-link`, `/auth/magic-link/verify`, `/auth/mfa/verify`, `/auth/forgot-password`, `/auth/reset-password`) bypass 401 refresh interception so credential errors reach forms directly.
-- **Recursion Guards:** Both initial and queued retries set `_retry = true`, and the refresh call invokes raw `axios.post("/api/auth/refresh-token", ...)` rather than `apiClient`.
-- **Error Sanitization (`getApiErrorMessage`):** Maps `5xx` responses to a generic safe notice, joins safe `400` Zod field validation errors, strips database/driver error strings (e.g., `prisma`, `foreign key`, `unique constraint`, `econnrefused`), and provides clear messages for `429`, `403`, `401`, and `404`.
+- **Auth Endpoint Bypass (`AUTH_BYPASS_PATHS`):** Eleven auth endpoints (`/auth/login`, `/auth/signup`, `/auth/verify-email`, `/auth/resend-verification`, `/auth/refresh-token`, `/auth/logout`, `/auth/magic-link`, `/auth/magic-link/verify`, `/auth/mfa/verify`, `/auth/forgot-password`, `/auth/reset-password`) bypass both `401` refresh interception and `403` `onForbidden` resyncs (`url.split("?")[0]` matched by `isAuthBypassRoute`) so auth errors reach forms directly. (`/auth/logout-all` remains intercepted so an expired access token can still refresh and revoke server sessions.)
+- **Cancellation & Recursion Guards:** Aborted requests (`axios.isCancel`) reject immediately without triggering refresh or `onForbidden`. Retried requests set `_retry = true`, and `refreshAuthSession()` invokes raw `axios.post("/api/auth/refresh-token", ...)` rather than `apiClient`.
+- **Error Sanitization & Permission Formatting:** `getApiErrorMessage` maps `5xx` responses to a generic safe notice, joins safe `400` Zod field validation errors, strips database/driver error strings (e.g., `prisma`, `foreign key`, `unique constraint`, `econnrefused`), and provides clear messages for `429`, `403`, `401`, and `404`. `formatPermissionError` inspects `axios.isAxiosError(error) && error.response?.status === 403` to format missing RBAC permission messages deterministically.
+- **Shared Pagination Defaults:** `client.ts` exports `DEFAULT_PAGE_SIZE = 20` and `EMPTY_PAGINATION` as the shared baseline for paginated views (`ActivityPage`, `AdminUsersPage`).
 
 ---
 
@@ -292,7 +291,7 @@ sequenceDiagram
         Guard->>User: Renders AppShell + Feature View
     else 401 Unauthorized
         API-->>Store: 401
-        Store->>Store: clearAuthUser() -> status: "unauthenticated"
+        Store->>Store: status: "unauthenticated"
         Guard->>User: Redirects to /login?returnTo=%2Fapp
     else Network / 5xx Outage
         API-->>Store: Error
@@ -315,7 +314,7 @@ sequenceDiagram
 
     User->>Page: Submits credentials or verifies magic link
     API-->>Page: 200 OK { mfaRequired: true, mfaToken }
-    Note over Page: Hold mfaToken in component state;<br/>switch view to inline verification form.
+    Note over Page: Holds mfaToken in component state and switches to inline verification form
 
     User->>Page: Enters 6-digit TOTP or recovery code
     Page->>API: POST /auth/mfa/verify { mfaToken, code }
@@ -370,6 +369,7 @@ sequenceDiagram
 
     Note over User, Store: 1. In-Session Account Linking
     User->>Sec: Clicks Connect (Google or GitHub)
+    Sec->>Store: syncSession() -> Ensures fresh accessToken cookie
     Sec->>Backend: Full-page navigation: /api/auth/oauth/:provider?returnTo=/app/security
     Backend-->>Sec: 302 Redirect: /app/security?linked=:provider (or ?error=...)
     Sec->>Store: Existing session hydrated via bootstrapAuth() / UserProfile
@@ -387,7 +387,8 @@ sequenceDiagram
     end
 ```
 
-- **Redirect Hygiene:** Both `GuestGuard` and `LoginPage` sanitize `returnTo` values, and `SecurityPage` / `LoginPage` intercept `?error=` or `?linked=` parameters cleanly (`SecurityPage` strips them via `navigate(ROUTES.APP.SECURITY, { replace: true })`).
+- **Shared OAuth Catalog & Redirect Hygiene:** `OAUTH_PROVIDER_ITEMS` (`components/auth/oauthProviders.ts`) provides the shared Google/GitHub metadata for both `SocialAuthButtons` and `SecurityPage`. `GuestGuard` and `LoginPage` sanitize `returnTo` via `resolvePostAuthRedirect()`, while `SecurityPage` and `LoginPage` consume `?error=` / `?linked=` cleanly (`SecurityPage` strips them via `navigate(ROUTES.APP.SECURITY, { replace: true })`).
+- **Authenticated Verification & Reset Consistency:** Because `/verify-email` and `/reset-password` sit outside `GuestGuard`, `VerifyEmailPage` calls `refreshUser()` when verification succeeds for an already-signed-in user, and `ResetPasswordPage` calls `clearAuthUser()` on completion to sync store posture with server-side session revocation.
 - **Zero-Orphan Governance:** `SecurityPage` relies on `UserProfile.oauthProviders` from `GET /auth/me` ([ADR-101](./Engineering-Decisions.md#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)) and backend Zero-Orphan validation ([ADR-104](./Engineering-Decisions.md#adr-104--zero-orphan-disconnect-protection-and-oauth-account-disconnection-governance)) to prevent locking out passwordless single-provider accounts.
 
 ---
@@ -452,15 +453,15 @@ AuthSphere enforces strict cache separation across dynamic API payloads, OpenAPI
 
 ### 6.3 Error Handling Matrix
 
-| Operational State                | UI Presentation & Behavior                                                                                | Recovery Path                                                                       |
-| :------------------------------- | :-------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------- |
-| **Initial Loading**              | Layout-matching pulsing skeleton (`Skeleton.tsx`, guard skeletons).                                       | Resolves automatically on data arrival without layout shift.                        |
-| **Empty Data State**             | Explicit zero-state copy (e.g., _"No active sessions found."_).                                           | Contextual refresh or creation action.                                              |
-| **Validation Error (400)**       | Inline field error messages via React Hook Form + Zod (`auth.schemas.ts`).                                | User corrects invalid input; clears on validation pass.                             |
-| **Session Expired (401)**        | Silent refresh via mutex; on protected `/app/*`, redirects to `/login?session_expired=true&returnTo=...`. | Re-authenticates and returns to preserved `returnTo` path.                          |
-| **Forbidden Access (403)**       | Inline 403 panel (`RoleGuard`) or permission alert + background `refreshUser()`.                          | Active session preserved; _"Return to Overview"_ navigation action.                 |
-| **Rate Limited (429)**           | Sanitized `Alert` notice (`getApiErrorMessage`).                                                          | User waits for rate-limit cooldown before retrying.                                 |
-| **Service Outage (5xx/Offline)** | Guard-level `"Service Unavailable"` panel (`status === "unavailable"`).                                   | In-memory session retained; manual `"Retry Connection"` triggers `bootstrapAuth()`. |
+| Operational State                | UI Presentation & Behavior                                                                                                                                                                 | Recovery Path                                                                             |
+| :------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------- |
+| **Initial Loading**              | Layout-matching pulsing skeleton (`Skeleton.tsx`, guard skeletons).                                                                                                                        | Resolves automatically on data arrival without layout shift.                              |
+| **Empty Data State**             | Explicit zero-state copy (e.g., _"No active sessions found."_).                                                                                                                            | Contextual refresh or creation action.                                                    |
+| **Validation Error (400)**       | Inline field error messages via React Hook Form + Zod (`auth.schemas.ts`).                                                                                                                 | User corrects invalid input; clears on validation pass.                                   |
+| **Session Expired (401)**        | Single-flight silent refresh (`inflightRefreshPromise`); on 401 failure on `/app/*`, store marks `sessionExpired` and `AuthGuard` redirects to `/login?session_expired=true&returnTo=...`. | Re-authenticates and returns to preserved `returnTo` path.                                |
+| **Forbidden Access (403)**       | Inline 403 panel (`RoleGuard`) or `formatPermissionError` alert + background `refreshUser()`.                                                                                              | Active session preserved; _"Return to Overview"_ navigation action.                       |
+| **Rate Limited (429)**           | Sanitized `Alert` notice (`getApiErrorMessage`).                                                                                                                                           | User waits for rate-limit cooldown before retrying.                                       |
+| **Service Outage (5xx/Offline)** | Guard-level `"Service Unavailable"` panel during bootstrap (`status === "unavailable"`); inline error alerts inside mounted views (`status === "authenticated"`).                          | Manual `"Retry Connection"` triggers `bootstrapAuth()`, or page-level retry reloads data. |
 
 ### 6.4 Quality Gates & Verification
 

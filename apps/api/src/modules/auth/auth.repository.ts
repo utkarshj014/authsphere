@@ -124,12 +124,11 @@ const createSession = (
 ) =>
   prisma.$transaction(async (tx) => {
     // Atomically prune superseded orphan sessions from the exact same client device/browser
-    if (sessionData.userAgent && sessionData.ipAddress) {
+    if (sessionData.userAgent) {
       await tx.session.deleteMany({
         where: {
           userId,
           userAgent: sessionData.userAgent,
-          ipAddress: sessionData.ipAddress,
         },
       });
     }

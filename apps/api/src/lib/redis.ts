@@ -1,5 +1,6 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
+import { logger } from "./logger.js";
 
 export const redis = new Redis(env.REDIS_URL, {
   lazyConnect: true,
@@ -13,4 +14,9 @@ export const redis = new Redis(env.REDIS_URL, {
     if (times > 3) return null; // Stop after 3 failures during outages
     return (times - 1) * 50; // Attempt 1: 0ms (immediate SYN), Attempt 2: 50ms, Attempt 3: 100ms
   },
+});
+
+// Prevent unhandled EventEmitter 'error' crashes when idle sockets drop across Lambda freezes
+redis.on("error", (err) => {
+  logger.warn({ err }, "Redis client error");
 });

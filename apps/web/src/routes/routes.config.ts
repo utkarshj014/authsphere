@@ -33,15 +33,18 @@ export const DOCS_URLS = {
 } as const;
 
 /**
- * Public route prefixes where session expiration redirects should not be triggered
+ * Resolves a safe post-authentication redirect path, defaulting to `/app`
+ * for empty, unsafe external, or settings-redirecting return targets.
  */
-export const PUBLIC_AUTH_ROUTES: readonly string[] = [
-  ROUTES.ROOT,
-  ROUTES.PRIVACY,
-  ROUTES.LOGIN,
-  ROUTES.REGISTER,
-  ROUTES.FORGOT_PASSWORD,
-  ROUTES.RESET_PASSWORD,
-  ROUTES.VERIFY_EMAIL,
-  ROUTES.MAGIC_LINK_VERIFY,
-];
+export const resolvePostAuthRedirect = (rawReturnTo: string | null): string => {
+  if (
+    rawReturnTo &&
+    rawReturnTo.startsWith("/") &&
+    !rawReturnTo.startsWith("//") &&
+    !rawReturnTo.startsWith("/\\") &&
+    !rawReturnTo.startsWith(ROUTES.APP.SECURITY)
+  ) {
+    return rawReturnTo;
+  }
+  return ROUTES.APP.ROOT;
+};

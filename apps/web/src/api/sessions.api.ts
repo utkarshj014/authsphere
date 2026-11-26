@@ -2,9 +2,11 @@ import { apiClient } from "./client.js";
 import type { ApiSuccessResponse, SessionItem } from "../types/auth.types.js";
 
 export const sessionsApi = {
-  getSessions: async () => {
-    const res =
-      await apiClient.get<ApiSuccessResponse<SessionItem[]>>("/sessions");
+  getSessions: async (signal?: AbortSignal) => {
+    const res = await apiClient.get<ApiSuccessResponse<SessionItem[]>>(
+      "/sessions",
+      signal ? { signal } : undefined,
+    );
     return res.data;
   },
 

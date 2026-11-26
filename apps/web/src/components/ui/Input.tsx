@@ -1,7 +1,6 @@
 import React, { useState, useId } from "react";
 
-export interface InputProps
-  extends React.InputHTMLAttributes<HTMLInputElement> {
+export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;
   hint?: string;
@@ -30,12 +29,13 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
 
     const [showPassword, setShowPassword] = useState(false);
     const isPassword = type === "password" && passwordToggle;
-    const computedType = isPassword ? (showPassword ? "text" : "password") : type;
+    const computedType = isPassword
+      ? showPassword
+        ? "text"
+        : "password"
+      : type;
 
-    const describedBy = [
-      error ? errorId : null,
-      hint ? hintId : null,
-    ]
+    const describedBy = [error ? errorId : null, hint ? hintId : null]
       .filter(Boolean)
       .join(" ");
 

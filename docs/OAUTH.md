@@ -6,7 +6,7 @@ This document is the Single Source of Truth (SSOT) for **AuthSphere's** OAuth 2.
 >
 > - [ARCHITECTURE.md](./ARCHITECTURE.md) — System Design, Component Topology & Core Data Models
 > - [FRONTEND_ARCHITECTURE.md](./FRONTEND_ARCHITECTURE.md) — Frontend Architecture, Component Topology & Control Plane
-> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 107 Formal ADRs, Security Invariants & Technical Trade-offs
+> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 109 Formal ADRs, Security Invariants & Technical Trade-offs
 > - [OAUTH.md](./OAUTH.md) — OAuth 2.0 PKCE Social Authentication & Integration Protocols
 > - [DEPLOYMENT.md](./DEPLOYMENT.md) — Cloud Infrastructure, Dual-Compute (Lambda/ECS) & Runbooks
 > - [TESTING.md](./TESTING.md) — Hermetic Test Pyramid, Invariant Verification & CI Strategies
@@ -90,7 +90,7 @@ sequenceDiagram
     Note over Browser, DB: Phase 3 — Callback Validation & Profile Exchange
     Browser->>API: GET callback?code=...&state=... (Cookie: oauth_verifier_<state>)
     API->>API: Clear & validate oauth_verifier_<state> cookie
-    API->>Redis: GETDEL oauth:state:<state> (Atomic single-use; verify provider match)
+    API->>Redis: GETDEL oauth:state:<state> (Atomic single-use, verify provider match)
     API->>IDP: POST token exchange (code + code_verifier) & fetch profile (7s shared AbortController)
 
     Note over API, DB: Phase 4 & 5 — Identity Resolution & Session / MFA Outcome
@@ -297,3 +297,4 @@ apps/api/src/
 - [ADR-104: Zero-Orphan Disconnect Protection and OAuth Account Disconnection Governance](./Engineering-Decisions.md#adr-104--zero-orphan-disconnect-protection-and-oauth-account-disconnection-governance)
 - [ADR-105: Redis-Backed Dual-Tier Session Revocation Engine with Multi-Key Pipelining (`redis.mget`)](./Engineering-Decisions.md#adr-105--redis-backed-dual-tier-session-revocation-engine-with-multi-key-pipelining-redismget)
 - [ADR-107: Deferred MFA Security Event Attribution via Polymorphic Challenge State](./Engineering-Decisions.md#adr-107--deferred-mfa-security-event-attribution-via-polymorphic-challenge-state)
+- [ADR-108: Pino HTTP Log Redaction for Session Credentials and OAuth Redirects](./Engineering-Decisions.md#adr-108--pino-http-log-redaction-for-session-credentials-and-oauth-redirects)

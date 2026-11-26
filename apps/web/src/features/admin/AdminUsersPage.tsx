@@ -1,11 +1,19 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { adminApi, getApiErrorMessage } from "../../api/index.js";
+import {
+  adminApi,
+  DEFAULT_PAGE_SIZE,
+  EMPTY_PAGINATION,
+  formatPermissionError,
+  getApiErrorMessage,
+  type AdminUsersResponseData,
+} from "../../api/index.js";
 import { useAuthStore } from "../../stores/auth.store.js";
+import { useFocusRevalidate } from "../../hooks/useFocusRevalidate.js";
+import { useAbortableQuery } from "../../hooks/useAbortableQuery.js";
 import {
   ROLES,
   type AdminUserItem,
-  type PaginationMeta,
   type RoleName,
 } from "../../types/auth.types.js";
 import {
@@ -26,18 +34,44 @@ export const AdminUsersPage: React.FC = () => {
   const rawPage = parseInt(searchParams.get("page") || "1", 10);
   const currentPage = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
 
-  const [users, setUsers] = useState<AdminUserItem[]>([]);
-  const [pagination, setPagination] = useState<PaginationMeta>({
-    page: 1,
-    limit: 20,
-    totalCount: 0,
-    totalPages: 1,
-    hasNextPage: false,
-    hasPreviousPage: false,
-  });
-  const [isLoading, setIsLoading] = useState(true);
-  const [globalError, setGlobalError] = useState<string | null>(null);
   const [globalSuccess, setGlobalSuccess] = useState<string | null>(null);
+
+  const fetchUsers = useCallback(
+    async (signal: AbortSignal) =>
+      (await adminApi.getUsers(currentPage, DEFAULT_PAGE_SIZE, signal)).data,
+    [currentPage],
+  );
+
+  const formatDirectoryError = useCallback(
+    (err: unknown) =>
+      formatPermissionError(
+        err,
+        "user.read",
+        "browse the organization directory",
+      ),
+    [],
+  );
+
+  const {
+    data,
+    setData,
+    error: globalError,
+    setError: setGlobalError,
+    isLoading,
+    isRefreshing,
+    refresh: handleRefresh,
+    startKeyTransition,
+  } = useAbortableQuery<AdminUsersResponseData>({
+    queryKey: currentPage,
+    fetcher: fetchUsers,
+    formatError: formatDirectoryError,
+    preserveDataOnRefreshError: true,
+  });
+
+  useFocusRevalidate(handleRefresh);
+
+  const users = data?.users ?? [];
+  const pagination = data?.pagination ?? EMPTY_PAGINATION;
 
   // Role modification modal state
   const [targetUser, setTargetUser] = useState<AdminUserItem | null>(null);
@@ -45,88 +79,8 @@ export const AdminUsersPage: React.FC = () => {
   const [isUpdatingRole, setIsUpdatingRole] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
 
-  const formatDirectoryError = (err: unknown): string => {
-    const msg = getApiErrorMessage(err);
-    if (
-      msg.toLowerCase().includes("permission") ||
-      msg.toLowerCase().includes("access denied") ||
-      msg.toLowerCase().includes("forbidden")
-    ) {
-      return "Access Denied · Your role does not have permission to browse the organization directory (user.read). An administrator can configure role permissions in Role Governance.";
-    }
-    return msg;
-  };
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchUsers = async () => {
-      try {
-        const res = await adminApi.getUsers(currentPage, 20);
-        if (isMounted && res.data) {
-          setUsers(res.data.users);
-          setPagination(res.data.pagination);
-          setGlobalError(null);
-        }
-      } catch (err: unknown) {
-        if (isMounted) {
-          setUsers([]);
-          setPagination({
-            page: 1,
-            limit: 20,
-            totalCount: 0,
-            totalPages: 1,
-            hasNextPage: false,
-            hasPreviousPage: false,
-          });
-          setGlobalError(formatDirectoryError(err));
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    void fetchUsers();
-
-    const handleFocus = () => {
-      void fetchUsers();
-    };
-    window.addEventListener("focus", handleFocus);
-
-    return () => {
-      isMounted = false;
-      window.removeEventListener("focus", handleFocus);
-    };
-  }, [currentPage]);
-
-  const handleRefresh = async () => {
-    setIsLoading(true);
-    setGlobalError(null);
-    try {
-      const res = await adminApi.getUsers(currentPage, 20);
-      if (res.data) {
-        setUsers(res.data.users);
-        setPagination(res.data.pagination);
-      }
-    } catch (err: unknown) {
-      setUsers([]);
-      setPagination({
-        page: 1,
-        limit: 20,
-        totalCount: 0,
-        totalPages: 1,
-        hasNextPage: false,
-        hasPreviousPage: false,
-      });
-      setGlobalError(formatDirectoryError(err));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handlePageChange = (newPage: number) => {
+    startKeyTransition();
     setSearchParams({ page: newPage.toString() });
   };
 
@@ -149,10 +103,15 @@ export const AdminUsersPage: React.FC = () => {
     setModalError(null);
     try {
       await adminApi.updateUserRole(targetUser.id, selectedRole);
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === targetUser.id ? { ...u, role: selectedRole } : u,
-        ),
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              users: prev.users.map((u) =>
+                u.id === targetUser.id ? { ...u, role: selectedRole } : u,
+              ),
+            }
+          : prev,
       );
       setGlobalSuccess(
         `Role for ${targetUser.email} successfully updated to ${selectedRole}.`,
@@ -184,7 +143,7 @@ export const AdminUsersPage: React.FC = () => {
           variant="secondary"
           size="sm"
           onClick={handleRefresh}
-          disabled={isLoading}
+          disabled={isLoading || isRefreshing}
           aria-label="Refresh user directory"
         >
           <svg
@@ -198,7 +157,7 @@ export const AdminUsersPage: React.FC = () => {
             strokeLinecap="round"
             strokeLinejoin="round"
             aria-hidden="true"
-            className={isLoading ? "animate-spin" : ""}
+            className={isLoading || isRefreshing ? "animate-spin" : ""}
           >
             <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
             <path d="M3 3v5h5" />

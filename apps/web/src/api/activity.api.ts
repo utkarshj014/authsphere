@@ -11,11 +11,12 @@ export interface SecurityEventsResponseData {
 }
 
 export const activityApi = {
-  getSecurityEvents: async (page = 1, limit = 20) => {
+  getSecurityEvents: async (page = 1, limit = 20, signal?: AbortSignal) => {
     const res = await apiClient.get<
       ApiSuccessResponse<SecurityEventsResponseData>
     >("/auth/security-events", {
       params: { page, limit },
+      ...(signal ? { signal } : {}),
     });
     return res.data;
   },

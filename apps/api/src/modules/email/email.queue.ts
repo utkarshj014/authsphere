@@ -6,28 +6,32 @@ import {
 import { logger } from "../../lib/logger.js";
 import { env } from "../../config/env.js";
 
-export const enqueueEmailJob = async (data: EmailJobData): Promise<void> => {
-  if (env.QUEUE_DRIVER === "sync") {
+const dispatchDirectEmailJob = async (
+  data: EmailJobData,
+  mode: "synchronous" | "inline",
+): Promise<void> => {
+  try {
     const { emailService } = await import("./email.service.js");
     const { getEmailProvider } = await import("./email.factory.js");
     const provider = await getEmailProvider();
     await emailService.processJob(data, provider);
+  } catch (err) {
+    logger.error(
+      { err, jobType: data.type, email: data.email, mode },
+      `Failed to dispatch ${mode} email job`,
+    );
+  }
+};
+
+export const enqueueEmailJob = async (data: EmailJobData): Promise<void> => {
+  if (env.QUEUE_DRIVER === "sync") {
+    await dispatchDirectEmailJob(data, "synchronous");
     return;
   }
 
   if (env.QUEUE_DRIVER === "inline") {
-    setImmediate(async () => {
-      try {
-        const { emailService } = await import("./email.service.js");
-        const { getEmailProvider } = await import("./email.factory.js");
-        const provider = await getEmailProvider();
-        await emailService.processJob(data, provider);
-      } catch (err) {
-        logger.error(
-          { err, jobType: data.type, email: data.email },
-          "Failed to dispatch inline email job",
-        );
-      }
+    setImmediate(() => {
+      void dispatchDirectEmailJob(data, "inline");
     });
     return;
   }

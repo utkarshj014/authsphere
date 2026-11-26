@@ -124,7 +124,7 @@ jobs:
           cd infra/lambda
 
           PARAMS=()
-          add_param() { [ -n "$2" ] && PARAMS+=("$1=$2"); }
+          add_param() { [ -n "$2" ] && PARAMS+=("$1=\"$2\""); }
 
           add_param "DatabaseUrl" "${{ secrets.DATABASE_URL_POOLED }}"
           add_param "RedisUrl" "${{ secrets.REDIS_URL }}"

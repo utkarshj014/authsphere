@@ -3,9 +3,9 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import QRCode from "qrcode";
-import { OAUTH_PROVIDERS } from "@authsphere/shared";
 import { useAuthStore } from "../../stores/auth.store.js";
 import { authApi, mfaApi, getApiErrorMessage } from "../../api/index.js";
+import { OAUTH_PROVIDER_ITEMS } from "../../components/auth/oauthProviders.js";
 import {
   Button,
   Input,
@@ -13,7 +13,7 @@ import {
   Badge,
   Modal,
 } from "../../components/ui/index.js";
-import { ROUTES, OAUTH_URLS } from "../../routes/routes.config.js";
+import { ROUTES } from "../../routes/routes.config.js";
 import {
   changePasswordSchema,
   type ChangePasswordFormData,
@@ -46,7 +46,10 @@ export const SecurityPage: React.FC = () => {
     }
   }, [searchParams, navigate]);
 
-  // OAuth Unlink State
+  // OAuth Connect / Unlink State
+  const [connectingProvider, setConnectingProvider] = useState<string | null>(
+    null,
+  );
   const [unlinkingProvider, setUnlinkingProvider] = useState<string | null>(
     null,
   );
@@ -122,6 +125,23 @@ export const SecurityPage: React.FC = () => {
   } = useForm<ChangePasswordFormData>({
     resolver: zodResolver(changePasswordSchema),
   });
+
+  // Ensure accessToken cookie is fresh before full-page OAuth redirect (so optionalAuth identifies userId)
+  const handleConnectOAuth = async (provider: string, oauthUrl: string) => {
+    setConnectingProvider(provider);
+    setGlobalError(null);
+    setGlobalSuccess(null);
+    if (await syncSession()) {
+      window.location.assign(
+        `${oauthUrl}?returnTo=${encodeURIComponent(ROUTES.APP.SECURITY)}`,
+      );
+      return;
+    }
+    setConnectingProvider(null);
+    setGlobalError(
+      "Your session could not be verified. Please sign in again before connecting a social account.",
+    );
+  };
 
   // Disconnect OAuth Provider
   const handleUnlinkOAuth = async (provider: string) => {
@@ -514,101 +534,69 @@ export const SecurityPage: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="p-4 bg-[var(--color-paper-3)] border border-[var(--color-rule)] rounded-[var(--radius-pill)] flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-[var(--radius-pill)] bg-[var(--color-paper-2)] border border-[var(--color-rule)] flex items-center justify-center">
-                  <svg
-                    className="w-4 h-4"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                    aria-hidden="true"
-                  >
-                    <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z" />
-                  </svg>
-                </div>
-                <div>
-                  <div className="text-xs font-medium text-[var(--color-ink)]">
-                    Google Identity
-                  </div>
-                  <div className="text-[10px] text-[var(--color-muted)]">
-                    OAuth 2.0 with PKCE
-                  </div>
-                </div>
-              </div>
+            {OAUTH_PROVIDER_ITEMS.map((card) => {
+              const isConnected =
+                user?.oauthProviders?.includes(card.provider) ?? false;
+              const isBusy =
+                unlinkingProvider !== null || connectingProvider !== null;
 
-              {user?.oauthProviders?.includes(OAUTH_PROVIDERS.GOOGLE) ? (
-                <div className="flex items-center gap-2">
-                  <Badge variant="ok" size="sm" isMono>
-                    CONNECTED
-                  </Badge>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    isLoading={unlinkingProvider === OAUTH_PROVIDERS.GOOGLE}
-                    disabled={unlinkingProvider !== null}
-                    onClick={() => handleUnlinkOAuth(OAUTH_PROVIDERS.GOOGLE)}
-                  >
-                    Disconnect
-                  </Button>
-                </div>
-              ) : (
-                <a
-                  href={`${OAUTH_URLS.GOOGLE}?returnTo=${encodeURIComponent(ROUTES.APP.SECURITY)}`}
+              return (
+                <div
+                  key={card.provider}
+                  className="p-4 bg-[var(--color-paper-3)] border border-[var(--color-rule)] rounded-[var(--radius-pill)] flex items-center justify-between"
                 >
-                  <Button variant="secondary" size="sm">
-                    Connect
-                  </Button>
-                </a>
-              )}
-            </div>
-
-            <div className="p-4 bg-[var(--color-paper-3)] border border-[var(--color-rule)] rounded-[var(--radius-pill)] flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-[var(--radius-pill)] bg-[var(--color-paper-2)] border border-[var(--color-rule)] flex items-center justify-center">
-                  <svg
-                    className="w-4 h-4"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                    aria-hidden="true"
-                  >
-                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-                  </svg>
-                </div>
-                <div>
-                  <div className="text-xs font-medium text-[var(--color-ink)]">
-                    GitHub Identity
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-[var(--radius-pill)] bg-[var(--color-paper-2)] border border-[var(--color-rule)] flex items-center justify-center">
+                      <svg
+                        className="w-4 h-4"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
+                        <path d={card.iconPath} />
+                      </svg>
+                    </div>
+                    <div>
+                      <div className="text-xs font-medium text-[var(--color-ink)]">
+                        {card.cardLabel}
+                      </div>
+                      <div className="text-[10px] text-[var(--color-muted)]">
+                        OAuth 2.0 with PKCE
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-[10px] text-[var(--color-muted)]">
-                    OAuth 2.0 with PKCE
-                  </div>
-                </div>
-              </div>
 
-              {user?.oauthProviders?.includes(OAUTH_PROVIDERS.GITHUB) ? (
-                <div className="flex items-center gap-2">
-                  <Badge variant="ok" size="sm" isMono>
-                    CONNECTED
-                  </Badge>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    isLoading={unlinkingProvider === OAUTH_PROVIDERS.GITHUB}
-                    disabled={unlinkingProvider !== null}
-                    onClick={() => handleUnlinkOAuth(OAUTH_PROVIDERS.GITHUB)}
-                  >
-                    Disconnect
-                  </Button>
+                  {isConnected ? (
+                    <div className="flex items-center gap-2">
+                      <Badge variant="ok" size="sm" isMono>
+                        CONNECTED
+                      </Badge>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        isLoading={unlinkingProvider === card.provider}
+                        disabled={isBusy}
+                        onClick={() => handleUnlinkOAuth(card.provider)}
+                      >
+                        Disconnect
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      isLoading={connectingProvider === card.provider}
+                      disabled={isBusy}
+                      onClick={() =>
+                        handleConnectOAuth(card.provider, card.oauthUrl)
+                      }
+                    >
+                      Connect
+                    </Button>
+                  )}
                 </div>
-              ) : (
-                <a
-                  href={`${OAUTH_URLS.GITHUB}?returnTo=${encodeURIComponent(ROUTES.APP.SECURITY)}`}
-                >
-                  <Button variant="secondary" size="sm">
-                    Connect
-                  </Button>
-                </a>
-              )}
-            </div>
+              );
+            })}
           </div>
         </div>
       </div>

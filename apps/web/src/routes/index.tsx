@@ -109,7 +109,7 @@ const router = createBrowserRouter([
           </Suspense>
         ),
       },
-      // Public / Guest Routes
+      // Guest-Only Auth Forms (Redirect to Console if already authenticated)
       {
         element: <GuestGuard />,
         children: [
@@ -119,11 +119,17 @@ const router = createBrowserRouter([
               { path: "login", element: <LoginPage /> },
               { path: "register", element: <RegisterPage /> },
               { path: "forgot-password", element: <ForgotPasswordPage /> },
-              { path: "reset-password", element: <ResetPasswordPage /> },
-              { path: "verify-email", element: <VerifyEmailPage /> },
-              { path: "magic-link/verify", element: <MagicLinkVerifyPage /> },
             ],
           },
+        ],
+      },
+      // Action / Token Verification Routes (Accessible regardless of current session state)
+      {
+        element: <AuthLayout />,
+        children: [
+          { path: "reset-password", element: <ResetPasswordPage /> },
+          { path: "verify-email", element: <VerifyEmailPage /> },
+          { path: "magic-link/verify", element: <MagicLinkVerifyPage /> },
         ],
       },
       // Authenticated Protected Routes

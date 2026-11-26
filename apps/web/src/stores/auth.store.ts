@@ -13,14 +13,10 @@ import {
 interface AuthState {
   user: UserProfile | null;
   status: AuthStatus;
-  mfaToken: string | null;
-  isMfaRequired: boolean;
+  sessionExpired: boolean;
 
-  setAuthUser: (user: UserProfile) => void;
   clearAuthUser: () => void;
-  setMfaChallenge: (mfaToken: string) => void;
-  clearMfaChallenge: () => void;
-  setStatus: (status: AuthStatus) => void;
+  clearSessionExpired: () => void;
   bootstrapAuth: () => Promise<void>;
   syncSession: () => Promise<boolean>;
   refreshUser: () => Promise<void>;
@@ -28,76 +24,74 @@ interface AuthState {
   logoutAll: () => Promise<void>;
 }
 
-let bootstrapSequence = 0;
+// Monotonic epoch incremented on explicit sign-out / revocation so an in-flight /auth/me cannot resurrect a cleared session
+let sessionEpoch = 0;
+let inflightSessionPromise: Promise<boolean> | null = null;
 let inflightBootstrap: Promise<void> | null = null;
 
 type StoreSet = (partial: Partial<AuthState>) => void;
 
-const resolveSession = async (
+const resolveSession = (
   set: StoreSet,
   options: { markUnavailableOnError: boolean },
 ): Promise<boolean> => {
-  const seq = ++bootstrapSequence;
-  try {
-    const response =
-      await apiClient.get<ApiSuccessResponse<UserProfile>>("/auth/me");
-    if (seq !== bootstrapSequence) return false;
-
-    if (response.data?.data) {
-      set({ user: response.data.data, status: "authenticated" });
-      return true;
-    }
-
-    set({ user: null, status: "unauthenticated" });
-    return false;
-  } catch (err: unknown) {
-    if (seq !== bootstrapSequence) return false;
-
-    const status = (err as { response?: { status?: number } }).response?.status;
-    if (status === 401) {
-      set({ user: null, status: "unauthenticated" });
-    } else if (options.markUnavailableOnError) {
-      set({ user: null, status: "unavailable" });
-    }
-    return false;
+  if (inflightSessionPromise) {
+    return inflightSessionPromise;
   }
+
+  const requestEpoch = sessionEpoch;
+  inflightSessionPromise = apiClient
+    .get<ApiSuccessResponse<UserProfile>>("/auth/me")
+    .then((response) => {
+      if (requestEpoch !== sessionEpoch) return false;
+
+      if (response.data?.data) {
+        set({
+          user: response.data.data,
+          status: "authenticated",
+          sessionExpired: false,
+        });
+        return true;
+      }
+
+      set({ user: null, status: "unauthenticated" });
+      return false;
+    })
+    .catch((err: unknown) => {
+      if (requestEpoch !== sessionEpoch) return false;
+
+      const status = (err as { response?: { status?: number } }).response
+        ?.status;
+      if (status === 401) {
+        set({ user: null, status: "unauthenticated" });
+      } else if (options.markUnavailableOnError) {
+        set({ user: null, status: "unavailable" });
+      }
+      return false;
+    })
+    .finally(() => {
+      inflightSessionPromise = null;
+    });
+
+  return inflightSessionPromise;
+};
+
+const clearSessionState = (set: StoreSet, sessionExpired = false): void => {
+  sessionEpoch += 1;
+  set({
+    user: null,
+    status: "unauthenticated",
+    sessionExpired,
+  });
 };
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   status: "idle",
-  mfaToken: null,
-  isMfaRequired: false,
+  sessionExpired: false,
 
-  setAuthUser: (user: UserProfile) =>
-    set({
-      user,
-      status: "authenticated",
-      mfaToken: null,
-      isMfaRequired: false,
-    }),
-
-  clearAuthUser: () =>
-    set({
-      user: null,
-      status: "unauthenticated",
-      mfaToken: null,
-      isMfaRequired: false,
-    }),
-
-  setMfaChallenge: (mfaToken: string) =>
-    set({
-      mfaToken,
-      isMfaRequired: true,
-    }),
-
-  clearMfaChallenge: () =>
-    set({
-      mfaToken: null,
-      isMfaRequired: false,
-    }),
-
-  setStatus: (status: AuthStatus) => set({ status }),
+  clearAuthUser: () => clearSessionState(set, false),
+  clearSessionExpired: () => set({ sessionExpired: false }),
 
   bootstrapAuth: async () => {
     if (inflightBootstrap) {
@@ -116,8 +110,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     return inflightBootstrap;
   },
 
-  // Non-disruptive session sync: updates user & auth status without flipping status to "loading"
-  // so active routes under GuestGuard/AuthGuard are not unmounted mid-action.
+  // Non-disruptive session sync: preserves mounted views while validating/hydrating session
   syncSession: () => resolveSession(set, { markUnavailableOnError: false }),
 
   refreshUser: async () => {
@@ -128,12 +121,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await apiClient.post("/auth/logout");
     } finally {
-      set({
-        user: null,
-        status: "unauthenticated",
-        mfaToken: null,
-        isMfaRequired: false,
-      });
+      clearSessionState(set, false);
     }
   },
 
@@ -141,22 +129,29 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await apiClient.post("/auth/logout-all");
     } finally {
-      set({
-        user: null,
-        status: "unauthenticated",
-        mfaToken: null,
-        isMfaRequired: false,
-      });
+      clearSessionState(set, false);
     }
   },
 }));
 
-// Invert control: register store invalidation and outage handlers without circular imports
 registerAuthFailureHandler((reason) => {
-  if (reason === "unauthenticated") {
-    useAuthStore.getState().clearAuthUser();
-  } else if (reason === "unavailable") {
-    useAuthStore.getState().setStatus("unavailable");
+  const store = useAuthStore.getState();
+  if (reason === "session_expired") {
+    const wasAuthenticated = store.status === "authenticated";
+    useAuthStore.setState(() => {
+      sessionEpoch += 1;
+      return {
+        user: null,
+        status: "unauthenticated",
+        // Only surface session-expired notice if an active authenticated session actually expired
+        sessionExpired: wasAuthenticated,
+      };
+    });
+  } else if (reason === "unauthenticated") {
+    store.clearAuthUser();
+  } else if (reason === "unavailable" && store.status !== "authenticated") {
+    // Only render full-screen outage if app is not already interactively mounted
+    useAuthStore.setState({ status: "unavailable" });
   }
 });
 

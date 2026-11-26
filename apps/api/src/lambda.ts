@@ -1,11 +1,12 @@
-import { once } from "node:events";
+import type { RequestListener } from "node:http";
 import express, { type RequestHandler } from "express";
 import serverlessExpressModule from "@codegenie/serverless-express";
-import app from "./app.js";
+import app, { JSON_BODY_LIMIT_BYTES } from "./app.js";
 import { redis } from "./lib/redis.js";
 import { logger } from "./lib/logger.js";
 
-const JSON_BODY_LIMIT_BYTES = 16 * 1024;
+const REDIS_CONNECT_WAIT_MS = 500;
+const REDIS_RETRY_COOLDOWN_MS = 5000;
 
 /**
  * Fallback JSON parser for @codegenie/serverless-express + Express 5.
@@ -41,52 +42,96 @@ const parseLambdaJsonBody: RequestHandler = (req, res, next) => {
   }
 };
 
-// Handle CJS/ESM interop across TypeScript compilation targets
-const configureServerless = ((serverlessExpressModule as any).default ||
-  serverlessExpressModule) as (params: {
-  app: any;
-}) => (event: any, context: any) => Promise<any>;
+type ConfigureServerless = (params: {
+  app: RequestListener;
+}) => (event: unknown, context: unknown) => Promise<unknown>;
 
-// Cached serverless proxy handler across warm invocations
-let serverlessHandler: ((event: any, context: any) => Promise<any>) | null =
-  null;
+// Handle CJS/ESM interop cleanly without unsafe any propagation
+const rawModule = serverlessExpressModule as unknown as
+  | ConfigureServerless
+  | { default?: ConfigureServerless; configure?: ConfigureServerless };
 
-/**
- * AWS Lambda Handler Entrypoint
- * Wraps AuthSphere's Express application for API Gateway HTTP API v2 or Function URLs.
- * Database (Neon pooled) and Cache (Upstash) singletons connect eagerly upon cold start
- * and persist across warm Lambda invocations.
- */
-export const handler = async (event: unknown, context: any) => {
-  if (!serverlessHandler) {
-    logger.info("Initializing serverless Express runtime (cold start)...");
+const configureServerless =
+  typeof rawModule === "function"
+    ? rawModule
+    : (rawModule.configure ?? rawModule.default);
 
-    // Eagerly connect Redis cache; database connects lazily on first query
-    if (redis.status === "wait") {
-      try {
-        await redis.connect();
-      } catch (err) {
-        logger.warn(
-          { err },
-          "Redis handshake deferred or unavailable during cold start; proceeding in degraded mode",
-        );
-      }
-    }
+if (!configureServerless) {
+  throw new Error("Failed to resolve @codegenie/serverless-express export");
+}
 
-    const lambdaApp = express();
-    lambdaApp.set("trust proxy", app.get("trust proxy"));
-    lambdaApp.use(parseLambdaJsonBody, app);
+// Construct serverless Express wrapper once during Lambda INIT phase
+const lambdaApp = express();
+lambdaApp.set("trust proxy", app.get("trust proxy"));
+lambdaApp.use(parseLambdaJsonBody, app);
 
-    serverlessHandler = configureServerless({ app: lambdaApp });
-  } else if (redis.status !== "ready") {
-    // Warm invocation: if Redis was severed while frozen, give it up to 100ms to complete TLS
-    if (redis.status === "end") {
-      redis.connect().catch(() => {});
-    }
-    await once(redis, "ready", { signal: AbortSignal.timeout(100) }).catch(
-      () => {},
-    );
+const serverlessHandler = configureServerless({ app: lambdaApp });
+
+let lastRedisFailureAt = 0;
+
+const waitForRedisSettlement = (): Promise<void> =>
+  new Promise((resolve) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      redis.off("ready", settle);
+      redis.off("end", settle);
+    };
+    const settle = () => {
+      lastRedisFailureAt = redis.status === "ready" ? 0 : Date.now();
+      cleanup();
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, REDIS_CONNECT_WAIT_MS);
+    timer.unref();
+
+    redis.once("ready", settle);
+    redis.once("end", settle);
+  });
+
+const ensureRedisReady = async (): Promise<void> => {
+  if (redis.status === "ready") {
+    lastRedisFailureAt = 0;
+    return;
   }
 
+  const canDial =
+    redis.status === "wait" ||
+    redis.status === "end" ||
+    redis.status === "close";
+
+  if (
+    canDial &&
+    lastRedisFailureAt > 0 &&
+    Date.now() - lastRedisFailureAt < REDIS_RETRY_COOLDOWN_MS
+  ) {
+    return;
+  }
+
+  // Register listeners before dialing so fast connection completions or failures are never missed
+  const readyPromise = waitForRedisSettlement();
+
+  if (canDial) {
+    redis.connect().catch((err: unknown) => {
+      lastRedisFailureAt = Date.now();
+      logger.warn(
+        { err },
+        "Redis handshake deferred or unavailable; proceeding in degraded mode",
+      );
+    });
+  }
+
+  await readyPromise;
+};
+
+/**
+ * AWS Lambda Handler Entrypoint.
+ * Reuses module-scoped Express and serverless-express instances across warm invocations
+ * while ensuring bounded Redis readiness with degraded-mode fallback.
+ */
+export const handler = async (event: unknown, context: unknown) => {
+  await ensureRedisReady();
   return serverlessHandler(event, context);
 };

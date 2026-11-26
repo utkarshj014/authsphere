@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { sessionsApi, authApi, getApiErrorMessage } from "../../api/index.js";
 import { useAuthStore } from "../../stores/auth.store.js";
+import { useAbortableQuery } from "../../hooks/useAbortableQuery.js";
 import type { SessionItem } from "../../types/auth.types.js";
 import {
   Button,
@@ -17,10 +18,29 @@ export const SessionsPage: React.FC = () => {
   const navigate = useNavigate();
   const clearAuthUser = useAuthStore((s) => s.clearAuthUser);
 
-  const [sessions, setSessions] = useState<SessionItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [globalError, setGlobalError] = useState<string | null>(null);
   const [globalSuccess, setGlobalSuccess] = useState<string | null>(null);
+
+  const fetchSessions = useCallback(
+    async (signal: AbortSignal) =>
+      (await sessionsApi.getSessions(signal)).data ?? [],
+    [],
+  );
+
+  const {
+    data: sessionsData,
+    setData: setSessionsData,
+    error: globalError,
+    setError: setGlobalError,
+    isLoading,
+    isRefreshing,
+    refresh: handleRefresh,
+  } = useAbortableQuery<SessionItem[]>({
+    queryKey: "sessions",
+    fetcher: fetchSessions,
+    preserveDataOnRefreshError: true,
+  });
+
+  const sessions = sessionsData ?? [];
 
   // Revoke single session state
   const [sessionToRevoke, setSessionToRevoke] = useState<SessionItem | null>(
@@ -33,54 +53,11 @@ export const SessionsPage: React.FC = () => {
     useState(false);
   const [isSigningOutEverywhere, setIsSigningOutEverywhere] = useState(false);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchSessions = async () => {
-      try {
-        const res = await sessionsApi.getSessions();
-        if (isMounted && res.data) {
-          setSessions(res.data);
-          setGlobalError(null);
-        }
-      } catch (err: unknown) {
-        if (isMounted) {
-          setGlobalError(getApiErrorMessage(err));
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    void fetchSessions();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const handleRefresh = async () => {
-    setIsLoading(true);
-    setGlobalError(null);
-    try {
-      const res = await sessionsApi.getSessions();
-      if (res.data) {
-        setSessions(res.data);
-      }
-    } catch (err: unknown) {
-      setSessions([]);
-      setGlobalError(getApiErrorMessage(err));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handleRevokeSingle = async () => {
     if (!sessionToRevoke) return;
 
     setIsRevokingSingle(true);
+    setGlobalError(null);
     try {
       await sessionsApi.revokeSession(sessionToRevoke.id);
 
@@ -91,12 +68,14 @@ export const SessionsPage: React.FC = () => {
         return;
       }
 
-      setSessions((prev) => prev.filter((s) => s.id !== sessionToRevoke.id));
+      setSessionsData((prev) =>
+        (prev ?? []).filter((s) => s.id !== sessionToRevoke.id),
+      );
       setGlobalSuccess("Remote session revoked successfully.");
       setSessionToRevoke(null);
     } catch (err: unknown) {
-      setSessions([]);
       setGlobalError(getApiErrorMessage(err));
+      setSessionToRevoke(null);
     } finally {
       setIsRevokingSingle(false);
     }
@@ -134,7 +113,7 @@ export const SessionsPage: React.FC = () => {
             variant="secondary"
             size="sm"
             onClick={handleRefresh}
-            disabled={isLoading}
+            disabled={isLoading || isRefreshing}
             aria-label="Refresh sessions"
           >
             <svg
@@ -148,7 +127,7 @@ export const SessionsPage: React.FC = () => {
               strokeLinecap="round"
               strokeLinejoin="round"
               aria-hidden="true"
-              className={isLoading ? "animate-spin" : ""}
+              className={isLoading || isRefreshing ? "animate-spin" : ""}
             >
               <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
               <path d="M3 3v5h5" />
@@ -237,7 +216,7 @@ export const SessionsPage: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-x-4 gap-y-1 text-xs text-[var(--color-muted)] font-mono flex-wrap">
-                    <span>IP: {item.ipAddress || "127.0.0.1"}</span>
+                    <span>IP: {item.ipAddress || "—"}</span>
                     <span>Created: {formatDate(item.createdAt)}</span>
                     <span>Expires: {formatDate(item.expiresAt)}</span>
                   </div>
@@ -282,7 +261,7 @@ export const SessionsPage: React.FC = () => {
         description={
           sessionToRevoke?.isCurrent
             ? "You are about to terminate this active terminal session. You will be redirected to the sign-in screen."
-            : `Terminating this session will immediately disconnect the device from IP ${sessionToRevoke?.ipAddress}.`
+            : `Terminating this session will immediately disconnect the device from IP ${sessionToRevoke?.ipAddress || "—"}.`
         }
       >
         <div className="space-y-4 pt-1">
@@ -291,7 +270,7 @@ export const SessionsPage: React.FC = () => {
               Device:{" "}
               {sessionToRevoke ? formatClient(sessionToRevoke.userAgent) : ""}
             </div>
-            <div>IP Address: {sessionToRevoke?.ipAddress}</div>
+            <div>IP Address: {sessionToRevoke?.ipAddress || "—"}</div>
             <div>
               Created:{" "}
               {sessionToRevoke
