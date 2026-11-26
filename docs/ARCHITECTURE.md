@@ -6,7 +6,7 @@ This document is the Single Source of Truth (SSOT) for **AuthSphere's** monorepo
 >
 > - [ARCHITECTURE.md](./ARCHITECTURE.md) — System Design, Component Topology & Core Data Models
 > - [FRONTEND_ARCHITECTURE.md](./FRONTEND_ARCHITECTURE.md) — Frontend Architecture, Component Topology & Control Plane
-> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 107 Formal ADRs, Security Invariants & Technical Trade-offs
+> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 109 Formal ADRs, Security Invariants & Technical Trade-offs
 > - [OAUTH.md](./OAUTH.md) — OAuth 2.0 PKCE Social Authentication & Integration Protocols
 > - [DEPLOYMENT.md](./DEPLOYMENT.md) — Cloud Infrastructure, Dual-Compute (Lambda/ECS) & Runbooks
 > - [TESTING.md](./TESTING.md) — Hermetic Test Pyramid, Invariant Verification & CI Strategies
@@ -120,14 +120,14 @@ flowchart TD
 
 ### Layer Responsibilities
 
-| Architectural Layer            | Primary Responsibility                                                                                                                                                                                          | Architectural Rule                                                                                                                                                                                                                                                        |
-| :----------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Global Middleware Pipeline** | Proxy trust (`TRUST_PROXY`), Helmet headers, `Cache-Control: no-store`, CORS, sanitized `X-Request-Id`, Pino logging, origin validation, `/health` bypass, global IP limit, body parsing.                       | Rejects untrusted-origin or flooded requests before JSON parsing (`16kb` limit) or feature routing. `openApiRouter` (`/openapi.json`, `/docs`) uses `no-cache`.                                                                                                           |
-| **Route Middleware Pipeline**  | JWT authentication (`auth` / `optionalAuth`), dual-key rate limiting, multi-target Zod validation (`body`, `params`, `query`), and RBAC guards (`requireRole`, `requirePermission`, `requireSelfOrPermission`). | On protected routes, `auth` always precedes `rateLimiter` so `userId` keys are populated. Permission guards precede `rateLimiter` on `GET /auth/security-events` and `GET /users`; role/self guards follow `validate` on `/users/:id`, `/users/:id/role`, and `/roles/*`. |
-| **Controller Layer**           | Extracts validated inputs, manages `HttpOnly` cookies, and serializes envelopes (`ApiResponse.success`: `{ success: true, message, data }`; `errorHandler`: `{ success: false, message, errors? }`).            | Pure HTTP translation with zero business logic or direct database access; `errorHandler` logs `4xx` operational errors as `warn` and `5xx` as `error`.                                                                                                                    |
-| **Service Layer**              | Authentication orchestration, password/MFA verification, session rotation, permission caching, and audit event recording.                                                                                       | Framework-independent; throws `AppError` subclasses.                                                                                                                                                                                                                      |
-| **Repository Layer**           | Data persistence via Prisma 7 ORM (`@prisma/adapter-pg` + `pg.Pool`) and translation of Prisma error codes (`P2002`, `P2025`) to domain errors.                                                                 | Encapsulates all queries and interactive transactions (`$transaction`).                                                                                                                                                                                                   |
-| **Infrastructure Layer**       | Singleton clients (`prisma`, `redis`, `logger`, `emailQueue`) and cryptographic/JWT utilities in `apps/api/src/lib/`.                                                                                           | Decoupled from Express handlers; bounded timeouts for serverless safety.                                                                                                                                                                                                  |
+| Architectural Layer            | Primary Responsibility                                                                                                                                                                                                               | Architectural Rule                                                                                                                                                                                                       |
+| :----------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Global Middleware Pipeline** | Proxy trust (`TRUST_PROXY`), Helmet headers, `Cache-Control: no-store`, CORS, sanitized `X-Request-Id`, Pino logging with `loggerRedactionConfig` (`[ADR-108]`), origin validation, `/health` bypass, global IP limit, body parsing. | Rejects untrusted-origin or flooded requests before JSON parsing (`JSON_BODY_LIMIT_BYTES` = 16 KB, shared with `lambda.ts`) or feature routing. `openApiRouter` (`/openapi.json`, `/docs`) uses `no-cache`.              |
+| **Route Middleware Pipeline**  | JWT authentication (`auth` / `optionalAuth`), dual-key rate limiting, multi-target Zod validation (`body`, `params`, `query`), and RBAC guards (`requireRole`, `requirePermission`, `requireSelfOrPermission`).                      | On protected routes, `auth` precedes `rateLimiter` (`userId` keys) and clears stale `accessToken` on invalid JWT (`[ADR-016]`). Permission guards precede `rateLimiter` on `GET /auth/security-events` and `GET /users`. |
+| **Controller Layer**           | Extracts validated inputs, manages `HttpOnly` cookies, and serializes envelopes (`ApiResponse.success`: `{ success: true, message, data }`; `errorHandler`: `{ success: false, message, errors? }`).                                 | Pure HTTP translation (`refreshToken` clears cookies on `UnauthorizedError`); `errorHandler` logs `4xx` as `warn` and `5xx` as `error` without mutating cookies.                                                         |
+| **Service Layer**              | Authentication orchestration, password/MFA verification, session rotation, permission caching, and audit event recording.                                                                                                            | Framework-independent; throws `AppError` subclasses.                                                                                                                                                                     |
+| **Repository Layer**           | Data persistence via Prisma 7 ORM (`@prisma/adapter-pg` + `pg.Pool`) and translation of Prisma error codes (`P2002`, `P2025`) to domain errors.                                                                                      | Encapsulates all queries and interactive transactions (`$transaction`).                                                                                                                                                  |
+| **Infrastructure Layer**       | Singleton clients (`prisma`, `redis`, `logger`, `emailQueue`) and cryptographic/JWT utilities in `apps/api/src/lib/`.                                                                                                                | Decoupled from Express handlers; bounded timeouts for serverless safety.                                                                                                                                                 |
 
 > **Related ADRs:** See [Validation, Middleware & Authorization](./Engineering-Decisions.md#validation-middleware--authorization) for pipeline ordering, Zod contracts, and OpenAPI parity.
 
@@ -359,7 +359,7 @@ sequenceDiagram
     Client->>API: POST /auth/login { email, password }
     API->>DB: findUserByEmailWithRole(email)
     API->>API: Verify Argon2id hash (or DUMMY_PASSWORD_HASH on miss)
-    API->>DB: createSession(UUIDv7 sid, SHA-256 tokenHash; prunes same IP+UA)
+    API->>DB: createSession(UUIDv7 sid, SHA-256 tokenHash, prunes same UA)
     API-->>Client: 200 OK + Set-Cookie: accessToken, refreshToken (HttpOnly, Path="/")
 
     Note over Client, Redis: Phase 2 — Authenticated Request (auth middleware)
@@ -474,7 +474,7 @@ sequenceDiagram
     alt Invalid / Expired
         API-->>Client: 400 Bad Request
     else Valid Token
-        API->>DB: consumeMagicLinkToken (delete token; set isEmailVerified=true if false)
+        API->>DB: consumeMagicLinkToken (deletes token and verifies email if unverified)
         alt mfaEnabled === true
             API->>DB: createMfaChallenge(userId, 5m TTL, MAGIC_LINK_LOGIN)
             API-->>Client: 200 OK { mfaRequired: true, mfaToken }
@@ -524,8 +524,8 @@ For user-wide invalidation (`POST /auth/logout-all`, password change/reset, `mfa
 | `QUEUE_DRIVER` | Execution Context              | Delivery & Retry Semantics                                                                                                                                                                            |
 | :------------- | :----------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`bullmq`**   | Containerized / Worker mode    | Enqueues to Redis queue `authsphere-email`; 5 total attempts (4 exponential backoff retries from `2s`); retains last 500 failed jobs; processed by `src/workers/email.worker.ts` (`APP_ROLE=worker`). |
-| **`inline`**   | Single-node / Local dev        | Fires asynchronously via `setImmediate()` without Redis queue overhead; errors logged without failing HTTP response.                                                                                  |
-| **`sync`**     | AWS Lambda (`isLambdaRuntime`) | Awaits provider delivery in-band before returning the HTTP response so Lambda does not freeze mid-flight.                                                                                             |
+| **`inline`**   | Single-node / Local dev        | Fires asynchronously via `setImmediate()` using shared `dispatchDirectEmailJob()` error logging without Redis queue overhead.                                                                         |
+| **`sync`**     | AWS Lambda (`isLambdaRuntime`) | Awaits `dispatchDirectEmailJob()` in-band before returning the HTTP response so Lambda does not freeze mid-flight; logs failures (`mode: "synchronous"`).                                             |
 
 ---
 
@@ -533,13 +533,14 @@ For user-wide invalidation (`POST /auth/logout-all`, password change/reset, `mfa
 
 ### 5.1 Cryptographic & Credential Security Profile
 
-| Security Domain             | Mechanism                                     | Implementation (`apps/api/src/lib/`)                                                                                        |
-| :-------------------------- | :-------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------- |
-| **Password Hashing**        | Argon2id + pre-computed `DUMMY_PASSWORD_HASH` | `memoryCost: 65536` (64 MiB), `timeCost: 3`, `parallelism: 4`, `hashLength: 32`; dummy verify mitigates login timing leaks. |
-| **JWT Signing & Isolation** | WebCrypto JOSE (`HS256`) with dual secrets    | Separate `JWT_ACCESS_SECRET` (`15m`) and `JWT_REFRESH_SECRET` (`30d`) with unique `jti` claims; no native C++ JWT bindings. |
-| **MFA Secret Encryption**   | AES-256-GCM authenticated encryption at rest  | 12-byte random IV, `ivHex:authTagHex:ciphertextHex`, 32-byte key derived via `SHA-256(MFA_ENCRYPTION_KEY)`.                 |
-| **MFA Replay Protection**   | Monotonic TOTP window + hashed backup codes   | `mfaLastUsedWindow` rejects reused/older 30s steps (`+/- 30s` clock tolerance); 10 single-use `XXXXX-XXXXX` recovery codes. |
-| **Token Digests**           | SHA-256 opaque digests                        | Used for refresh tokens, verification/reset/magic-link tokens, and recovery codes before PostgreSQL persistence.            |
+| Security Domain              | Mechanism                                     | Implementation (`apps/api/src/lib/`)                                                                                               |
+| :--------------------------- | :-------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
+| **Password Hashing**         | Argon2id + pre-computed `DUMMY_PASSWORD_HASH` | `memoryCost: 65536` (64 MiB), `timeCost: 3`, `parallelism: 4`, `hashLength: 32`; dummy verify mitigates login timing leaks.        |
+| **JWT Signing & Isolation**  | WebCrypto JOSE (`HS256`) with dual secrets    | Separate `JWT_ACCESS_SECRET` (`15m`) and `JWT_REFRESH_SECRET` (`30d`) with unique `jti` claims; no native C++ JWT bindings.        |
+| **MFA Secret Encryption**    | AES-256-GCM authenticated encryption at rest  | 12-byte random IV, `ivHex:authTagHex:ciphertextHex`, 32-byte key derived via `SHA-256(MFA_ENCRYPTION_KEY)`.                        |
+| **MFA Replay Protection**    | Monotonic TOTP window + hashed backup codes   | `mfaLastUsedWindow` rejects reused/older 30s steps (`+/- 30s` clock tolerance); 10 single-use `XXXXX-XXXXX` recovery codes.        |
+| **Token Digests**            | SHA-256 opaque digests                        | Used for refresh tokens, verification/reset/magic-link tokens, and recovery codes before PostgreSQL persistence.                   |
+| **Log & Redirect Redaction** | Pino `loggerRedactionConfig` (`[ADR-108]`)    | Redacts `req.headers.authorization`, `req.headers.cookie`, `res.headers["set-cookie"]`, and `res.headers.location` (`[REDACTED]`). |
 
 ### 5.2 Ingress, Proxy Parity & Origin Controls
 
@@ -547,6 +548,7 @@ For user-wide invalidation (`POST /auth/logout-all`, password change/reset, `mfa
 2. **Proxy Trust & Client IP:** `app.set("trust proxy", env.TRUST_PROXY)` parses boolean, hop count, or subnet config at startup so Express `req.ip` resolves client attribution behind edge/load-balancer hops.
 3. **Origin & Fetch-Metadata Guard (`originValidation`):** Guards `POST`, `PUT`, `PATCH`, and `DELETE` requests by fast-pathing `sec-fetch-site: same-origin | same-site`, blocking `cross-site` mutations unless matching `env.FRONTEND_URL`, rejecting `Origin: "null"`, and permitting non-browser clients lacking `Origin`/`Referer`.
 4. **Process-Aware Env Partitioning (`config/env.ts`):** Validates `sharedConfig` plus either `apiConfig` or `workerConfig` depending on `APP_ROLE`, enforcing inline/sync email credentials when `QUEUE_DRIVER` is `inline` or `sync`.
+5. **Bootstrap Admin Seeding (`prisma/seed.ts`, `[ADR-109]`):** Validates `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` against `auth.validation.ts` schemas; new seeded admins start unverified (`isEmailVerified: false`) while existing users promoted to `ADMIN` retain their current credentials, OAuth links, and MFA posture.
 
 ---
 
@@ -554,9 +556,9 @@ For user-wide invalidation (`POST /auth/logout-all`, password change/reset, `mfa
 
 AuthSphere runs a **Shared Backing State, Interchangeable Compute** design compiled from one codebase:
 
-- **Dual Entrypoints:** `apps/api/src/server.ts` serves containerized/long-lived HTTP deployments, while `apps/api/src/lambda.ts` wraps `app.ts` with `@codegenie/serverless-express` for AWS Lambda. `apps/api/src/workers/email.worker.ts` runs standalone when `APP_ROLE=worker`.
-- **PostgreSQL Pool Bounds (`lib/prisma.ts`):** Runtime compute uses `@prisma/adapter-pg` with `pg.Pool` bounded via `DATABASE_POOL_MAX ?? (isLambdaRuntime ? 2 : 10)` (`5s` connect timeout, `10s` query timeout) for PgBouncer transaction pooling, while schema migrations require a direct session-mode URL (`pg_advisory_lock`).
-- **Fail-Fast Redis (`lib/redis.ts`):** Configured with `lazyConnect: true`, `enableOfflineQueue: false`, `maxRetriesPerRequest: 1`, `connectTimeout: 2000`, and `commandTimeout: 1000` so Redis outages fail open on rate limits and caching instead of stalling requests.
+- **Dual Entrypoints:** `apps/api/src/server.ts` serves containerized/long-lived HTTP deployments, while `apps/api/src/lambda.ts` constructs `lambdaApp` + `@codegenie/serverless-express` once during Lambda INIT, shares `JSON_BODY_LIMIT_BYTES` from `app.ts` in `parseLambdaJsonBody`, and applies `ensureRedisReady()` (`500ms` bounded wait, `5000ms` failure cooldown). `apps/api/src/workers/email.worker.ts` runs standalone when `APP_ROLE=worker`.
+- **PostgreSQL Pool Bounds (`lib/prisma.ts`):** Runtime compute uses `@prisma/adapter-pg` with `pg.Pool` bounded via `DATABASE_POOL_MAX ?? (isLambdaRuntime ? 2 : 10)` (`5s` connect timeout, `10s` query timeout, `pool.on("error")`) for PgBouncer transaction pooling, while schema migrations require a direct session-mode URL (`pg_advisory_lock`).
+- **Fail-Fast Redis (`lib/redis.ts`):** Configured with `lazyConnect: true`, `enableOfflineQueue: false`, `maxRetriesPerRequest: 1`, `connectTimeout: 2000`, `commandTimeout: 1000`, and `redis.on("error")` so idle socket drops across Lambda freezes never crash the runtime and Redis outages fail open on rate limits and caching.
 - **Decoupled Health Probes:** `/health` and `/health/live` perform zero external I/O; `/health/ready` concurrently probes PostgreSQL and Redis (`200` vs `503`).
 
 For cloud topology diagrams, AWS Lambda SAM / ECS Fargate configurations, environment variable catalogs, CI/CD release pipelines, and runbooks, see **[DEPLOYMENT.md](./DEPLOYMENT.md)**.
@@ -565,6 +567,6 @@ For cloud topology diagrams, AWS Lambda SAM / ECS Fargate configurations, enviro
 
 ## 7. Verification & Testing Boundaries
 
-AuthSphere enforces a hermetic 3-tier **Vitest + Supertest** pyramid (`fileParallelism: false`) covering pure in-memory unit invariants (cryptography, TOTP, Zod validation, email templates/drivers, and 34-route OpenAPI 3.1 parity), isolated integration suites against a dedicated test PostgreSQL database and Redis DB index 1 with an in-memory email spy, and end-to-end user journeys.
+AuthSphere enforces a hermetic 3-tier **Vitest + Supertest** pyramid (`fileParallelism: false`) covering pure in-memory unit invariants (cryptography, TOTP, Zod validation, email templates/drivers, Pino log redaction, Lambda/Redis resilience, and 34-route OpenAPI 3.1 parity), isolated integration suites against a dedicated test PostgreSQL database and Redis DB index 1 with an in-memory email spy, and end-to-end user journeys.
 
 For suite structure, test counts, coverage thresholds, and CLI execution commands, see **[TESTING.md](./TESTING.md)**.

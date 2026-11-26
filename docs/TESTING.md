@@ -6,7 +6,7 @@
 >
 > - System Design & Component Architecture: [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md)
 > - Frontend Architecture & Control Plane: [`docs/FRONTEND_ARCHITECTURE.md`](./FRONTEND_ARCHITECTURE.md)
-> - Formal Decisions (107 Formal ADRs): [`docs/Engineering-Decisions.md`](./Engineering-Decisions.md)
+> - Formal Decisions (109 Formal ADRs): [`docs/Engineering-Decisions.md`](./Engineering-Decisions.md)
 > - OAuth 2.0 PKCE & Integration Guide: [`docs/OAUTH.md`](./OAUTH.md)
 > - Cloud Deployment & DevOps Guide: [`docs/DEPLOYMENT.md`](./DEPLOYMENT.md)
 
@@ -22,7 +22,7 @@ AuthSphere's test suite prioritizes **high-signal security invariant verificatio
 - **Framework Baseline:** Vitest `4.x` (`environment: "node"`), Supertest `7.x`, V8 Coverage (`@vitest/coverage-v8`), Node.js `>=24` (ESM).
 
 ```text
-Suite Layout: 11 flat test files · 76 tests (4 Unit [26] · 6 Integration [45] · 1 E2E [5])
+Suite Layout: 13 flat test files · 81 tests (6 Unit [31] · 6 Integration [45] · 1 E2E [5])
 ```
 
 ---
@@ -31,10 +31,10 @@ Suite Layout: 11 flat test files · 76 tests (4 Unit [26] · 6 Integration [45] 
 
 ```mermaid
 graph TD
-    subgraph TP ["Test Pyramid (11 Files · 76 Tests)"]
+    subgraph TP ["Test Pyramid (13 Files · 81 Tests)"]
         E2E["Layer 3: E2E User Journeys (1 file · 5 tests)"]
         INT["Layer 2: Critical Integration Tests (6 files · 45 tests)"]
-        UNIT["Layer 1: Focused Unit Tests (4 files · 26 tests)"]
+        UNIT["Layer 1: Focused Unit Tests (6 files · 31 tests)"]
     end
 
     subgraph HTE ["Hermetic Test Environment"]
@@ -53,14 +53,16 @@ graph TD
     end
 ```
 
-### Layer 1: Focused Unit Tests (4 Files · 26 Tests — Zero DB/Redis I/O)
+### Layer 1: Focused Unit Tests (6 Files · 31 Tests — Zero DB/Redis I/O)
 
-| File                                                                         | Tests | Scope & Verified Invariants                                                                                                                                                                                                                                                                                           |
-| :--------------------------------------------------------------------------- | :---- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`tests/unit/crypto.test.ts`](../apps/api/tests/unit/crypto.test.ts)         | 8     | Argon2id hashing & `DUMMY_PASSWORD_HASH`, HS256 JWT sign/verify & key separation, 32-byte tokens & timing-safe SHA-256 verification, AES-256-GCM MFA encryption (unique IVs + legacy fallback), recovery codes, and TOTP secret/URI/code validation `[ADR-013, ADR-014, ADR-031, ADR-040, ADR-047, ADR-087]`.         |
-| [`tests/unit/email.test.ts`](../apps/api/tests/unit/email.test.ts)           | 9     | Unmocks `email.queue.js` locally while mocking `lib/queue.js`, Nodemailer, and Resend to verify factory resolution (`gmail` vs `resend`), tri-driver routing (`bullmq`, `inline`, `sync`), HTML templates, and permanent vs. retryable error classification `[ADR-072, ADR-073, ADR-075, ADR-078, ADR-084, ADR-103]`. |
-| [`tests/unit/openapi.test.ts`](../apps/api/tests/unit/openapi.test.ts)       | 3     | OpenAPI 3.1 document generation, cookie security schemes, `/api` production server config, and strict 1:1 bidirectional parity across all 34 Express operations `[ADR-071]`.                                                                                                                                          |
-| [`tests/unit/validation.test.ts`](../apps/api/tests/unit/validation.test.ts) | 6     | `signup` & `resetPassword` (TOTP/recovery code) schemas, pagination coercion/bounds, role allowlists & permission deduplication, `userProfile` `mfaEnabled` defaults, and `parseDurationToMs` `[ADR-017, ADR-026, ADR-088, ADR-099, ADR-101]`.                                                                        |
+| File                                                                         | Tests | Scope & Verified Invariants                                                                                                                                                                                                                                                                                                            |
+| :--------------------------------------------------------------------------- | :---- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`tests/unit/crypto.test.ts`](../apps/api/tests/unit/crypto.test.ts)         | 8     | Argon2id hashing & `DUMMY_PASSWORD_HASH`, HS256 JWT sign/verify & key separation, 32-byte tokens & timing-safe SHA-256 verification, AES-256-GCM MFA encryption (unique IVs + legacy fallback), recovery codes, and TOTP secret/URI/code validation `[ADR-013, ADR-014, ADR-031, ADR-040, ADR-047, ADR-087]`.                          |
+| [`tests/unit/email.test.ts`](../apps/api/tests/unit/email.test.ts)           | 10    | Unmocks `email.queue.js` locally while mocking `lib/queue.js`, Nodemailer, and Resend to verify factory resolution (`gmail` vs `resend`), tri-driver routing (`bullmq`, `inline`, `sync`), failure error logging, HTML templates, and permanent vs. retryable classification `[ADR-072, ADR-073, ADR-075, ADR-078, ADR-084, ADR-103]`. |
+| [`tests/unit/lambda.test.ts`](../apps/api/tests/unit/lambda.test.ts)         | 3     | Redis unhandled-error safety (`redis.on("error")`), Lambda degraded-mode `/health/live` routing & reconnect cooldown on Redis outage, and end-to-end Lambda Express 5 JSON body parsing with `400` / `413` boundary guardrails `[ADR-044, ADR-079]`.                                                                                   |
+| [`tests/unit/logger.test.ts`](../apps/api/tests/unit/logger.test.ts)         | 1     | Pino `loggerRedactionConfig` verifying complete `[REDACTED]` masking of `authorization`, `cookie`, `set-cookie`, and `location` redirect URLs containing OAuth state/challenge secrets `[ADR-009, ADR-108]`.                                                                                                                           |
+| [`tests/unit/openapi.test.ts`](../apps/api/tests/unit/openapi.test.ts)       | 3     | OpenAPI 3.1 document generation, cookie security schemes, `/api` production server config, and strict 1:1 bidirectional parity across all 34 Express operations `[ADR-071]`.                                                                                                                                                           |
+| [`tests/unit/validation.test.ts`](../apps/api/tests/unit/validation.test.ts) | 6     | `signup` & `resetPassword` (TOTP/recovery code) schemas, pagination coercion/bounds, role allowlists & permission deduplication, `userProfile` `mfaEnabled` defaults, and `parseDurationToMs` `[ADR-017, ADR-026, ADR-088, ADR-099, ADR-101]`.                                                                                         |
 
 ### Layer 2: Critical Integration Tests (6 Files · 45 Tests)
 
@@ -121,6 +123,7 @@ For canonical backend route tables and OAuth protocol flows exercised by these s
 | **Immutable Security Audit Trail**                           | `[ADR-069]`                                              | `auth.test.ts`                                                | Records `LOGIN_SUCCESS`, `LOGIN_FAILED`, `LOGOUT`, `PASSWORD_RESET` with strict tenant isolation.                        |
 | **Code-First OpenAPI 3.1 & Express Route Parity**            | `[ADR-071]`                                              | `openapi.test.ts`                                             | Asserts 1:1 bidirectional parity across all 34 operations and cookie security schemes.                                   |
 | **RBAC Directory, Role Introspection & `mfaEnabled` Egress** | `[ADR-035, ADR-036, ADR-088, ADR-099, ADR-100, ADR-101]` | `rbac.test.ts`, `validation.test.ts`, `user-journeys.test.ts` | Enforces `403` for non-admins, validates role/pagination schemas, and sanitizes `mfaEnabled` without leaking secrets.    |
+| **HTTP Log Redaction & Lambda JSON/Redis Resilience**        | `[ADR-044, ADR-079, ADR-108]`                            | `logger.test.ts`, `lambda.test.ts`                            | Redacts auth/cookie/location headers in Pino output; ensures Lambda handles Redis outages and `400`/`413` JSON limits.   |
 
 ---
 
@@ -178,9 +181,11 @@ apps/api/
     │   ├── db.ts                     # cleanTestState(), cleanDatabase(), flushRedis(), ensureBaselineSeed()
     │   ├── email.ts                  # In-memory email outbox spy accessors
     │   └── factories.ts              # Cached Argon2id hashing & entity factories
-    ├── unit/                         # 4 files · 26 tests (zero DB/Redis I/O)
+    ├── unit/                         # 6 files · 31 tests (zero DB/Redis I/O)
     │   ├── crypto.test.ts
     │   ├── email.test.ts
+    │   ├── lambda.test.ts
+    │   ├── logger.test.ts
     │   ├── openapi.test.ts
     │   └── validation.test.ts
     ├── integration/                  # 6 files · 45 tests

@@ -6,7 +6,7 @@
 >
 > - System Design & Component Architecture: [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md)
 > - Frontend Architecture & Control Plane: [`docs/FRONTEND_ARCHITECTURE.md`](./FRONTEND_ARCHITECTURE.md)
-> - Formal Decisions (107 Formal ADRs): [`docs/Engineering-Decisions.md`](./Engineering-Decisions.md)
+> - Formal Decisions (109 Formal ADRs): [`docs/Engineering-Decisions.md`](./Engineering-Decisions.md)
 > - OAuth 2.0 PKCE & Integration Guide: [`docs/OAUTH.md`](./OAUTH.md)
 > - Testing Architecture & Verification Matrix: [`docs/TESTING.md`](./TESTING.md)
 
@@ -125,8 +125,8 @@ Configured in [`apps/api/src/lib/prisma.ts`](../apps/api/src/lib/prisma.ts) and 
 
 Configured in [`apps/api/src/lib/redis.ts`](../apps/api/src/lib/redis.ts), [`apps/api/src/lambda.ts`](../apps/api/src/lambda.ts), [`apps/api/src/lib/queue.ts`](../apps/api/src/lib/queue.ts), and [`apps/api/src/workers/email.worker.ts`](../apps/api/src/workers/email.worker.ts):
 
-- **API Singleton (`redis.ts`):** `lazyConnect: true`, `enableOfflineQueue: false` (fail fast instead of buffering commands across frozen Lambda invocations), `maxRetriesPerRequest: 1`, `connectTimeout: 2000`, `commandTimeout: 1000`, and `retryStrategy` (0ms, 50ms, 100ms; stops after 3 failures).
-- **Lambda Lifecycle (`lambda.ts`):** Connects Redis eagerly on cold start (degrading gracefully if unavailable). On warm invocations where Redis is not `ready`, triggers `connect()` if `end` and waits up to 100ms (`once(redis, "ready", { signal: AbortSignal.timeout(100) })`).
+- **API Singleton (`redis.ts`):** `lazyConnect: true`, `enableOfflineQueue: false` (fail fast instead of buffering commands across frozen Lambda invocations), `maxRetriesPerRequest: 1`, `connectTimeout: 2000`, `commandTimeout: 1000`, `retryStrategy` (0ms, 50ms, 100ms; stops after 3 failures), and `redis.on("error")` (prevents unhandled EventEmitter crashes on idle socket drops).
+- **Lambda Lifecycle (`lambda.ts`):** Pre-constructs `lambdaApp` and `@codegenie/serverless-express` once during Lambda INIT, shares `JSON_BODY_LIMIT_BYTES` from `app.ts` for Buffer JSON parsing, and runs `ensureRedisReady()` (`500ms` bounded settlement wait via `"ready"`/`"end"` listeners and `5000ms` failure cooldown) before each invocation, degrading gracefully if Redis is unavailable.
 - **Queue Driver Strategy (`QUEUE_DRIVER`):**
   - `sync` (Lambda default): Awaits email delivery before returning the handler response so AWS does not freeze the microVM mid-flight.
   - `inline` (ECS API default): Offloads delivery via `setImmediate()` on the continuous event loop with zero Redis polling.
@@ -346,7 +346,7 @@ docker compose -f docker/docker-compose.dev.yml up -d
 cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env
 
-# 3. Apply migrations and seed baseline roles (USER, ADMIN) & permissions
+# 3. Apply migrations and seed baseline roles (USER, ADMIN), permissions, and optional bootstrap admin (SEED_ADMIN_EMAIL)
 npm run db:migrate:deploy --workspace=@authsphere/api
 npm run db:seed --workspace=@authsphere/api
 
@@ -378,3 +378,4 @@ npm run dev:worker   # Optional: BullMQ email worker when QUEUE_DRIVER=bullmq
 - [ADR-097: Single-File Tree-Shaken ESM Lambda Bundling with Native C++ Addon Externalization (`tsup`)](Engineering-Decisions.md#adr-097--single-file-tree-shaken-esm-lambda-bundling-with-native-c-addon-externalization-tsup)
 - [ADR-098: Unified Dual-Target Deployment Pipeline (Serverless Lambda vs Containerized ECS Fargate)](Engineering-Decisions.md#adr-098--unified-dual-target-deployment-pipeline-serverless-lambda-vs-containerized-ecs-fargate)
 - [ADR-103: Decoupled Transactional Email via Dedicated Gmail App Password with Preserved OAuth2 Fallback](Engineering-Decisions.md#adr-103--decoupled-transactional-email-via-dedicated-gmail-app-password-with-preserved-oauth2-fallback)
+- [ADR-109: Least-Privilege Bootstrap Administrator Seeding](Engineering-Decisions.md#adr-109--least-privilege-bootstrap-administrator-seeding)
