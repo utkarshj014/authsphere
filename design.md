@@ -6,12 +6,12 @@ The locked system. Every Hallmark run reads this first and pages share it. Chang
 
 - Genre: modern-minimal
 - Shape of the first page: app screen (Security & Identity Control Plane)
-- Theme: Console (by request) · colourway: graphite (dark console baseline with paper light mode)
+- Theme: Console (by request) · colourway: graphite (dark console)
 - Axes: dark/grotesk-sans/chromatic-amber · posture: restrained
 
 ## Tokens
 
-[`apps/web/src/styles/tokens.css`](file:///c:/Users/utkar/Documents/code/Project_JOB_New/authsphere/apps/web/src/styles/tokens.css) is the single canonical source of truth for design tokens and Tailwind CSS v4 bridge. The roles:
+[`apps/web/src/styles/tokens.css`](./apps/web/src/styles/tokens.css) is the single canonical source of truth for design tokens and Tailwind CSS v4 bridge. The roles:
 
 ```css
 @theme static {
@@ -52,14 +52,14 @@ The locked system. Every Hallmark run reads this first and pages share it. Chang
 }
 ```
 
-The spacing scale, type scale, easings, durations, and layers live in [`apps/web/src/styles/tokens.css`](file:///c:/Users/utkar/Documents/code/Project_JOB_New/authsphere/apps/web/src/styles/tokens.css).
+The spacing scale, type scale, easings, durations, and layers live in [`apps/web/src/styles/tokens.css`](./apps/web/src/styles/tokens.css).
 
 ## Controls
 
-- Primary: Fill `var(--color-accent)` with text `var(--color-accent-ink)` · radius 6px (`--radius-pill`) · height 36px (44px touch target) · `:active` scale(0.98)
+- Primary: Fill `var(--color-accent)` with text `var(--color-accent-ink)` · radius 6px (`--radius-pill`) · height 36px (44px mobile touch target) · `:active` scale(0.98)
 - Secondary: 1px hairline `var(--color-rule)` on `var(--color-paper-2)` · same radius and height
-- Destructive: 1px hairline `var(--color-bad-soft)` on `var(--color-paper-2)` with text `var(--color-bad)` · same radius and height
-- Inputs: 1px hairline `var(--color-rule)` on `var(--color-paper-3)`, focus ring 2px `var(--color-focus)` offset 2px · height 36px
+- Destructive: Fill `var(--color-bad-soft)` with 1px `var(--color-bad)` (30% opacity) border and text `var(--color-bad)` · same radius and height
+- Inputs: 1px hairline `var(--color-rule)` on `var(--color-paper-3)`, focus ring 2px `var(--color-focus)` · height 36px (44px mobile touch target)
 
 ## Motion
 
@@ -67,4 +67,4 @@ The spacing scale, type scale, easings, durations, and layers live in [`apps/web
 
 ## Exports
 
-[`apps/web/src/styles/tokens.css`](file:///c:/Users/utkar/Documents/code/Project_JOB_New/authsphere/apps/web/src/styles/tokens.css) bridged via Tailwind CSS v4 `@theme static`. Base resets in [`apps/web/src/styles/base.css`](file:///c:/Users/utkar/Documents/code/Project_JOB_New/authsphere/apps/web/src/styles/base.css) under `layer(base)`.
+[`apps/web/src/styles/tokens.css`](./apps/web/src/styles/tokens.css) bridged via Tailwind CSS v4 `@theme static`, imported alongside [`apps/web/src/styles/base.css`](./apps/web/src/styles/base.css) (`layer(base)`) in [`apps/web/src/index.css`](./apps/web/src/index.css).
