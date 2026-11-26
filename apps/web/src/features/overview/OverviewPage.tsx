@@ -1,7 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuthStore } from "../../stores/auth.store.js";
-import { sessionsApi, activityApi } from "../../api/index.js";
+import {
+  sessionsApi,
+  activityApi,
+  isRequestCanceled,
+} from "../../api/index.js";
 import type { SessionItem, SecurityEventItem } from "../../types/auth.types.js";
 import { Badge, Button, Skeleton } from "../../components/ui/index.js";
 import { ROUTES } from "../../routes/routes.config.js";
@@ -18,6 +22,7 @@ export const OverviewPage: React.FC = () => {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [events, setEvents] = useState<SecurityEventItem[]>([]);
   const [isLoadingTelemetry, setIsLoadingTelemetry] = useState(true);
+  const [isSessionError, setIsSessionError] = useState(false);
   const [isActivityForbidden, setIsActivityForbidden] = useState(false);
 
   const canViewActivity =
@@ -25,21 +30,27 @@ export const OverviewPage: React.FC = () => {
     (user?.permissions?.includes(PERMISSIONS.DASHBOARD_VIEW) ?? false);
 
   useEffect(() => {
-    let isMounted = true;
+    const controller = new AbortController();
 
     const loadTelemetry = async () => {
       try {
         const [sessionsRes, eventsRes] = await Promise.allSettled([
-          sessionsApi.getSessions(),
+          sessionsApi.getSessions(controller.signal),
           canViewActivity
-            ? activityApi.getSecurityEvents(1, 5)
+            ? activityApi.getSecurityEvents(1, 5, controller.signal)
             : Promise.resolve(null),
         ]);
 
-        if (!isMounted) return;
+        if (controller.signal.aborted) return;
 
         if (sessionsRes.status === "fulfilled" && sessionsRes.value.data) {
           setSessions(sessionsRes.value.data);
+          setIsSessionError(false);
+        } else if (
+          sessionsRes.status === "rejected" &&
+          !isRequestCanceled(sessionsRes.reason)
+        ) {
+          setIsSessionError(true);
         }
 
         if (!canViewActivity) {
@@ -53,6 +64,7 @@ export const OverviewPage: React.FC = () => {
           setIsActivityForbidden(false);
         } else if (
           eventsRes.status === "rejected" &&
+          !isRequestCanceled(eventsRes.reason) &&
           (eventsRes.reason as { response?: { status?: number } })?.response
             ?.status === 403
         ) {
@@ -60,16 +72,16 @@ export const OverviewPage: React.FC = () => {
           setIsActivityForbidden(true);
         }
       } finally {
-        if (isMounted) {
+        if (!controller.signal.aborted) {
           setIsLoadingTelemetry(false);
         }
       }
     };
 
-    loadTelemetry();
+    void loadTelemetry();
 
     return () => {
-      isMounted = false;
+      controller.abort();
     };
   }, [canViewActivity]);
 
@@ -226,7 +238,7 @@ export const OverviewPage: React.FC = () => {
                 <div className="flex items-center justify-between p-2.5 bg-[var(--color-paper-3)] rounded-[var(--radius-pill)] border border-[var(--color-rule)]">
                   <span className="text-[var(--color-muted)]">IP Address</span>
                   <span className="font-mono text-[var(--color-ink)] font-medium">
-                    {currentSession.ipAddress || "127.0.0.1"}
+                    {currentSession.ipAddress || "—"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-3 p-2.5 bg-[var(--color-paper-3)] rounded-[var(--radius-pill)] border border-[var(--color-rule)]">
@@ -251,7 +263,9 @@ export const OverviewPage: React.FC = () => {
               </div>
             ) : (
               <p className="text-xs text-[var(--color-muted)] py-4 text-center">
-                Session telemetry is syncing…
+                {isSessionError
+                  ? "Session telemetry temporarily unavailable."
+                  : "No active session telemetry found."}
               </p>
             )}
           </div>

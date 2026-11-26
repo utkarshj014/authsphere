@@ -14,11 +14,12 @@ export interface AdminUsersResponseData {
 }
 
 export const adminApi = {
-  getUsers: async (page = 1, limit = 20) => {
+  getUsers: async (page = 1, limit = 20, signal?: AbortSignal) => {
     const res = await apiClient.get<ApiSuccessResponse<AdminUsersResponseData>>(
       "/users",
       {
         params: { page, limit },
+        ...(signal ? { signal } : {}),
       },
     );
     return res.data;
@@ -32,10 +33,10 @@ export const adminApi = {
     return res.data;
   },
 
-  getRolePermissions: async (roleName: RoleName) => {
+  getRolePermissions: async (roleName: RoleName, signal?: AbortSignal) => {
     const res = await apiClient.get<
       ApiSuccessResponse<RolePermissionsResponse>
-    >(`/roles/${roleName}/permissions`);
+    >(`/roles/${roleName}/permissions`, signal ? { signal } : undefined);
     return res.data;
   },
 

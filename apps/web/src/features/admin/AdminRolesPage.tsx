@@ -1,5 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { adminApi, getApiErrorMessage } from "../../api/index.js";
+import {
+  adminApi,
+  getApiErrorMessage,
+  isRequestCanceled,
+} from "../../api/index.js";
 import {
   PERMISSIONS,
   type RoleName,
@@ -151,23 +155,27 @@ export const AdminRolesPage: React.FC = () => {
   const [globalSuccess, setGlobalSuccess] = useState<string | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
+    const controller = new AbortController();
 
     const fetchRolePermissions = async () => {
       try {
-        const res = await adminApi.getRolePermissions(activeRole);
-        if (isMounted && res.data) {
+        const res = await adminApi.getRolePermissions(
+          activeRole,
+          controller.signal,
+        );
+        if (!controller.signal.aborted && res.data) {
           setPermissions(res.data.permissions);
           setInitialPermissions(res.data.permissions);
           setGlobalError(null);
           setGlobalSuccess(null);
         }
       } catch (err: unknown) {
-        if (isMounted) {
-          setGlobalError(getApiErrorMessage(err));
-        }
+        if (isRequestCanceled(err) || controller.signal.aborted) return;
+        setPermissions([]);
+        setInitialPermissions([]);
+        setGlobalError(getApiErrorMessage(err));
       } finally {
-        if (isMounted) {
+        if (!controller.signal.aborted) {
           setIsLoading(false);
         }
       }
@@ -176,9 +184,15 @@ export const AdminRolesPage: React.FC = () => {
     void fetchRolePermissions();
 
     return () => {
-      isMounted = false;
+      controller.abort();
     };
   }, [activeRole]);
+
+  const handleRoleChange = (role: RoleName) => {
+    if (role === activeRole) return;
+    setIsLoading(true);
+    setActiveRole(role);
+  };
 
   const displayedPermissions =
     activeRole === "ADMIN" ? ADMIN_ROLE_PERMISSIONS : USER_ROLE_PERMISSIONS;
@@ -288,7 +302,7 @@ export const AdminRolesPage: React.FC = () => {
       <div className="flex border-b border-[var(--color-rule)] gap-4">
         <button
           type="button"
-          onClick={() => setActiveRole("USER")}
+          onClick={() => handleRoleChange("USER")}
           className={`pb-2 text-xs font-medium border-b-2 transition-colors cursor-pointer ${
             activeRole === "USER"
               ? "border-[var(--color-accent)] text-[var(--color-accent)]"
@@ -299,7 +313,7 @@ export const AdminRolesPage: React.FC = () => {
         </button>
         <button
           type="button"
-          onClick={() => setActiveRole("ADMIN")}
+          onClick={() => handleRoleChange("ADMIN")}
           className={`pb-2 text-xs font-medium border-b-2 transition-colors cursor-pointer ${
             activeRole === "ADMIN"
               ? "border-[var(--color-accent)] text-[var(--color-accent)]"
@@ -352,6 +366,10 @@ export const AdminRolesPage: React.FC = () => {
             <Skeleton className="h-16 w-full" />
             <Skeleton className="h-16 w-full" />
           </div>
+        ) : globalError && permissions.length === 0 ? (
+          <p className="text-xs text-[var(--color-muted)] py-8 text-center">
+            Unable to load permissions for {activeRole}.
+          </p>
         ) : (
           <div className="divide-y divide-[var(--color-rule)]">
             {displayedPermissions.map((perm) => {

@@ -5,7 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Button, Input, Alert } from "../../components/ui/index.js";
 import { authApi, mfaApi, getApiErrorMessage } from "../../api/index.js";
 import { useAuthStore } from "../../stores/index.js";
-import { ROUTES } from "../../routes/routes.config.js";
+import { ROUTES, resolvePostAuthRedirect } from "../../routes/routes.config.js";
 import {
   loginSchema,
   magicLinkSchema,
@@ -16,19 +16,17 @@ import { SocialAuthButtons } from "../../components/auth/SocialAuthButtons.js";
 
 const isUnverifiedErrorMessage = (msg: string | null | undefined): boolean => {
   if (!msg) return false;
-  const lower = msg.toLowerCase();
-  return lower.includes("verif") || lower.includes("unverified");
+  return msg.toLowerCase().includes("verif");
 };
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const rawReturnTo = searchParams.get("returnTo");
-  const returnTo =
-    rawReturnTo && !rawReturnTo.startsWith(ROUTES.APP.SECURITY)
-      ? rawReturnTo
-      : ROUTES.APP.ROOT;
-  const sessionExpired = searchParams.get("session_expired") === "true";
+  const [searchParams, setSearchParams] = useSearchParams();
+  const returnTo = resolvePostAuthRedirect(searchParams.get("returnTo"));
+  const storeSessionExpired = useAuthStore((s) => s.sessionExpired);
+  const clearSessionExpired = useAuthStore((s) => s.clearSessionExpired);
+  const sessionExpired =
+    storeSessionExpired || searchParams.get("session_expired") === "true";
   const urlError = searchParams.get("error");
 
   const [activeTab, setActiveTab] = useState<"password" | "magic-link">(
@@ -93,7 +91,25 @@ export const LoginPage: React.FC = () => {
   const isUnverifiedState =
     Boolean(unverifiedEmail) || isUnverifiedErrorMessage(globalError);
 
+  const dismissSessionExpired = () => {
+    clearSessionExpired();
+    if (searchParams.has("session_expired")) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("session_expired");
+      setSearchParams(nextParams, { replace: true });
+    }
+  };
+
+  const switchTab = (tab: "password" | "magic-link") => {
+    setActiveTab(tab);
+    setGlobalError(null);
+    setUnverifiedEmail(null);
+    setResendStatus("idle");
+    setResendError(null);
+  };
+
   const onPasswordSubmit = async (data: LoginFormData) => {
+    clearSessionExpired();
     setGlobalError(null);
     setUnverifiedEmail(null);
     setResendStatus("idle");
@@ -127,6 +143,7 @@ export const LoginPage: React.FC = () => {
   };
 
   const onMagicSubmit = async (data: MagicLinkFormData) => {
+    clearSessionExpired();
     setGlobalError(null);
     setUnverifiedEmail(null);
     setResendStatus("idle");
@@ -257,7 +274,7 @@ export const LoginPage: React.FC = () => {
       </div>
 
       {sessionExpired && (
-        <Alert variant="warn">
+        <Alert variant="warn" onClose={dismissSessionExpired}>
           Your active session expired. Please authenticate again to continue.
         </Alert>
       )}
@@ -325,10 +342,7 @@ export const LoginPage: React.FC = () => {
       <div className="flex border-b border-[var(--color-rule)]">
         <button
           type="button"
-          onClick={() => {
-            setActiveTab("password");
-            setGlobalError(null);
-          }}
+          onClick={() => switchTab("password")}
           className={`pb-2 px-3 text-xs font-medium border-b-2 transition-colors ${
             activeTab === "password"
               ? "border-[var(--color-accent)] text-[var(--color-accent)]"
@@ -339,10 +353,7 @@ export const LoginPage: React.FC = () => {
         </button>
         <button
           type="button"
-          onClick={() => {
-            setActiveTab("magic-link");
-            setGlobalError(null);
-          }}
+          onClick={() => switchTab("magic-link")}
           className={`pb-2 px-3 text-xs font-medium border-b-2 transition-colors ${
             activeTab === "magic-link"
               ? "border-[var(--color-accent)] text-[var(--color-accent)]"
@@ -394,11 +405,22 @@ export const LoginPage: React.FC = () => {
       {activeTab === "magic-link" && (
         <div className="space-y-4">
           {magicLinkSent ? (
-            <Alert variant="ok" title="Magic Link Dispatched">
-              If an account is associated with this email, a sign-in link has
-              been sent. Check your inbox and follow the link to access the
-              console.
-            </Alert>
+            <div className="space-y-3">
+              <Alert variant="ok" title="Magic Link Dispatched">
+                If an account is associated with this email, a sign-in link has
+                been sent. Check your inbox and follow the link to access the
+                console.
+              </Alert>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setMagicLinkSent(false)}
+                className="w-full"
+              >
+                Send another magic link
+              </Button>
+            </div>
           ) : (
             <form
               onSubmit={handleMagicSubmit(onMagicSubmit)}

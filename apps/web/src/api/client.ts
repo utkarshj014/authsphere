@@ -1,12 +1,28 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios";
-import type { ApiErrorResponse } from "../types/auth.types.js";
-import { ROUTES, PUBLIC_AUTH_ROUTES } from "../routes/routes.config.js";
+import type {
+  ApiErrorResponse,
+  PaginationMeta,
+} from "../types/auth.types.js";
 
-// Endpoints that bypass automatic 401 refresh rotation
-const AUTH_BYPASS_URLS: readonly string[] = [
+export const DEFAULT_PAGE_SIZE = 20;
+
+export const EMPTY_PAGINATION: PaginationMeta = {
+  page: 1,
+  limit: DEFAULT_PAGE_SIZE,
+  totalCount: 0,
+  totalPages: 1,
+  hasNextPage: false,
+  hasPreviousPage: false,
+};
+
+// Endpoints whose 401/403 responses belong directly to the caller and must not trigger refresh/profile cascades
+const AUTH_BYPASS_PATHS: readonly string[] = [
   "/auth/login",
   "/auth/signup",
+  "/auth/verify-email",
+  "/auth/resend-verification",
   "/auth/refresh-token",
+  "/auth/logout",
   "/auth/magic-link",
   "/auth/magic-link/verify",
   "/auth/mfa/verify",
@@ -14,7 +30,16 @@ const AUTH_BYPASS_URLS: readonly string[] = [
   "/auth/reset-password",
 ];
 
-type AuthFailureReason = "unauthenticated" | "unavailable";
+const isAuthBypassRoute = (url?: string): boolean => {
+  if (!url) return false;
+  const path = url.split("?")[0] ?? "";
+  return AUTH_BYPASS_PATHS.includes(path);
+};
+
+export type AuthFailureReason =
+  | "unauthenticated"
+  | "session_expired"
+  | "unavailable";
 type AuthFailureHandler = (reason: AuthFailureReason) => void;
 let onAuthFailure: AuthFailureHandler | null = null;
 
@@ -23,7 +48,6 @@ let onForbidden: ForbiddenHandler | null = null;
 
 /**
  * Register a callback invoked when authentication cannot be recovered or service is unavailable.
- * Breaks circular dependencies between the HTTP client and auth store.
  */
 export const registerAuthFailureHandler = (
   handler: AuthFailureHandler,
@@ -32,31 +56,14 @@ export const registerAuthFailureHandler = (
 };
 
 /**
- * Register a callback invoked when a request receives a 403 Forbidden response.
- * Allows the auth store to synchronize permissions in the background.
+ * Register a callback invoked when a protected request receives a 403 Forbidden response.
  */
 export const registerForbiddenHandler = (handler: ForbiddenHandler): void => {
   onForbidden = handler;
 };
 
-interface RetryQueueItem {
-  resolve: (value?: unknown) => void;
-  reject: (reason?: unknown) => void;
-}
-
-let isRefreshing = false;
-let failedQueue: RetryQueueItem[] = [];
-
-const processQueue = (error: unknown): void => {
-  failedQueue.forEach((prom) => {
-    if (error) {
-      prom.reject(error);
-    } else {
-      prom.resolve();
-    }
-  });
-  failedQueue = [];
-};
+export const isRequestCanceled = (error: unknown): boolean =>
+  axios.isCancel(error);
 
 const API_TIMEOUT_MS = 15_000;
 
@@ -69,102 +76,73 @@ export const apiClient = axios.create({
   },
 });
 
+let inflightRefreshPromise: Promise<void> | null = null;
+
+const refreshAuthSession = (): Promise<void> => {
+  if (inflightRefreshPromise) {
+    return inflightRefreshPromise;
+  }
+
+  inflightRefreshPromise = axios
+    .post("/api/auth/refresh-token", null, {
+      withCredentials: true,
+      timeout: API_TIMEOUT_MS,
+    })
+    .then(() => undefined)
+    .catch((refreshError: unknown) => {
+      if (axios.isAxiosError(refreshError)) {
+        const status = refreshError.response?.status;
+        if (status === 401) {
+          onAuthFailure?.("session_expired");
+        } else if (!status || status >= 500) {
+          onAuthFailure?.("unavailable");
+        }
+      } else {
+        onAuthFailure?.("unavailable");
+      }
+      throw refreshError;
+    })
+    .finally(() => {
+      inflightRefreshPromise = null;
+    });
+
+  return inflightRefreshPromise;
+};
+
 apiClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError<ApiErrorResponse>) => {
-    const originalRequest = error.config as InternalAxiosRequestConfig & {
-      _retry?: boolean;
-    };
+    if (axios.isCancel(error)) {
+      return Promise.reject(error);
+    }
+
+    const originalRequest = error.config as
+      | (InternalAxiosRequestConfig & { _retry?: boolean })
+      | undefined;
 
     if (!originalRequest) {
       return Promise.reject(error);
     }
 
-    const requestUrl = originalRequest.url || "";
-    const isAuthBypass = AUTH_BYPASS_URLS.some((url) =>
-      requestUrl.includes(url),
-    );
+    const isAuthBypass = isAuthBypassRoute(originalRequest.url);
 
-    // Intercept 401 on protected requests that haven't been retried yet
+    // Single-flight silent refresh on 401 for protected requests
     if (
       error.response?.status === 401 &&
       !isAuthBypass &&
       !originalRequest._retry
     ) {
-      if (isRefreshing) {
-        // Carry retry flag on queued concurrent requests to prevent recursive refresh loops
-        originalRequest._retry = true;
-        return new Promise((resolve, reject) => {
-          failedQueue.push({ resolve, reject });
-        })
-          .then(() => apiClient(originalRequest))
-          .catch((err) => Promise.reject(err));
-      }
-
       originalRequest._retry = true;
-      isRefreshing = true;
-
-      try {
-        // Single in-flight refresh request directly via raw axios to avoid interceptor recursion
-        await axios.post("/api/auth/refresh-token", null, {
-          withCredentials: true,
-          timeout: API_TIMEOUT_MS,
-        });
-
-        processQueue(null);
-        return apiClient(originalRequest);
-      } catch (refreshError) {
-        processQueue(refreshError);
-
-        const isDefinitive401 =
-          axios.isAxiosError(refreshError) &&
-          refreshError.response?.status === 401;
-
-        if (isDefinitive401) {
-          // Refresh token invalid, expired, or replayed -> Unauthenticated
-          if (onAuthFailure) {
-            onAuthFailure("unauthenticated");
-          }
-
-          // Redirect to login if on a protected route
-          if (typeof window !== "undefined") {
-            const currentPath = window.location.pathname;
-            const isPublicRoute = PUBLIC_AUTH_ROUTES.some((route) =>
-              route === "/"
-                ? currentPath === "/"
-                : currentPath.startsWith(route),
-            );
-
-            // Only redirect with session_expired if currently within a protected application route
-            if (!isPublicRoute && currentPath.startsWith(ROUTES.APP.ROOT)) {
-              const returnTo = encodeURIComponent(
-                currentPath + window.location.search,
-              );
-              window.location.href = `${ROUTES.LOGIN}?session_expired=true&returnTo=${returnTo}`;
-            }
-          }
-        } else {
-          // Network failure, DNS outage, or 5xx server error -> Service Unavailable (retain session)
-          if (onAuthFailure) {
-            onAuthFailure("unavailable");
-          }
-        }
-
-        return Promise.reject(refreshError);
-      } finally {
-        isRefreshing = false;
-      }
+      await refreshAuthSession();
+      return apiClient(originalRequest);
     }
 
-    // When a request is rejected with 403 Forbidden, role permissions may have changed dynamically.
-    // Await store resynchronization so capabilities are refreshed atomically before rejecting caller.
-    if (error.response?.status === 403) {
-      if (onForbidden) {
-        try {
-          await onForbidden();
-        } catch {
-          // Swallow refresh error to allow original 403 error to propagate to caller
-        }
+    // Re-sync dynamic RBAC permissions when a protected request receives 403 Forbidden
+    if (error.response?.status === 403 && !isAuthBypass && onForbidden) {
+      try {
+        await onForbidden();
+      } catch {
+        // Swallow sync errors so the original 403 error reaches the caller
       }
     }
 
@@ -207,14 +185,12 @@ export const getApiErrorMessage = (error: unknown): string => {
 
     const status = error.response.status;
 
-    // Never leak 5xx server internals or stack traces
     if (status >= 500) {
       return "An unexpected server error occurred. Please try again later.";
     }
 
     const data = error.response.data;
 
-    // Schema validation errors array
     if (data?.errors && Array.isArray(data.errors) && data.errors.length > 0) {
       const messages = data.errors
         .map((e) => e.message)
@@ -250,11 +226,20 @@ export const getApiErrorMessage = (error: unknown): string => {
     }
   }
 
-  if (error instanceof Error) {
-    if (!isTechnicalOrInternalError(error.message)) {
-      return error.message;
-    }
+  if (error instanceof Error && !isTechnicalOrInternalError(error.message)) {
+    return error.message;
   }
 
   return "An unexpected error occurred. Please try again.";
+};
+
+export const formatPermissionError = (
+  error: unknown,
+  permission: string,
+  resourceDescription: string,
+): string => {
+  if (axios.isAxiosError(error) && error.response?.status === 403) {
+    return `Access Denied · Your role does not have permission to ${resourceDescription} (${permission}). An administrator can configure role permissions in Role Governance.`;
+  }
+  return getApiErrorMessage(error);
 };

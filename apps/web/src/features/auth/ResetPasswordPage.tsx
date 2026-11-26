@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button, Input, Alert } from "../../components/ui/index.js";
 import { authApi, getApiErrorMessage } from "../../api/index.js";
+import { useAuthStore } from "../../stores/auth.store.js";
 import { ROUTES } from "../../routes/routes.config.js";
 import {
   resetPasswordSchema,
@@ -47,6 +48,7 @@ export const ResetPasswordPage: React.FC = () => {
         return;
       }
 
+      useAuthStore.getState().clearAuthUser();
       setIsSuccess(true);
     } catch (err: unknown) {
       setGlobalError(getApiErrorMessage(err));
