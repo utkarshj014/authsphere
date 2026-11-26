@@ -1,8 +1,9 @@
 import dotenv from "dotenv";
 import { defineConfig, env } from "prisma/config";
 
-// Always loads apps/api/.env regardless of current working directory
-dotenv.config({ path: new URL(".env", import.meta.url) });
+// Load .env.test when running under NODE_ENV=test, otherwise default to .env
+const envFile = process.env.NODE_ENV === "test" ? ".env.test" : ".env";
+dotenv.config({ path: new URL(envFile, import.meta.url) });
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
