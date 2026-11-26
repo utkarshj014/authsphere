@@ -121,19 +121,42 @@ const createSession = (
     ipAddress?: string;
     userAgent?: string;
   },
-) =>
+  options: {
+    supersededSessionId?: string | undefined;
+    maxActiveSessions?: number | undefined;
+  } = {},
+): Promise<{ revokedSessionIds: string[] }> =>
   prisma.$transaction(async (tx) => {
-    // Atomically prune superseded orphan sessions from the exact same client device/browser
-    if (sessionData.userAgent) {
+    const revokedSessionIds: string[] = [];
+
+    if (options.supersededSessionId) {
       await tx.session.deleteMany({
-        where: {
-          userId,
-          userAgent: sessionData.userAgent,
-        },
+        where: { id: options.supersededSessionId },
       });
+      revokedSessionIds.push(options.supersededSessionId);
     }
 
-    return tx.user.update({
+    if (options.maxActiveSessions && options.maxActiveSessions > 0) {
+      const overflow = await tx.session.findMany({
+        where: {
+          userId,
+          expiresAt: { gt: new Date() },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        skip: options.maxActiveSessions - 1,
+        select: { id: true },
+      });
+
+      if (overflow.length > 0) {
+        const overflowIds = overflow.map((s) => s.id);
+        await tx.session.deleteMany({
+          where: { id: { in: overflowIds } },
+        });
+        revokedSessionIds.push(...overflowIds);
+      }
+    }
+
+    await tx.user.update({
       where: { id: userId },
       data: {
         lastLoginAt: new Date(),
@@ -144,6 +167,8 @@ const createSession = (
         },
       },
     });
+
+    return { revokedSessionIds };
   });
 
 const findSessionById = (sessionId: string) =>

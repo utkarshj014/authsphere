@@ -1,6 +1,6 @@
 # Architecture Decision Records (ADR) — AuthSphere
 
-This document records the **109 formal architectural and engineering decisions** (`ADR-001` through `ADR-109`) made during the design and evolution of **AuthSphere** — an authentication, authorization, and session-management platform.
+This document records the **111 formal architectural and engineering decisions** (`ADR-001` through `ADR-111`) made during the design and evolution of **AuthSphere** — an authentication, authorization, and session-management platform.
 
 > **AuthSphere Architecture & Engineering Documentation Suite:**
 >
@@ -84,6 +84,7 @@ This document records the **109 formal architectural and engineering decisions**
 - [ADR-102: Client-Device Session Supersession on Authentication](#adr-102--client-device-session-supersession-on-authentication)
 - [ADR-104: Zero-Orphan Disconnect Protection and OAuth Account Disconnection Governance](#adr-104--zero-orphan-disconnect-protection-and-oauth-account-disconnection-governance)
 - [ADR-105: Redis-Backed Dual-Tier Session Revocation Engine with Multi-Key Pipelining (`redis.mget`)](#adr-105--redis-backed-dual-tier-session-revocation-engine-with-multi-key-pipelining-redismget)
+- [ADR-110: Cookie-Scoped Session Supersession and Bounded Per-User Active Session Cap](#adr-110--cookie-scoped-session-supersession-and-bounded-per-user-active-session-cap)
 
 </details>
 
@@ -99,6 +100,7 @@ This document records the **109 formal architectural and engineering decisions**
 - [ADR-091: Polymorphic Unified MFA Input Resolution (TOTP vs Recovery Code)](#adr-091--polymorphic-unified-mfa-input-resolution-totp-vs-recovery-code)
 - [ADR-101: Zero-Side-Effect Client MFA State Introspection via Current User Profile Contract](#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)
 - [ADR-107: Deferred MFA Security Event Attribution via Polymorphic Challenge State](#adr-107--deferred-mfa-security-event-attribution-via-polymorphic-challenge-state)
+- [ADR-111: HttpOnly Cookie Handoff for OAuth MFA Challenges (Zero-URL Token Exposure)](#adr-111--httponly-cookie-handoff-for-oauth-mfa-challenges-zero-url-token-exposure)
 
 </details>
 
@@ -178,7 +180,7 @@ This document records the **109 formal architectural and engineering decisions**
 ### Chronological Numerical Index
 
 <details>
-<summary><b>View Full Sequential Index (ADR-001 to ADR-109)</b></summary>
+<summary><b>View Full Sequential Index (ADR-001 to ADR-111)</b></summary>
 
 - [ADR-001: Monorepo Architecture](#adr-001--monorepo-architecture)
 - [ADR-002: Feature-Based Modular Architecture](#adr-002--feature-based-modular-architecture)
@@ -289,6 +291,8 @@ This document records the **109 formal architectural and engineering decisions**
 - [ADR-107: Deferred MFA Security Event Attribution via Polymorphic Challenge State](#adr-107--deferred-mfa-security-event-attribution-via-polymorphic-challenge-state)
 - [ADR-108: Pino HTTP Log Redaction for Session Credentials and OAuth Redirects](#adr-108--pino-http-log-redaction-for-session-credentials-and-oauth-redirects)
 - [ADR-109: Least-Privilege Bootstrap Administrator Seeding](#adr-109--least-privilege-bootstrap-administrator-seeding)
+- [ADR-110: Cookie-Scoped Session Supersession and Bounded Per-User Active Session Cap](#adr-110--cookie-scoped-session-supersession-and-bounded-per-user-active-session-cap)
+- [ADR-111: HttpOnly Cookie Handoff for OAuth MFA Challenges (Zero-URL Token Exposure)](#adr-111--httponly-cookie-handoff-for-oauth-mfa-challenges-zero-url-token-exposure)
 
 </details>
 
@@ -343,7 +347,7 @@ Scattered `process.env` usage leads to hidden runtime dependencies, missing vari
 
 ### Decision
 
-Access all environment variables exclusively through `src/config/env.ts`. Direct `process.env` calls outside this file are prohibited.
+Access all runtime application environment variables exclusively through `src/config/env.ts` (which loads `.env.test` when `NODE_ENV === "test"`, or `.env` otherwise in non-production). Direct `process.env` calls inside `apps/api/src/` outside `env.ts` are prohibited; standalone Prisma CLI scripts (`prisma.config.js`, `prisma/seed.ts`) are explicitly exempted so migrations and seeding run without requiring full API runtime secrets.
 
 ### Rationale
 
@@ -492,9 +496,9 @@ Abrupt process termination drops active requests and orphans database/Redis conn
 
 Intercept `SIGINT`, `SIGTERM`, `uncaughtException`, and `unhandledRejection` in `server.ts` to:
 
-1. Stop accepting new connections (`server.close()`).
+1. Stop accepting new connections (`server.close()`) and close idle sockets (`server.closeIdleConnections()`).
 2. Drain active connections with a 10-second hard timeout.
-3. Concurrently disconnect Prisma and Redis via `Promise.allSettled`.
+3. Concurrently disconnect Prisma, Redis, and (when `QUEUE_DRIVER === "bullmq"`) `emailQueue.close()` via `Promise.allSettled`.
 
 ### Rationale
 
@@ -860,7 +864,7 @@ Existing sessions authenticated with old credentials should be invalidated immed
 
 ### Decision
 
-Both `changePassword` and `resetPasswordAndDeleteToken` atomically delete all user sessions (`sessions: { deleteMany: {} }`) in the same database write. Controller additionally clears auth cookies.
+Both `changePassword` and `resetPasswordAndDeleteToken` atomically delete all user sessions (`sessions: { deleteMany: {} }`) in the same database write, and their services call `setUserRevokedAt(userId)` in Redis [ADR-105]. The `changePassword` controller additionally clears auth cookies (`clearAuthCookies(res)`).
 
 ### Rationale
 
@@ -954,24 +958,24 @@ Storing plaintext or weakly hashed passwords exposes user credentials to offline
 
 ## ADR-032 — Social Login Account Guarding
 
-**Status:** Accepted
+**Status:** Accepted _(Amended: `changePassword` supports setting an initial password when `passwordHash` is null; `forgotPassword` dispatches a social-account reminder email)_
 
 ### Context
 
-Social login users have `null` `passwordHash`. Password operations on these accounts cause confusing errors.
+Social login users have `null` `passwordHash`. Password operations on these accounts cause confusing errors or require distinct handling.
 
 ### Decision
 
-Guard all password-dependent flows:
+Guard password-dependent flows when `passwordHash === null`:
 
-- **Login:** `403` directing user to their social provider.
-- **Forgot Password:** Silent return (same as "user not found").
-- **Change Password:** `403` explaining social accounts cannot change passwords.
+- **Login:** `403` directing user to their linked social provider(s).
+- **Forgot Password:** Enqueues a `socialAccountReminder` email [ADR-072, ADR-084] while still returning silently (`200 OK`) to the HTTP caller to prevent account enumeration [ADR-023].
+- **Change Password:** Allows an authenticated social user (`passwordHash === null`) to set an initial local password without supplying `oldPassword` (enforcing MFA if enabled [ADR-048]).
 
 ### Rationale
 
-- **Clear User Guidance:** Directs social identity users to their respective OAuth provider rather than failing with confusing database errors.
-- **Credential Integrity:** Enforces that password-based mutations apply strictly to accounts maintaining local password hashes.
+- **Clear User Guidance:** Directs social identity users to their respective OAuth provider during login and password-reset flows without leaking account existence in unauthenticated responses.
+- **Credential Flexibility:** Lets authenticated OAuth-only users opt into a local password so they can unlink social providers safely under Zero-Orphan protection [ADR-104].
 
 ---
 
@@ -1055,7 +1059,7 @@ Implement composable Express middleware factories in `apps/api/src/modules/autho
 - `requirePermission(...permissions)`: Allows access only if the user holds all specified permissions (AND logic).
 - `requireSelfOrPermission(permission)`: Allows access if the requested resource matches `req.auth.userId` or if the user has the specified permission.
 
-Route chains place `auth` ahead of `rateLimiter`, `validate`, and authorization guards (`requireRole` / `requirePermission` / `requireSelfOrPermission`) before invoking the controller.
+Route chains place `auth` ahead of user-keyed `rateLimiter` policies; `requirePermission` precedes `rateLimiter` on `GET /users` and `GET /auth/security-events`, while `requireSelfOrPermission` and `requireRole` execute after `validate`.
 
 ### Rationale
 
@@ -1115,7 +1119,7 @@ JWT signing, refresh token hashing, and session persistence logic was duplicated
 
 ### Decision
 
-Consolidate into a single private helper `generateAuthTokensAndSession(userId, roleName, ipAddress, userAgent?, existingSessionId?)` returning `Promise<AuthTokens>` that handles both session creation (`existingSessionId` omitted, generating a new `uuidv7`) and rotation (`existingSessionId` supplied).
+Consolidate into a single exported helper `generateAuthTokensAndSession(userId, roleName, ipAddress, userAgent?, options?)` returning `Promise<AuthTokens>` (shared across `auth.service.ts` and `oauth.service.ts`), where `options?: { existingSessionId?: string; existingRefreshToken?: string }` differentiates rotation (`existingSessionId` supplied) from new session creation (`uuidv7()`, with cookie-scoped supersession and session-cap eviction [ADR-110]).
 
 ### Rationale
 
@@ -1234,7 +1238,7 @@ Set an explicit body size limit of 16 KB via shared `JSON_BODY_LIMIT_BYTES` (`16
 
 ## ADR-045 — Ephemeral MFA Challenge Tokens for Two-Step Authentication
 
-**Status:** Accepted _(Cardinality extended by ADR-057)_
+**Status:** Accepted _(Cardinality extended by ADR-057; OAuth cookie transport extended by ADR-111)_
 
 ### Context
 
@@ -1242,7 +1246,7 @@ During primary authentication (`POST /auth/login`), users with MFA enabled compl
 
 ### Decision
 
-Generate a short-lived (5-minute expiration) intermediate `MfaChallenge` record (`mfaToken` UUIDv7) upon successful primary credential verification. Return `{ mfaRequired: true, mfaToken }` to the client without issuing JWT access or refresh tokens. The client must present `mfaToken` alongside the TOTP or recovery code to `POST /auth/mfa/verify`. The challenge is atomically deleted (`deleteMfaChallenge`) immediately upon verification. ([ADR-057](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation) later evolved `MfaChallenge` from 1:1 to 1:Many on `User` to support concurrent login tabs.)
+Generate a short-lived (5-minute expiration) intermediate `MfaChallenge` record (`mfaToken` UUIDv7) upon successful primary credential verification. For JSON API flows (`POST /auth/login`, `POST /auth/magic-link/verify`), return `{ mfaRequired: true, mfaToken }` to the client without issuing JWT access or refresh tokens; for OAuth redirects, transport `mfaToken` via an `HttpOnly` `oauth_mfa_token` cookie [ADR-111]. The client presents the challenge token (JSON body or cookie) alongside the TOTP or recovery code to `POST /auth/mfa/verify`, and the challenge is atomically deleted (`deleteMfaChallenge`) immediately upon verification. ([ADR-057](#adr-057--ephemeral-multi-challenge-mfa-architecture-with-single-use-invalidation) later evolved `MfaChallenge` from 1:1 to 1:Many on `User` to support concurrent login tabs.)
 
 ### Rationale
 
@@ -1831,7 +1835,7 @@ Validating authentication, session management, and authorization requires provin
 Implement a 3-layer test pyramid utilizing **Vitest** and **Supertest** configured with strict environmental separation and hermetic boundaries:
 
 1. **Environmental & State Isolation:**
-   - Dedicated isolated PostgreSQL database and Redis logical index configured via `.env.test` (`apps/api/src/config/env.ts` loads `.env.test` when `NODE_ENV === "test"`).
+   - Dedicated isolated PostgreSQL database (`authsphere_test`, auto-provisioned via `docker/init-test-db.sql` in `docker/docker-compose.dev.yml`) and Redis logical index configured via `.env.test` (`apps/api/src/config/env.ts` and `apps/api/prisma.config.js` load `.env.test` when `NODE_ENV === "test"`, paired with `npm run db:migrate:test`).
    - Deterministic serial test execution (`fileParallelism: false`) with atomic cascade truncations of mutable user tables preserving seeded roles and permissions (`cleanTestState()`) and self-healing baseline role seeding (`ensureBaselineSeed()`).
 
 2. **In-Memory Outbox & Spy Email Layer:**
@@ -1998,7 +2002,7 @@ Conversely, relaxing reuse detection entirely creates an unacceptable vulnerabil
 
 ### Decision
 
-Implement single-statement atomic Compare-And-Swap (CAS) session rotation paired with an ephemeral Redis leeway cache (`auth:refresh-leeway:{sessionId}:{oldTokenHash}`) configured with a 30-second TTL (`AUTH_REFRESH_TOKEN_LEEWAY_SECONDS`).
+Implement single-statement atomic Compare-And-Swap (CAS) session rotation paired with an ephemeral Redis leeway cache (`auth:refresh-leeway:{sessionId}:{oldTokenHash}`) configured with a 30-second default TTL (`AUTH_REFRESH_TOKEN_LEEWAY_SECONDS`, disabled when `<= 0`).
 
 > [!IMPORTANT]
 > **Sensitive Credential Perimeter:** While PostgreSQL strictly stores SHA-256 token digests (`tokenHash`), Redis temporarily caches the unhashed plaintext token pair (`JSON.stringify(tokens)`) during the 30-second concurrency window to collapse concurrent client requests. Redis is therefore classified as an active, sensitive credential perimeter requiring TLS in transit, password authentication, and strict network isolation from untrusted environments.
@@ -2091,7 +2095,7 @@ Deploying Express applications to serverless AWS Lambda introduces two constrain
 Implement a serverless runtime adapter and reverse-proxy architecture:
 
 1. **Serverless Express Adapter (`apps/api/src/lambda.ts`):** Construct `lambdaApp` and `@codegenie/serverless-express` once during Lambda INIT, and run a unified `ensureRedisReady()` gate (`500ms` bounded settlement wait with a `5000ms` failure cooldown) before dispatching requests so Redis outages fall back to degraded mode cleanly.
-2. **Synchronous Execution Guard (`QUEUE_DRIVER=sync`):** In AWS Lambda (`isLambdaRuntime` detected via environment), `enqueueEmailJob()` awaits email dispatch directly within the handler before response completion, preventing tasks from freezing mid-flight.
+2. **Synchronous Execution Guard (`QUEUE_DRIVER=sync`):** In AWS Lambda (`infra/lambda/template.yaml` sets `QUEUE_DRIVER=sync`, while `isLambdaRuntime` in `env.ts` bounds PostgreSQL pool sizing in `lib/prisma.ts`), `enqueueEmailJob()` awaits email dispatch directly within the handler before response completion, preventing tasks from freezing mid-flight.
 3. **Edge Reverse Proxy (`apps/web/vercel.ts` via `@vercel/config/v1` [ADR-085]):** Configure edge rewrites (`/api/:path*` -> backend endpoint). Browsers interact strictly same-origin (`/api/*`), preserving `SameSite=Lax` cookies and eliminating CORS preflights.
 4. **Root Cookie Scoping (`path: "/"`):** Because reverse-proxy rewrites map public `/api/auth/*` to Express `/auth/*`, authentication cookies are scoped to root `path: "/"` to ensure consistent delivery across edge proxies [superseding ADR-042].
 
@@ -2156,7 +2160,7 @@ Enforce a single, cumulative 7-second abort deadline across all external HTTP in
 1. **Unified Abort Controller:** Instantiate a single `AbortController` with a bounded timer (`setTimeout(() => controller.abort(), 7000)`) at the start of callback resolution.
 2. **Pervasive Signal Propagation:** Pass `signal: AbortSignal` into every external `fetch` request, including token exchange, user profile fetching, and email queries.
 3. **Stream Consumption Budgeting:** Await all response body parsing (`response.json()`) under the same deadline, ensuring slow upstream chunked transfers cannot stall execution.
-4. **Explicit 504 Gateway Timeout Mapping:** In `oauth.service.ts` (`handleOAuthCallback`), catch `AbortError` or `TimeoutError` from upstream fetches and throw `AppError("OAuth provider request timed out. Please try again.", 504)`.
+4. **Explicit 504 Gateway Timeout Mapping:** In `oauth.service.ts` (`handleOAuthCallback`), check `controller.signal.aborted` when upstream fetches fail and throw `AppError(\`Timeout while communicating with ${provider} OAuth provider\`, 504)`.
 5. **Deterministic Cleanup:** Clear the timeout in a `finally` block to prevent lingering timers on warm serverless execution threads.
 
 ### Rationale
@@ -2181,8 +2185,8 @@ However, a race condition exists: if an authenticated user initiates account lin
 
 Enforce a **Pre-Resolution Session Gate** in `oauth.service.ts` that executes before evaluating any identity resolution branch whenever state metadata indicates an authenticated initiation intent (`stateData.userId` or `stateData.sessionId` present):
 
-1. **Mandatory Session Validation:** Prior to querying `OAuthAccount` or evaluating user identity, query PostgreSQL (`sessionRepository.findSessionById`) for `stateData.sessionId`.
-2. **Strict Invalidation Check:** If the session does not exist, has expired (`expiresAt <= NOW()`), or belongs to a different `userId`, immediately terminate the flow with `AppError("Session has expired or was revoked. Please log in again to link your account.", 401)`.
+1. **Mandatory Session Validation:** Prior to querying `OAuthAccount` or evaluating user identity, query PostgreSQL (`authRepository.findSessionById`) for `stateData.sessionId`.
+2. **Strict Invalidation Check:** If the session does not exist, has expired (`expiresAt <= NOW()`), or belongs to a different `userId`, immediately terminate the flow with `AppError("Initiating session is invalid, expired, or revoked", 401)`.
 3. **No Unauthenticated Downgrades:** The transaction is never permitted to downgrade to a standard unauthenticated social login. A revoked linking attempt must fail completely.
 4. **Verified Access Token Clarification:** In `optionalAuth` middleware, the presence of a valid access token in `req.auth` signals authenticated intent for initiation; the Pre-Resolution Session Gate in the callback establishes whether the underlying database session remains active.
 
@@ -2681,7 +2685,7 @@ Expose `mfaEnabled: boolean` as a first-class attribute in the authenticated use
 
 ## ADR-102 — Client-Device Session Supersession on Authentication
 
-**Status:** Accepted _(Extends ADR-012, ADR-013, ADR-029, ADR-039, ADR-068)_
+**Status:** Superseded by [ADR-110](#adr-110--cookie-scoped-session-supersession-and-bounded-per-user-active-session-cap) _(Originally extended ADR-012, ADR-013, ADR-029, ADR-039, ADR-068)_
 
 ### Context
 
@@ -2845,7 +2849,7 @@ Persist the initiating authentication event type inside the ephemeral `MfaChalle
 
 ### Context
 
-`pino-http` logs incoming request metadata and outgoing response headers for operational tracing. Without header redaction, `Authorization` bearer headers, session `Cookie` / `Set-Cookie` headers containing raw JWTs, and `302` OAuth `Location` redirect URLs carrying ephemeral `state`, `code_challenge`, or `mfaToken` values can persist in plaintext across stdout and CloudWatch logs.
+`pino-http` logs incoming request metadata and outgoing response headers for operational tracing. Without header redaction, `Authorization` bearer headers, session `Cookie` / `Set-Cookie` headers containing raw JWTs or `oauth_mfa_token` challenge cookies [ADR-111], and `302` OAuth `Location` redirect URLs carrying ephemeral `state` and `code_challenge` values can persist in plaintext across stdout and CloudWatch logs.
 
 ### Decision
 
@@ -2882,3 +2886,51 @@ Separate role promotion from initial account creation in `apps/api/prisma/seed.t
 
 - **Explicit Ownership Claim:** New seeded administrators must complete standard email verification before signing in or managing security settings.
 - **Idempotent Safe Re-Runs:** Re-executing the seed script in production safely promotes an existing operator account without disturbing active credentials or OAuth sign-in methods.
+
+---
+
+## ADR-110 — Cookie-Scoped Session Supersession and Bounded Per-User Active Session Cap
+
+**Status:** Accepted _(Supersedes ADR-102; Extends ADR-012, ADR-013, ADR-068, ADR-105)_
+
+### Context
+
+[ADR-102](#adr-102--client-device-session-supersession-on-authentication) originally pruned prior sessions matching `(userId, userAgent)` upon authentication. In practice, independent browsers or profiles on the same host (e.g., Chrome and Brave on the same OS) frequently emit identical `User-Agent` headers, causing logins in one browser to silently terminate active sessions in another and breaking multi-browser session isolation (`GET /sessions`). Conversely, without superseding the caller's own prior session or bounding active sessions per user, re-authentications in the same cookie jar leave orphaned session rows and unbounded logins can accumulate excessive database records.
+
+### Decision
+
+Replace `User-Agent`-based pruning with cookie-scoped session supersession and a bounded per-user active session ceiling in `auth.service.ts` and `authRepository.createSession`:
+
+1. **Cookie-Scoped Supersession (`existingRefreshToken`):** Authentication entrypoints (`login`, `mfaVerifyLogin`, `verifyMagicLink`, `oauthCallbackHandler`) read `req.cookies?.refreshToken` and pass it into `generateAuthTokensAndSession(..., { existingRefreshToken })`. `resolveSupersededSessionId` verifies the token (`verifyRefreshToken`) and extracts `payload.sid` (ignoring `User-Agent` and `ipAddress`). Inside `createSession`'s `$transaction`, only that `supersededSessionId` is hard-deleted (`deleteMany`).
+2. **Bounded Active Session Cap (`MAX_ACTIVE_SESSIONS_PER_USER = 10`):** Within the same `$transaction`, active non-expired sessions (`expiresAt > now`, ordered by `createdAt DESC, id DESC`) beyond `maxActiveSessions - 1` are evicted via hard deletion (`deleteMany`).
+3. **Immediate Redis Access Revocation:** `generateAuthTokensAndSession` passes all deleted `revokedSessionIds` (superseded and cap-evicted) to `revokeSessionsInRedis(revokedSessionIds)` (`auth:revoked-session:<sid>` with `JWT_ACCESS_EXPIRES_IN_MS` TTL) so older access JWTs are rejected immediately [ADR-105].
+
+### Rationale & Trade-offs
+
+- **Multi-Browser Isolation:** Two browsers sharing an identical `User-Agent` maintain independent active sessions because they hold distinct cookie jars.
+- **Zero-Window Supersession & Bounded Storage:** Re-authenticating within the same browser immediately revokes its prior session in both PostgreSQL and Redis, while the 10-session ceiling bounds table growth without background cleanup jobs.
+- **Accepted Trade-off:** If a browser clears cookies without calling `/logout`, its prior session remains active until expiration or eviction under the 10-session cap.
+
+---
+
+## ADR-111 — HttpOnly Cookie Handoff for OAuth MFA Challenges (Zero-URL Token Exposure)
+
+**Status:** Accepted _(Extends ADR-033, ADR-045, ADR-057, ADR-079, ADR-080, ADR-108)_
+
+### Context
+
+When federated OAuth logins (`GET /auth/oauth/:provider/callback`) encounter an MFA-enrolled user (`user.mfaEnabled === true`), the API must redirect the browser back to the frontend MFA prompt. Passing the ephemeral `mfaToken` UUIDv7 in the `302` `Location` query string (`/login?mfa=true&mfaToken=...`) exposed the challenge credential in browser history, `Referer` headers, reverse-proxy/access logs, and client URL state.
+
+### Decision
+
+Transport OAuth MFA challenge tokens out-of-band via a short-lived `HttpOnly` cookie while preserving JSON body transport for API-native flows:
+
+1. **OAuth Challenge Cookie (`common/utils/cookie.ts`, `oauth.controller.ts`):** When `handleOAuthCallback` returns `{ mfaRequired: true, mfaToken }`, `oauthCallbackHandler` sets `oauth_mfa_token` (`OAUTH_MFA_COOKIE_NAME`) with `httpOnly: true`, `sameSite: "lax"`, `path: "/"`, `priority: "high"`, `secure: env.NODE_ENV === "production"`, and `maxAge: 5 * 60 * 1000` (5 minutes), redirecting to `${FRONTEND_URL}/login?mfa=true&provider=...` with no `mfaToken` in the URL. Non-MFA OAuth completions proactively clear `oauth_mfa_token`.
+2. **Dual-Transport Verification (`auth.validation.ts`, `auth.controller.ts`):** `authRequestSchema.mfaVerifyLogin` marks `mfaToken` optional (`mfaTokenSchema.optional()`). `POST /auth/mfa/verify` accepts `req.body.mfaToken` (password and magic-link JSON flows) or falls back to validating `req.cookies?.[OAUTH_MFA_COOKIE_NAME]` via `mfaTokenSchema.safeParse(...)` (OAuth redirect flow). Missing/invalid challenges clear `oauth_mfa_token` and throw `AppError("Invalid or expired MFA challenge", 400)`; successful verification clears `oauth_mfa_token` and sets session cookies.
+3. **SPA Coordination (`apps/web/src/features/auth/LoginPage.tsx`, `mfa.api.ts`):** `LoginPage` renders the MFA challenge view on `?mfa=true` without reading any URL token, and `mfaApi.verifyLogin` omits `mfaToken` from the JSON payload when null/undefined so the browser attaches `oauth_mfa_token` automatically.
+
+### Rationale & Trade-offs
+
+- **Zero-URL Credential Exposure:** Eliminates `mfaToken` leakage in browser history, `Referer` headers, frontend URLs, and redirect logs.
+- **Backward-Compatible JSON Flows:** Password (`POST /auth/login`) and magic-link (`POST /auth/magic-link/verify`) endpoints continue returning `{ mfaRequired: true, mfaToken }` in JSON for API clients and non-redirect UI flows.
+- **Same-Origin Proxy Dependency:** Relies on `path: "/"` reverse-proxy parity [ADR-079, ADR-085, ADR-086] and `originValidation` CSRF protection [ADR-055] for automatic cookie submission on `POST /auth/mfa/verify`.

@@ -6,7 +6,7 @@
 >
 > - System Design & Component Architecture: [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md)
 > - Frontend Architecture & Control Plane: [`docs/FRONTEND_ARCHITECTURE.md`](./FRONTEND_ARCHITECTURE.md)
-> - Formal Decisions (109 Formal ADRs): [`docs/Engineering-Decisions.md`](./Engineering-Decisions.md)
+> - Formal Decisions (111 Formal ADRs): [`docs/Engineering-Decisions.md`](./Engineering-Decisions.md)
 > - OAuth 2.0 PKCE & Integration Guide: [`docs/OAUTH.md`](./OAUTH.md)
 > - Testing Architecture & Verification Matrix: [`docs/TESTING.md`](./TESTING.md)
 
@@ -97,11 +97,11 @@ Defined in [`Dockerfile`](../Dockerfile), [`.dockerignore`](../.dockerignore), [
 1. **Multi-Stage Production Container (`Dockerfile`):**
    - **`base` (`node:24-alpine`):** Installs `openssl` and `libc6-compat`, copies root, `packages/shared`, and `apps/api` manifests only, and runs `npm ci`.
    - **`builder`:** Uses a build-time fallback `ARG DATABASE_URL` for `prisma generate`, builds `@authsphere/shared`, compiles `@authsphere/api` (`tsc` with `sourceMap: true` per [`apps/api/tsconfig.json`](../apps/api/tsconfig.json)), and runs `npm prune --omit=dev`.
-   - **`runner` (`node:24-alpine`):** Installs `dumb-init` for PID 1 signal forwarding (supporting the 10s graceful shutdown in [`apps/api/src/server.ts`](../apps/api/src/server.ts)), copies only pruned `node_modules` and compiled `dist/` + `schema.prisma`, runs as non-root `USER node`, exposes port `3000`, and starts via `ENTRYPOINT ["dumb-init", "--"]` + `CMD ["node", "--enable-source-maps", "dist/server.js"]`.
+   - **`runner` (`node:24-alpine`):** Installs `openssl`, `libc6-compat`, and `dumb-init` for PID 1 signal forwarding (supporting the 10s graceful shutdown in [`apps/api/src/server.ts`](../apps/api/src/server.ts)), copies only pruned `node_modules` and compiled `dist/` + `schema.prisma`, runs as non-root `USER node`, exposes port `3000`, and starts via `ENTRYPOINT ["dumb-init", "--"]` + `CMD ["node", "--enable-source-maps", "dist/server.js"]`.
 2. **Lean Build Context (`.dockerignore`):** Excludes `apps/web`, `apps/api/tests`, `apps/api/src/generated`, `docs/`, `docker/`, `infra/`, `*.zip`, `.env*`, `.git`, and `.github` so frontend code, tests, and local artifacts never enter the Docker build context.
 3. **ECS Task Safeguards & Networking:**
-   - **API Task (`authsphere-api`):** `256` CPU / `512` MB, `awsvpc`, CloudWatch log group `/ecs/authsphere-api` (`ap-south-1`). Deploys with `desired-count: 1`, `wait-for-service-stability: true`, ECS deployment circuit breaker (`rollback: true`), and ALB health checks targeting `/health/live` on port `3000` (with 30s grace period).
-   - **Public Subnet Placement:** Tasks run in public subnets with public IPs to pull GHCR images without an AWS NAT Gateway; `ECS-SG` restricts ingress on port `3000` to `ALB-SG`.
+   - **API Task (`authsphere-api`):** `256` CPU / `512` MB, `awsvpc`, CloudWatch log group `/ecs/authsphere-api` (`ap-south-1`). `deploy.yml` deploys with `desired-count: 1` and `wait-for-service-stability: true`; the AWS ECS service / ALB target group enforces deployment circuit-breaker rollback and `/health/live` health checks on port `3000` (30s grace period).
+   - **Public Subnet Placement:** In the AWS VPC setup, tasks run in public subnets with public IPs to pull GHCR images without an AWS NAT Gateway, while `ECS-SG` restricts ingress on port `3000` to `ALB-SG`.
    - **Optional Worker Task (`authsphere-worker`):** Runs `node --enable-source-maps dist/workers/email.worker.js` with `APP_ROLE=worker` and `QUEUE_DRIVER=bullmq`. Dormant in the baseline setup (`QUEUE_DRIVER=inline` on the API container) and deployed only when `DEPLOY_ECS_WORKER=true` in repository variables.
 4. **Local Container Profiles (`docker/`):**
    - [`docker/docker-compose.dev.yml`](../docker/docker-compose.dev.yml): PostgreSQL 16 Alpine + Redis 8 Alpine for full local development.
@@ -279,7 +279,8 @@ curl -i -X POST https://<ACTIVE_ENDPOINT>/auth/login \
   -c cookies.txt \
   -d '{"email":"probe-1@example.com","password":"TestPassword123!"}'
 
-# 3. Verify authenticated RBAC endpoint via Vercel edge proxy (uses HttpOnly cookie)
+# 3. Verify authenticated endpoint via Vercel edge proxy (uses HttpOnly cookie; /api/users requires ADMIN)
+curl -i "https://<PUBLIC_DOMAIN>/api/auth/me" -b cookies.txt
 curl -i "https://<PUBLIC_DOMAIN>/api/users?page=1&limit=10" -b cookies.txt
 
 # 4. Verify Redis fixed-window rate-limit headers (case-insensitive grep for HTTP/2)
@@ -292,21 +293,20 @@ done
 
 #### Plaintext Runtime Configuration (`template.yaml` Globals / `api-task-definition.json` / `worker-task-definition.json`)
 
-| Variable                            | Lambda Value                     | ECS API / Worker Value                | Description                                                           |
-| :---------------------------------- | :------------------------------- | :------------------------------------ | :-------------------------------------------------------------------- |
-| `NODE_ENV`                          | `production`                     | `production`                          | Express & cookie security mode (`development \| production \| test`). |
-| `APP_ROLE`                          | `api`                            | `api` / `worker`                      | Partitions env validation in `apps/api/src/config/env.ts`.            |
-| `QUEUE_DRIVER`                      | `sync`                           | `inline` / `bullmq`                   | Email dispatch mode (`sync \| inline \| bullmq`).                     |
-| `PORT` / `HOST`                     | `HOST=0.0.0.0`                   | `3000` / `0.0.0.0`                    | HTTP server bind host and port (unused port on Lambda).               |
-| `TRUST_PROXY`                       | `1`                              | `2` (API only)                        | Hop count for `req.ip`: 1 (Vercel->Lambda), 2 (Vercel->ALB->ECS).     |
-| `DATABASE_POOL_MAX`                 | `2`                              | `10` (API only)                       | `pg.Pool` max connections per instance.                               |
-| `JWT_ACCESS_EXPIRES_IN`             | `15m`                            | `15m` (API only)                      | Access JWT lifetime.                                                  |
-| `JWT_REFRESH_EXPIRES_IN`            | `30d`                            | `30d` (API only)                      | Refresh JWT & session lifetime.                                       |
-| `AUTH_REUSE_DELETION_MODE`          | `SESSION`                        | `SESSION` (API only)                  | Replay compromise revocation scope (`SESSION \| GLOBAL`).             |
-| `AUTH_REFRESH_TOKEN_LEEWAY_SECONDS` | `30`                             | `30` (API only)                       | Concurrent refresh grace window (seconds).                            |
-| `EMAIL_PROVIDER`                    | `vars.EMAIL_PROVIDER \|\| gmail` | SSM `/authsphere/prod/EMAIL_PROVIDER` | Active email adapter (`gmail \| resend`).                             |
+| Variable                            | Lambda Value   | ECS API / Worker Value | Description                                                           |
+| :---------------------------------- | :------------- | :--------------------- | :-------------------------------------------------------------------- |
+| `NODE_ENV`                          | `production`   | `production`           | Express & cookie security mode (`development \| production \| test`). |
+| `APP_ROLE`                          | `api`          | `api` / `worker`       | Partitions env validation in `apps/api/src/config/env.ts`.            |
+| `QUEUE_DRIVER`                      | `sync`         | `inline` / `bullmq`    | Email dispatch mode (`sync \| inline \| bullmq`).                     |
+| `PORT` / `HOST`                     | `HOST=0.0.0.0` | `3000` / `0.0.0.0`     | HTTP server bind host and port (unused port on Lambda).               |
+| `TRUST_PROXY`                       | `1`            | `2` (API only)         | Hop count for `req.ip`: 1 (Vercel->Lambda), 2 (Vercel->ALB->ECS).     |
+| `DATABASE_POOL_MAX`                 | `2`            | `10` (API only)        | `pg.Pool` max connections per instance.                               |
+| `JWT_ACCESS_EXPIRES_IN`             | `15m`          | `15m` (API only)       | Access JWT lifetime.                                                  |
+| `JWT_REFRESH_EXPIRES_IN`            | `30d`          | `30d` (API only)       | Refresh JWT & session lifetime.                                       |
+| `AUTH_REUSE_DELETION_MODE`          | `SESSION`      | `SESSION` (API only)   | Replay compromise revocation scope (`SESSION \| GLOBAL`).             |
+| `AUTH_REFRESH_TOKEN_LEEWAY_SECONDS` | `30`           | `30` (API only)        | Concurrent refresh grace window (seconds).                            |
 
-#### Secrets & Service Endpoints
+#### Secrets, Parameter Overrides & Service Endpoints
 
 | Variable                  | Lambda (`deploy.yml` -> SAM)                               | ECS (`api` / `worker` SSM `/authsphere/prod/*`) | Purpose                                                          |
 | :------------------------ | :--------------------------------------------------------- | :---------------------------------------------- | :--------------------------------------------------------------- |
@@ -317,6 +317,7 @@ done
 | `JWT_ACCESS_SECRET`       | Secret `JWT_ACCESS_SECRET`                                 | API SSM `JWT_ACCESS_SECRET`                     | HS256 access token signing secret.                               |
 | `JWT_REFRESH_SECRET`      | Secret `JWT_REFRESH_SECRET`                                | API SSM `JWT_REFRESH_SECRET`                    | HS256 refresh token signing secret.                              |
 | `MFA_ENCRYPTION_KEY`      | Secret `MFA_ENCRYPTION_KEY`                                | API SSM `MFA_ENCRYPTION_KEY`                    | Secret (>=16 chars) deriving AES-256-GCM MFA key.                |
+| `EMAIL_PROVIDER`          | Var `EMAIL_PROVIDER \|\| gmail` -> `EmailProvider`         | API & Worker SSM `EMAIL_PROVIDER`               | Active email adapter (`gmail \| resend`).                        |
 | `GMAIL_USER`              | Var `GMAIL_USER`                                           | API & Worker SSM `GMAIL_USER`                   | Gmail sender address (SMTP / OAuth2).                            |
 | `GMAIL_APP_PASSWORD`      | Secret `GMAIL_APP_PASSWORD`                                | API & Worker SSM `GMAIL_APP_PASSWORD`           | Gmail 16-char App Password.                                      |
 | `GMAIL_REFRESH_TOKEN`     | Secret `GMAIL_REFRESH_TOKEN`                               | API & Worker SSM `GMAIL_REFRESH_TOKEN`          | Gmail OAuth2 refresh token (alternative to App Password).        |
@@ -337,23 +338,12 @@ done
 
 ## 8. Local Development Quickstart
 
+Follow [`README.md#quickstart`](../README.md#quickstart) for local dependency setup, Docker services, migrations, and dev servers (`dev:api`, `dev:web`, `dev:worker`). For clean-room schema parity against existing migrations or bootstrap admin promotion, use:
+
 ```bash
-# 1. Start local backing services (PostgreSQL 16 + Redis 8, OR Redis-only for remote Neon)
-docker compose -f docker/docker-compose.dev.yml up -d
-# docker compose -f docker/docker-compose.infra.yml up -d
-
-# 2. Configure local environment files
-cp apps/api/.env.example apps/api/.env
-cp apps/web/.env.example apps/web/.env
-
-# 3. Apply migrations and seed baseline roles (USER, ADMIN), permissions, and optional bootstrap admin (SEED_ADMIN_EMAIL)
+# Apply committed migrations non-interactively and seed roles/permissions (+ optional SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD)
 npm run db:migrate:deploy --workspace=@authsphere/api
 npm run db:seed --workspace=@authsphere/api
-
-# 4. Run development servers
-npm run dev:api      # Express API on :3000
-npm run dev:web      # Vite React SPA on :5173 (proxies /api/* -> :3000)
-npm run dev:worker   # Optional: BullMQ email worker when QUEUE_DRIVER=bullmq
 ```
 
 ---

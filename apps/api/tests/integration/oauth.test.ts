@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import request from "supertest";
 import { generateSync } from "otplib";
 import {
   createOAuthState,
@@ -8,12 +9,19 @@ import {
 } from "../../src/modules/auth/oauth/oauth.service.js";
 import { authService } from "../../src/modules/auth/auth.service.js";
 import { googleOAuthProvider } from "../../src/modules/auth/oauth/google.provider.js";
+import { env } from "../../src/config/env.js";
 import {
+  OAUTH_MFA_COOKIE_NAME,
+  getOAuthVerifierCookieName,
+} from "../../src/common/utils/index.js";
+import {
+  app,
   prisma,
   createVerifiedUser,
   createOAuthUser,
   createMfaUser,
   createSession,
+  getAuthCookies,
 } from "../helpers/index.js";
 
 describe("OAuth Integration Suite (State, Callback, Linking & Governance)", () => {
@@ -132,6 +140,62 @@ describe("OAuth Integration Suite (State, Callback, Linking & Governance)", () =
         where: { userId: user.id, type: "OAUTH_LOGIN" },
       });
       expect(event).toBeDefined();
+    });
+
+    it("HTTP OAuth callback hands off MFA challenge via HttpOnly cookie without exposing mfaToken in redirect URL", async () => {
+      const { user, rawSecret } = await createMfaUser();
+      const providerId = `google-http-mfa-${Date.now()}`;
+
+      await prisma.oAuthAccount.create({
+        data: {
+          userId: user.id,
+          provider: "GOOGLE",
+          providerId,
+        },
+      });
+
+      vi.spyOn(googleOAuthProvider, "getUserProfile").mockResolvedValue({
+        providerId,
+        email: user.email,
+        firstName: "HttpMfa",
+        lastName: "User",
+        avatarUrl: null,
+      });
+
+      const state = await createOAuthState("GOOGLE");
+      const callbackRes = await request(app)
+        .get(`/auth/oauth/google/callback?state=${state}&code=mock-code`)
+        .set("Cookie", `${getOAuthVerifierCookieName(state)}=mock-verifier`);
+
+      expect(callbackRes.status).toBe(302);
+      expect(callbackRes.headers.location).toBe(
+        `${env.FRONTEND_URL}/login?mfa=true&provider=google`,
+      );
+
+      const mfaCookieHeader = [callbackRes.headers["set-cookie"] ?? []]
+        .flat()
+        .find((c) => c.startsWith(`${OAUTH_MFA_COOKIE_NAME}=`));
+      expect(mfaCookieHeader).toMatch(/HttpOnly/i);
+      expect(mfaCookieHeader).toMatch(/SameSite=Lax/i);
+
+      // Verify /auth/mfa/verify completes login via the HttpOnly cookie without body mfaToken
+      const verifyRes = await request(app)
+        .post("/auth/mfa/verify")
+        .set("Cookie", mfaCookieHeader!.split(";")[0]!)
+        .send({ code: generateSync({ secret: rawSecret }) });
+
+      expect(verifyRes.status).toBe(200);
+      expect(getAuthCookies(verifyRes)).toMatchObject({
+        accessToken: expect.any(String),
+        refreshToken: expect.any(String),
+      });
+
+      const verifyCookies = [verifyRes.headers["set-cookie"] ?? []]
+        .flat()
+        .join("; ");
+      expect(verifyCookies).toMatch(
+        new RegExp(`${OAUTH_MFA_COOKIE_NAME}=;.*(Max-Age=0|expires=)`, "i"),
+      );
     });
   });
 

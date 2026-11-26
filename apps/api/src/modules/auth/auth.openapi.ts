@@ -311,7 +311,7 @@ registry.registerPath({
   tags: ["MFA"],
   summary: "Verify MFA code during login",
   description:
-    "Completes MFA login challenge using the `mfaToken` received from `POST /auth/login` (or social login/password reset) and a 6-digit TOTP code or emergency recovery code. Sets HttpOnly session cookies upon success.",
+    "Completes an MFA login challenge using a 6-digit TOTP code or emergency recovery code along with `mfaToken` in the JSON body (password/magic-link) or the `oauth_mfa_token` HttpOnly cookie (OAuth redirects). Sets HttpOnly session cookies upon success.",
   request: {
     body: jsonBody(authRequestSchema.mfaVerifyLogin),
   },

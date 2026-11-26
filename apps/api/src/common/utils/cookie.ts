@@ -31,20 +31,43 @@ export const setAuthCookies = (
   );
 };
 
-export const clearAccessTokenCookie = (res: Response) => {
-  const { maxAge: _noNeed, ...clearAccessOptions } = accessTokenCookieOptions;
-  res.clearCookie("accessToken", clearAccessOptions);
+const clearCookieWithoutMaxAge = (
+  res: Response,
+  name: string,
+  options: CookieOptions,
+): void => {
+  const { maxAge: _noNeed, ...clearOptions } = options;
+  res.clearCookie(name, clearOptions);
 };
 
-export const clearRefreshTokenCookie = (res: Response) => {
-  const { maxAge: _noNeed, ...clearRefreshOptions } = refreshTokenCookieOptions;
-  res.clearCookie("refreshToken", clearRefreshOptions);
-};
+export const clearAccessTokenCookie = (res: Response) =>
+  clearCookieWithoutMaxAge(res, "accessToken", accessTokenCookieOptions);
+
+export const clearRefreshTokenCookie = (res: Response) =>
+  clearCookieWithoutMaxAge(res, "refreshToken", refreshTokenCookieOptions);
 
 export const clearAuthCookies = (res: Response) => {
   clearAccessTokenCookie(res);
   clearRefreshTokenCookie(res);
 };
+
+export const OAUTH_MFA_COOKIE_NAME = "oauth_mfa_token";
+
+const oauthMfaCookieOptions: CookieOptions = {
+  path: "/",
+  httpOnly: true,
+  secure: env.NODE_ENV === "production",
+  sameSite: "lax",
+  priority: "high",
+  maxAge: 5 * 60 * 1000, // 5 minutes
+};
+
+export const setOAuthMfaCookie = (res: Response, mfaToken: string): void => {
+  res.cookie(OAUTH_MFA_COOKIE_NAME, mfaToken, oauthMfaCookieOptions);
+};
+
+export const clearOAuthMfaCookie = (res: Response): void =>
+  clearCookieWithoutMaxAge(res, OAUTH_MFA_COOKIE_NAME, oauthMfaCookieOptions);
 
 export const OAUTH_VERIFIER_COOKIE_PREFIX = "oauth_verifier_";
 export const OAUTH_VERIFIER_COOKIE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
@@ -87,10 +110,9 @@ export const setOAuthVerifierCookie = (
   );
 };
 
-export const clearOAuthVerifierCookie = (
-  res: Response,
-  state: string,
-): void => {
-  const { maxAge: _noNeed, ...clearOptions } = getOAuthVerifierCookieOptions();
-  res.clearCookie(getOAuthVerifierCookieName(state), clearOptions);
-};
+export const clearOAuthVerifierCookie = (res: Response, state: string): void =>
+  clearCookieWithoutMaxAge(
+    res,
+    getOAuthVerifierCookieName(state),
+    getOAuthVerifierCookieOptions(),
+  );

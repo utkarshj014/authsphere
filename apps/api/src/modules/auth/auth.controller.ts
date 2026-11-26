@@ -1,13 +1,22 @@
 import type { Request, Response } from "express";
-import { asyncHandler, UnauthorizedError } from "../../common/errors/index.js";
+import {
+  asyncHandler,
+  AppError,
+  UnauthorizedError,
+} from "../../common/errors/index.js";
 import { authService } from "./auth.service.js";
 import { ApiResponse } from "../../common/responses/index.js";
 import {
+  OAUTH_MFA_COOKIE_NAME,
   setAuthCookies,
   clearAuthCookies,
+  clearOAuthMfaCookie,
   getClientIp,
 } from "../../common/utils/index.js";
-import type { SecurityEventsQueryInput } from "./auth.validation.js";
+import {
+  mfaTokenSchema,
+  type SecurityEventsQueryInput,
+} from "./auth.validation.js";
 
 const signup = asyncHandler(async (req: Request, res: Response) => {
   await authService.signup(req.body);
@@ -42,8 +51,14 @@ const resendVerificationToken = asyncHandler(
 const login = asyncHandler(async (req: Request, res: Response) => {
   const ipAddress = getClientIp(req);
   const userAgent = req.header("user-agent");
+  const existingRefreshToken = req.cookies?.refreshToken;
 
-  const result = await authService.login(req.body, ipAddress, userAgent);
+  const result = await authService.login(
+    req.body,
+    ipAddress,
+    userAgent,
+    existingRefreshToken,
+  );
 
   if (result.mfaRequired) {
     return ApiResponse.success(
@@ -210,13 +225,27 @@ const mfaVerifySetup = asyncHandler(async (req: Request, res: Response) => {
 const mfaVerifyLogin = asyncHandler(async (req: Request, res: Response) => {
   const ipAddress = getClientIp(req);
   const userAgent = req.header("user-agent");
+  const existingRefreshToken = req.cookies?.refreshToken;
+
+  const cookieParse = !req.body.mfaToken
+    ? mfaTokenSchema.safeParse(req.cookies?.[OAUTH_MFA_COOKIE_NAME])
+    : null;
+  const mfaToken =
+    req.body.mfaToken ?? (cookieParse?.success ? cookieParse.data : undefined);
+
+  if (!mfaToken) {
+    clearOAuthMfaCookie(res);
+    throw new AppError("Invalid or expired MFA challenge", 400);
+  }
 
   const result = await authService.mfaVerifyLogin(
-    req.body,
+    { code: req.body.code, mfaToken },
     ipAddress,
     userAgent,
+    existingRefreshToken,
   );
 
+  clearOAuthMfaCookie(res);
   setAuthCookies(res, result.tokens);
 
   const responseData =
@@ -279,11 +308,13 @@ const sendMagicLink = asyncHandler(async (req: Request, res: Response) => {
 const verifyMagicLink = asyncHandler(async (req: Request, res: Response) => {
   const ipAddress = getClientIp(req);
   const userAgent = req.header("user-agent");
+  const existingRefreshToken = req.cookies?.refreshToken;
 
   const result = await authService.verifyMagicLink(
     req.body,
     ipAddress,
     userAgent,
+    existingRefreshToken,
   );
 
   if (result.mfaRequired) {

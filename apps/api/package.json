@@ -20,6 +20,7 @@
     "start:email-worker": "node --enable-source-maps dist/workers/email.worker.js",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
+    "db:migrate:test": "cross-env NODE_ENV=test prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "test": "vitest run",

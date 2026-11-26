@@ -184,6 +184,7 @@ export const handleOAuthCallback = async (
   ipAddress: string,
   userAgent?: string,
   codeVerifier?: string,
+  existingRefreshToken?: string,
 ): Promise<OAuthCallbackResult> => {
   if (!code || typeof code !== "string" || code.trim().length === 0) {
     throw new AppError("Missing or invalid authorization code", 400);
@@ -354,6 +355,7 @@ export const handleOAuthCallback = async (
     userToAuthenticate.role.name,
     ipAddress,
     userAgent,
+    { existingRefreshToken },
   );
 
   await recordSecurityEvent(

@@ -45,14 +45,14 @@ export const LoginPage: React.FC = () => {
   const [resendError, setResendError] = useState<string | null>(null);
   const [magicLinkSent, setMagicLinkSent] = useState(false);
 
-  // MFA Challenge State (from password submit or social OAuth redirect)
-  const [mfaToken, setMfaToken] = useState<string | null>(
-    () => searchParams.get("mfaToken") || null,
-  );
+  // MFA Challenge State (in-memory token for password submit, or HttpOnly cookie via ?mfa=true for OAuth)
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState("");
   const [mfaError, setMfaError] = useState<string | null>(null);
   const [isVerifyingMfa, setIsVerifyingMfa] = useState(false);
   const mfaProvider = searchParams.get("provider");
+  const showMfaChallenge =
+    Boolean(mfaToken) || searchParams.get("mfa") === "true";
 
   const syncSession = useAuthStore((s) => s.syncSession);
 
@@ -166,7 +166,7 @@ export const LoginPage: React.FC = () => {
 
   const handleMfaSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!mfaToken || !mfaCode.trim()) return;
+    if (!showMfaChallenge || !mfaCode.trim()) return;
 
     setIsVerifyingMfa(true);
     setMfaError(null);
@@ -201,7 +201,7 @@ export const LoginPage: React.FC = () => {
   };
 
   // Intermediate MFA Challenge Screen
-  if (mfaToken) {
+  if (showMfaChallenge) {
     return (
       <div className="space-y-5 animate-in fade-in duration-200">
         <div>

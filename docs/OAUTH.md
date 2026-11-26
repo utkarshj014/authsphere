@@ -6,7 +6,7 @@ This document is the Single Source of Truth (SSOT) for **AuthSphere's** OAuth 2.
 >
 > - [ARCHITECTURE.md](./ARCHITECTURE.md) — System Design, Component Topology & Core Data Models
 > - [FRONTEND_ARCHITECTURE.md](./FRONTEND_ARCHITECTURE.md) — Frontend Architecture, Component Topology & Control Plane
-> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 109 Formal ADRs, Security Invariants & Technical Trade-offs
+> - [Engineering-Decisions.md](./Engineering-Decisions.md) — 111 Formal ADRs, Security Invariants & Technical Trade-offs
 > - [OAUTH.md](./OAUTH.md) — OAuth 2.0 PKCE Social Authentication & Integration Protocols
 > - [DEPLOYMENT.md](./DEPLOYMENT.md) — Cloud Infrastructure, Dual-Compute (Lambda/ECS) & Runbooks
 > - [TESTING.md](./TESTING.md) — Hermetic Test Pyramid, Invariant Verification & CI Strategies
@@ -26,9 +26,9 @@ This document is the Single Source of Truth (SSOT) for **AuthSphere's** OAuth 2.
 | **Google** | OAuth 2.0 + UserInfo over TLS  | `GET /auth/oauth/google` | `GET /auth/oauth/google/callback` | `openid email profile` | `sub`               | UserInfo GET over TLS (`email_verified === true`) |
 | **GitHub** | OAuth 2.0 Web Application Flow | `GET /auth/oauth/github` | `GET /auth/oauth/github/callback` | `read:user user:email` | `String(id)`        | `/user` + `/user/emails` (verified email)         |
 
-| Action              | HTTP Endpoint                  | Guard / Middleware                                              | Rate Limit Policy                   | Key Invariant                                                      |
-| :------------------ | :----------------------------- | :-------------------------------------------------------------- | :---------------------------------- | :----------------------------------------------------------------- |
-| **Unlink Provider** | `DELETE /auth/oauth/:provider` | `auth` -> `rateLimiter` -> `validate(PARAMS: google \| github)` | `OAUTH_UNLINK` (10 req / 15m, User) | **Zero-Orphan Protection:** Cannot disconnect sole sign-in method. |
+| Action              | HTTP Endpoint                  | Guard / Middleware                                                                | Rate Limit Policy                   | Key Invariant                                                      |
+| :------------------ | :----------------------------- | :-------------------------------------------------------------------------------- | :---------------------------------- | :----------------------------------------------------------------- |
+| **Unlink Provider** | `DELETE /auth/oauth/:provider` | `auth` -> `rateLimiter` -> `validate(PARAMS: google \| github, case-insensitive)` | `OAUTH_UNLINK` (10 req / 15m, User) | **Zero-Orphan Protection:** Cannot disconnect sole sign-in method. |
 
 ### Unified Edge Ingress & Component Topology
 
@@ -100,13 +100,13 @@ sequenceDiagram
     API->>DB: Resolve Identity (Link, Authenticate, Reject 409 Conflict, or Create User + OAuthAccount)
     alt MFA Required (Unauthenticated Login with mfaEnabled === true)
         API->>DB: Create MfaChallenge (5m TTL, type=OAUTH_LOGIN)
-        API-->>Browser: 302 Redirect to /login?mfa=true&mfaToken=...&provider=...
+        API-->>Browser: Set-Cookie: oauth_mfa_token (HttpOnly, Path=/, 5m) & 302 Redirect to /login?mfa=true&provider=...
     else In-Session Account Linking
-        API->>DB: Create Session (supersedes device) & record OAUTH_LOGIN event
-        API-->>Browser: Set-Cookie: accessToken, refreshToken (Path=/) & 302 Redirect to returnTarget?linked=:provider
+        API->>DB: Create Session (supersedes cookie sid, max 10) & record OAUTH_LOGIN event
+        API-->>Browser: Clear oauth_mfa_token, Set-Cookie: accessToken, refreshToken (Path=/) & 302 Redirect to returnTarget?linked=:provider
     else Direct Social Login / Signup
-        API->>DB: Create Session (supersedes device) & record OAUTH_LOGIN event
-        API-->>Browser: Set-Cookie: accessToken, refreshToken (Path=/) & 302 Redirect to returnTarget (default /app)
+        API->>DB: Create Session (supersedes cookie sid, max 10) & record OAUTH_LOGIN event
+        API-->>Browser: Clear oauth_mfa_token, Set-Cookie: accessToken, refreshToken (Path=/) & 302 Redirect to returnTarget (default /app)
     end
 ```
 
@@ -179,7 +179,7 @@ flowchart TD
 
 - **Pre-Resolution Session Gate (`[ADR-082]`):** Whenever `state.userId` is set, PostgreSQL session validity (`findSessionById(state.sessionId)`) is verified _before_ any identity branch runs.
 - **Anti-Account Takeover Guard (`[ADR-061]`):** Unauthenticated OAuth logins never auto-link to an existing user by email; `409 Conflict` distinguishes password accounts from existing social-only accounts.
-- **Deferred MFA Security Event (`[ADR-107]`):** For unauthenticated logins on MFA-enabled accounts (`!stateData.userId && user.mfaEnabled`), an ephemeral 5-minute `MfaChallenge` is created with `type: OAUTH_LOGIN` and the user redirects to `/login?mfa=true&mfaToken=...&provider=...`. The `OAUTH_LOGIN` security event is recorded only after `POST /auth/mfa/verify` succeeds.
+- **Deferred MFA Cookie Handoff (`[ADR-107]`, `[ADR-111]`):** For unauthenticated logins on MFA-enabled accounts (`!stateData.userId && user.mfaEnabled`), an ephemeral 5-minute `MfaChallenge` is created with `type: OAUTH_LOGIN`. Rather than exposing `mfaToken` in the redirect URL, the controller sets the `oauth_mfa_token` `HttpOnly` cookie (`Path=/`, `SameSite=Lax`, `priority: "high"`, `maxAge: 5m`) and redirects to `/login?mfa=true&provider=...`. The SPA then submits `POST /auth/mfa/verify` with `{ code }` (falling back to `oauth_mfa_token` when `mfaToken` is omitted from the body), clears `oauth_mfa_token`, issues session cookies, and records the `OAUTH_LOGIN` security event only after second-factor verification succeeds.
 - **Canonical Full-Page 302 Redirect:** Standardizes on full-page `302` redirects (with `accessToken` and `refreshToken` cookies on `Path=/`) rather than popups/`postMessage`, avoiding Safari ITP/popup blockers, mobile tab-context loss, and cross-window XSS surfaces. On landing, the SPA calls `GET /auth/me` to hydrate profile, `hasPassword`, and `oauthProviders`.
 
 ### 3.4 Provider Disconnection & Zero-Orphan Invariant
@@ -221,26 +221,27 @@ The canonical Prisma `OAuthAccount` schema lives in [ARCHITECTURE.md — Data Ar
 
 - **Proxy Parity:** Production (`apps/web/vercel.ts`) and local dev (`apps/web/vite.config.ts`) proxy same-origin `/api/*` requests upstream by stripping the `/api` prefix, keeping `SameSite=Lax` cookies first-party.
 - **Callback URI Resolution:** Both strategies resolve redirect URIs dynamically as `${(env.OAUTH_CALLBACK_BASE_URL || `${env.FRONTEND_URL}/api/auth/oauth`).replace(/\/$/, "")}/{provider}/callback`.
-- **Cookie Path Isolation:** `getOAuthVerifierCookiePath()` derives its `Path` from that same base URL (resolving to `/api/auth/oauth` behind the proxy or `/auth/oauth` in direct backend calls), so the transient verifier cookie travels only to OAuth routes while final session cookies (`accessToken`, `refreshToken`) use `Path=/`.
+- **Cookie Path Isolation:** `getOAuthVerifierCookiePath()` derives its `Path` from that same base URL (resolving to `/api/auth/oauth` behind the proxy or `/auth/oauth` in direct backend calls), so the transient PKCE verifier cookie travels only to OAuth routes while `oauth_mfa_token` (`maxAge: 5m`, `priority: "high"`) and final session cookies (`accessToken`, `refreshToken`) use `Path=/`.
 
 ---
 
 ## 6. OAuth Security Threat Mitigation Matrix
 
-| Threat Category                      | Attack Vector                                                                  | AuthSphere Countermeasure                                                                                                     |
-| :----------------------------------- | :----------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------- |
-| **Login CSRF & Code Injection**      | Attacker tricks victim browser into consuming attacker's OAuth callback URL.   | **Browser-Bound PKCE (`S256`):** `code_challenge` paired with per-state `HttpOnly` `oauth_verifier_<state>` cookie (10m TTL). |
-| **State Replay & Race Conditions**   | Intercepted or concurrent callback requests attempt to reuse `state`.          | **Atomic `redis.getdel()`:** Single-use state fetch-and-delete prevents replay and duplicate redemption.                      |
-| **Stale / Revoked Account Linking**  | Initiating session expires or is revoked while user is on external consent UI. | **Pre-Resolution Session Gate:** Validates active, unexpired `sessionId` in PostgreSQL before identity resolution (`401`).    |
-| **Cross-Provider State Spoofing**    | Redeeming a Google `state` token on the GitHub callback endpoint.              | **Provider Binding Check:** Verifies `stateData.provider === expectedProvider` (`400` on mismatch).                           |
-| **Pre-Hijacking Account Takeover**   | Attacker creates external account with victim's email to claim local account.  | **Strict `409 Conflict` Guard:** Unauthenticated OAuth never auto-links by email; in-session auth is mandatory.               |
-| **Upstream Stalls & Lambda Timeout** | Hanging third-party token/profile calls exhaust serverless execution budget.   | **Shared 7s `AbortController`:** Cumulative deadline across all provider HTTP calls mapped to `504 Gateway Timeout`.          |
-| **Account Lockout / Orphan State**   | User disconnects their sole authentication method.                             | **Zero-Orphan Invariant:** `unlinkOAuthAccount` rejects unlinking if `!passwordHash && oauthAccounts.length <= 1` (`400`).    |
-| **Open Redirect Hijacking**          | Malicious `returnTo=//evil.com` redirects user off-site post-login.            | **Relative Path Allowlist:** `returnTo` accepted only if starting with `/` and not `//` or `/\`.                              |
-| **Identifier Mutation / Recycling**  | User changes Google display name or GitHub `login` handle.                     | **Immutable Subject IDs:** Binds to Google `sub` and GitHub numeric `id`.                                                     |
-| **Unverified Email Impersonation**   | Attacker attaches unverified email on external provider.                       | **Verified Email Gate:** Enforces Google `email_verified === true` and GitHub `/user/emails` verification status.             |
-| **Over-Privileged Scopes & Leakage** | Storing unnecessary provider refresh tokens or exposing client secrets.        | **Minimal Scopes & Server-Side Secrets:** No `access_type=offline`; secrets validated by Zod and used only server-to-server.  |
-| **Endpoint Abuse / DoS**             | Flooding initiation, callback, or disconnect routes.                           | **Tiered Rate Limits:** `20/1m` IP on initiation/callback; `10/15m` User on `DELETE /auth/oauth/:provider`.                   |
+| Threat Category                      | Attack Vector                                                                  | AuthSphere Countermeasure                                                                                                                                                                                           |
+| :----------------------------------- | :----------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Login CSRF & Code Injection**      | Attacker tricks victim browser into consuming attacker's OAuth callback URL.   | **Browser-Bound PKCE (`S256`):** `code_challenge` paired with per-state `HttpOnly` `oauth_verifier_<state>` cookie (10m TTL).                                                                                       |
+| **MFA Challenge Token Leakage**      | Ephemeral `mfaToken` exposed in browser history, `Referer`, or redirect logs.  | **HttpOnly Cookie Handoff (`oauth_mfa_token`):** Redirects with `?mfa=true&provider=...` only; `mfaToken` travels in a 5m `HttpOnly`, `SameSite=Lax` cookie (`Path=/`) cleared on verification or OAuth completion. |
+| **State Replay & Race Conditions**   | Intercepted or concurrent callback requests attempt to reuse `state`.          | **Atomic `redis.getdel()`:** Single-use state fetch-and-delete prevents replay and duplicate redemption.                                                                                                            |
+| **Stale / Revoked Account Linking**  | Initiating session expires or is revoked while user is on external consent UI. | **Pre-Resolution Session Gate:** Validates active, unexpired `sessionId` in PostgreSQL before identity resolution (`401`).                                                                                          |
+| **Cross-Provider State Spoofing**    | Redeeming a Google `state` token on the GitHub callback endpoint.              | **Provider Binding Check:** Verifies `stateData.provider === expectedProvider` (`400` on mismatch).                                                                                                                 |
+| **Pre-Hijacking Account Takeover**   | Attacker creates external account with victim's email to claim local account.  | **Strict `409 Conflict` Guard:** Unauthenticated OAuth never auto-links by email; in-session auth is mandatory.                                                                                                     |
+| **Upstream Stalls & Lambda Timeout** | Hanging third-party token/profile calls exhaust serverless execution budget.   | **Shared 7s `AbortController`:** Cumulative deadline across all provider HTTP calls mapped to `504 Gateway Timeout`.                                                                                                |
+| **Account Lockout / Orphan State**   | User disconnects their sole authentication method.                             | **Zero-Orphan Invariant:** `unlinkOAuthAccount` rejects unlinking if `!passwordHash && oauthAccounts.length <= 1` (`400`).                                                                                          |
+| **Open Redirect Hijacking**          | Malicious `returnTo=//evil.com` redirects user off-site post-login.            | **Relative Path Allowlist:** `returnTo` accepted only if starting with `/` and not `//` or `/\`.                                                                                                                    |
+| **Identifier Mutation / Recycling**  | User changes Google display name or GitHub `login` handle.                     | **Immutable Subject IDs:** Binds to Google `sub` and GitHub numeric `id`.                                                                                                                                           |
+| **Unverified Email Impersonation**   | Attacker attaches unverified email on external provider.                       | **Verified Email Gate:** Enforces Google `email_verified === true` and GitHub `/user/emails` verification status.                                                                                                   |
+| **Over-Privileged Scopes & Leakage** | Storing unnecessary provider refresh tokens or exposing client secrets.        | **Minimal Scopes & Server-Side Secrets:** No `access_type=offline`; secrets validated by Zod and used only server-to-server.                                                                                        |
+| **Endpoint Abuse / DoS**             | Flooding initiation, callback, or disconnect routes.                           | **Tiered Rate Limits:** `20/1m` IP on initiation/callback; `10/15m` User on `DELETE /auth/oauth/:provider`.                                                                                                         |
 
 ---
 
@@ -249,7 +250,7 @@ The canonical Prisma `OAuthAccount` schema lives in [ARCHITECTURE.md — Data Ar
 ```text
 apps/api/src/
 ├── config/env.ts                        # Zod env validation (OAuth client credentials, FRONTEND_URL, OAUTH_CALLBACK_BASE_URL)
-├── common/utils/cookie.ts               # oauth_verifier_<state> cookie helpers & dynamic getOAuthVerifierCookiePath()
+├── common/utils/cookie.ts               # oauth_mfa_token & oauth_verifier_<state> cookie helpers, getOAuthVerifierCookiePath()
 ├── middlewares/
 │   ├── auth.ts                          # auth & optionalAuth (JWT + Redis mget revocation/permission check)
 │   ├── rate-limit.ts                    # OAUTH_INITIATE, OAUTH_CALLBACK, OAUTH_UNLINK policies
@@ -258,8 +259,8 @@ apps/api/src/
     ├── auth.route.ts                    # Mounts /oauth/{google,github}, callbacks, and DELETE /oauth/:provider
     ├── auth.openapi.ts                  # OpenAPI 3.1 registrations for all 5 OAuth operations
     ├── auth.repository.ts               # findOAuthAccount, createOAuthAccount, createUserWithOAuthAccount, deleteOAuthAccount
-    ├── auth.service.ts                  # generateAuthTokensAndSession, recordSecurityEvent
-    ├── auth.validation.ts               # oauthProviderParam (google | github)
+    ├── auth.service.ts                  # generateAuthTokensAndSession (cookie-jar supersession + 10-session cap), recordSecurityEvent
+    ├── auth.validation.ts               # oauthProviderParam (google | github, case-insensitive) & optional mfaTokenSchema
     └── oauth/
         ├── oauth.types.ts               # OAuthStateData, OAuthProfile, OAuthProviderStrategy
         ├── oauth.service.ts             # createOAuthState, consumeOAuthState, initiateOAuth, handleOAuthCallback, unlinkOAuthAccount
@@ -293,8 +294,9 @@ apps/api/src/
 - [ADR-085: Code-First Edge Reverse Proxy Configuration via `@vercel/config/v1`](./Engineering-Decisions.md#adr-085--code-first-edge-reverse-proxy-configuration-via-vercelconfigv1)
 - [ADR-086: Development-to-Production Reverse Proxy Parity via Vite Local Server](./Engineering-Decisions.md#adr-086--development-to-production-reverse-proxy-parity-via-vite-local-server)
 - [ADR-101: Zero-Side-Effect Client MFA State Introspection via Current User Profile Contract](./Engineering-Decisions.md#adr-101--zero-side-effect-client-mfa-state-introspection-via-current-user-profile-contract)
-- [ADR-102: Client-Device Session Supersession on Authentication](./Engineering-Decisions.md#adr-102--client-device-session-supersession-on-authentication)
 - [ADR-104: Zero-Orphan Disconnect Protection and OAuth Account Disconnection Governance](./Engineering-Decisions.md#adr-104--zero-orphan-disconnect-protection-and-oauth-account-disconnection-governance)
 - [ADR-105: Redis-Backed Dual-Tier Session Revocation Engine with Multi-Key Pipelining (`redis.mget`)](./Engineering-Decisions.md#adr-105--redis-backed-dual-tier-session-revocation-engine-with-multi-key-pipelining-redismget)
 - [ADR-107: Deferred MFA Security Event Attribution via Polymorphic Challenge State](./Engineering-Decisions.md#adr-107--deferred-mfa-security-event-attribution-via-polymorphic-challenge-state)
 - [ADR-108: Pino HTTP Log Redaction for Session Credentials and OAuth Redirects](./Engineering-Decisions.md#adr-108--pino-http-log-redaction-for-session-credentials-and-oauth-redirects)
+- [ADR-110: Cookie-Scoped Session Supersession and Bounded Per-User Active Session Cap](./Engineering-Decisions.md#adr-110--cookie-scoped-session-supersession-and-bounded-per-user-active-session-cap)
+- [ADR-111: HttpOnly Cookie Handoff for OAuth MFA Challenges (Zero-URL Token Exposure)](./Engineering-Decisions.md#adr-111--httponly-cookie-handoff-for-oauth-mfa-challenges-zero-url-token-exposure)

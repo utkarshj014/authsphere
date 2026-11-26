@@ -10,6 +10,7 @@ services:
       POSTGRES_DB: authsphere
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
     restart: unless-stopped
     logging:
       driver: "json-file"
