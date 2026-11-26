@@ -6,6 +6,10 @@ import {
 import { PrismaPg } from "@prisma/adapter-pg";
 import { ROLES, PERMISSIONS } from "@authsphere/shared";
 import { hashPassword } from "../src/lib/crypto/password.js";
+import {
+  emailSchema,
+  passwordSchema,
+} from "../src/modules/auth/auth.validation.js";
 
 // Always loads apps/api/.env regardless of current working directory
 dotenv.config({ path: new URL("../.env", import.meta.url) });
@@ -96,10 +100,18 @@ async function main() {
   }
 
   // 5. Seed / Promote Bootstrap Administrator (Configured via Environment, No Hardcoded Fallback)
-  const seedAdminEmail = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase();
+  const rawSeedAdminEmail = process.env.SEED_ADMIN_EMAIL;
   const seedAdminPassword = process.env.SEED_ADMIN_PASSWORD;
 
-  if (seedAdminEmail) {
+  if (rawSeedAdminEmail?.trim()) {
+    const emailResult = emailSchema.safeParse(rawSeedAdminEmail);
+    if (!emailResult.success) {
+      throw new Error(
+        `Invalid SEED_ADMIN_EMAIL configuration: "${rawSeedAdminEmail}"`,
+      );
+    }
+    const seedAdminEmail = emailResult.data;
+
     const existingUser = await prisma.user.findUnique({
       where: { email: seedAdminEmail },
       include: { role: true },
@@ -115,8 +127,14 @@ async function main() {
       } else {
         console.log(`✓ User ${seedAdminEmail} is already an ADMIN`);
       }
-    } else if (seedAdminPassword) {
-      const passwordHash = await hashPassword(seedAdminPassword);
+    } else if (seedAdminPassword !== undefined && seedAdminPassword !== "") {
+      const passwordResult = passwordSchema.safeParse(seedAdminPassword);
+      if (!passwordResult.success) {
+        throw new Error(
+          "SEED_ADMIN_PASSWORD must be between 8 and 128 characters to satisfy login policy.",
+        );
+      }
+      const passwordHash = await hashPassword(passwordResult.data);
       await prisma.user.create({
         data: {
           email: seedAdminEmail,
