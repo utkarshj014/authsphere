@@ -2849,21 +2849,22 @@ Persist the initiating authentication event type inside the ephemeral `MfaChalle
 
 ### Context
 
-`pino-http` logs incoming request metadata and outgoing response headers for operational tracing. Without header redaction, `Authorization` bearer headers, session `Cookie` / `Set-Cookie` headers containing raw JWTs or `oauth_mfa_token` challenge cookies [ADR-111], and `302` OAuth `Location` redirect URLs carrying ephemeral `state` and `code_challenge` values can persist in plaintext across stdout and CloudWatch logs.
+`pino-http` logs incoming request metadata and outgoing response headers for operational tracing. Without header and query redaction, `Authorization` bearer headers, session `Cookie` / `Set-Cookie` headers containing raw JWTs or `oauth_mfa_token` challenge cookies [ADR-111], `302` OAuth `Location` redirect URLs carrying ephemeral `state` and `code_challenge` values, and inbound OAuth callback query strings (`?code=...&state=...`) can persist in plaintext across stdout and CloudWatch logs.
 
 ### Decision
 
-Configure centralized `loggerRedactionConfig` in `apps/api/src/lib/logger.ts` with `censor: "[REDACTED]"` on the shared Pino instance:
-
-- `req.headers.authorization`
-- `req.headers.cookie`
-- `res.headers["set-cookie"]`
-- `res.headers.location`
+1. Configure centralized `loggerRedactionConfig` in `apps/api/src/lib/logger.ts` with `censor: "[REDACTED]"` on the shared Pino instance:
+   - `req.headers.authorization`
+   - `req.headers.cookie`
+   - `res.headers["set-cookie"]`
+   - `res.headers.location`
+2. Enforce `reqSerializer` (wrapping `pino.stdSerializers.req`) in both `logger.ts` and `middlewares/request-logger.ts` (`pinoHttp({ serializers: { req: reqSerializer } })`): strips query strings from `url` (retaining `path` only) and deletes `query` from serialized request objects.
+3. In `middlewares/rate-limit.ts`, log `req.path` rather than `req.originalUrl` when Redis is unavailable or errors occur.
 
 ### Rationale
 
-- **Defense-in-Depth Secret Protection:** Prevents session tokens, API credentials, and OAuth redirect state from appearing in structured request/response logs while preserving request IDs (`X-Request-Id`), routes, status codes, and latency metrics.
-- **Single Source of Truth:** Applying redaction on the base `logger` protects both `pino-http` HTTP traces (`middlewares/request-logger.ts`) and any structured domain logs passing `req`/`res` objects.
+- **Defense-in-Depth Secret Protection:** Prevents session tokens, API credentials, OAuth redirect state, and inbound OAuth callback credentials (`code`, `state`) from appearing in structured request/response logs while preserving request IDs (`X-Request-Id`), routes, status codes, and latency metrics.
+- **Single Source of Truth:** Applying `reqSerializer` and redaction on both base `logger` and `pino-http` protects both HTTP traces (`middlewares/request-logger.ts`) and any structured domain logs passing `req`/`res` objects.
 
 ---
 
